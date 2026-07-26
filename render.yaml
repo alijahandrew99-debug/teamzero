@@ -17,6 +17,10 @@ services:
         sync: false          # you paste it in the Render dashboard
       - key: TEAMZERO_MODEL
         value: claude-sonnet-5
+      - key: TEAMZERO_DRAFT_MODEL
+        value: claude-haiku-4-5   # cheap tier for email drafting (3x cheaper)
+      - key: OWNER_EMAILS
+        value: btk18000@gmail.com # you get the product free
       - key: SESSION_SECRET
         generateValue: true
       - key: STRIPE_SECRET_KEY
