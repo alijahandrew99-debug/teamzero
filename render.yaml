@@ -5,13 +5,11 @@ services:
   - type: web
     name: teamzero
     runtime: node
-    plan: starter
-    buildCommand: "echo no build needed"
-    startCommand: "node server.js"
-    disk:
-      name: teamzero-data
-      mountPath: /app/data   # persists accounts/leads across deploys
-      sizeGB: 1
+    plan: free                 # FREE — no card needed. Caveat: no persistent disk,
+    buildCommand: "echo no build needed"   # so accounts/leads reset on restart/deploy,
+    startCommand: "node server.js"         # and the service sleeps after ~15 min idle.
+    # To make data persistent + always-on later: change plan to `starter`, add back a
+    # disk block (name/mountPath: /app/data/sizeGB: 1), and redeploy. ~$7/mo.
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false          # you paste it in the Render dashboard
