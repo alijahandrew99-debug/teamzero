@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamZero — the AI sales team that finds its own leads</title>
+<style>
+  :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Iowan Old Style",Georgia,serif;background:var(--paper);color:var(--ink);line-height:1.5}
+  a{color:var(--red);text-decoration:none}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+  header{border-bottom:2px solid var(--ink);padding:16px 0;position:sticky;top:0;background:var(--paper);z-index:5}
+  header .wrap{display:flex;align-items:center;gap:16px}
+  .mark{font-weight:800;font-size:22px;letter-spacing:-.5px}.mark b{color:var(--red)}
+  .nav{margin-left:auto;display:flex;gap:14px;align-items:center}
+  .btn{display:inline-block;background:var(--ink);color:var(--paper2);padding:10px 18px;border-radius:6px;font-size:15px;border:1px solid var(--ink);cursor:pointer}
+  .btn.red{background:var(--red);border-color:var(--red)}
+  .btn.ghost{background:transparent;color:var(--ink)}
+  .hero{padding:70px 0 50px;text-align:center}
+  .hero h1{font-size:clamp(34px,6vw,60px);line-height:1.05;letter-spacing:-1px;margin-bottom:20px}
+  .hero h1 .r{color:var(--red)}
+  .hero p{font-size:20px;color:var(--ink2);max-width:640px;margin:0 auto 30px}
+  .kicker{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:5px 14px;font-size:13px;color:var(--ink2);margin-bottom:24px;font-family:ui-monospace,monospace;letter-spacing:1px;text-transform:uppercase}
+  .agents{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:50px 0}
+  @media(max-width:720px){.agents{grid-template-columns:repeat(2,1fr)}}
+  .agent{border:1px solid var(--line);border-radius:10px;background:var(--paper2);padding:20px 16px}
+  .agent b{display:block;font-size:13px;letter-spacing:2px;color:var(--red);margin-bottom:8px}
+  .agent h3{font-size:17px;margin-bottom:6px}
+  .agent p{font-size:14px;color:var(--ink2)}
+  .agent.off{opacity:.55}
+  section{padding:44px 0;border-top:1px solid var(--line)}
+  section h2{font-size:30px;letter-spacing:-.5px;margin-bottom:22px}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:720px){.steps{grid-template-columns:1fr}}
+  .step .n{font-family:ui-monospace,monospace;color:var(--red);font-size:14px}
+  .step h3{font-size:18px;margin:6px 0}
+  .step p{color:var(--ink2);font-size:15px}
+  .price{border:2px solid var(--ink);border-radius:12px;background:var(--paper2);padding:32px;max-width:420px;margin:0 auto;text-align:center}
+  .price .amt{font-size:48px;font-weight:800}.price .amt span{font-size:18px;color:var(--ink2);font-weight:400}
+  .price ul{list-style:none;text-align:left;margin:20px 0}
+  .price li{padding:7px 0;border-top:1px dashed var(--line);font-size:15px}
+  .price li:before{content:"→ ";color:var(--red)}
+  footer{padding:40px 0;border-top:2px solid var(--ink);color:var(--ink2);font-size:14px;text-align:center}
+  .big-cta{text-align:center;padding:20px 0 10px}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <span class="mark">Team<b>Zero</b></span>
+  <nav class="nav"><a href="/login">Log in</a><a class="btn red" href="/signup">Start free</a></nav>
+</div></header>
+
+<div class="wrap">
+  <div class="hero">
+    <span class="kicker">Client Zero · it sells itself</span>
+    <h1>A sales team that <span class="r">finds its own leads</span> while you sleep.</h1>
+    <p>TeamZero prospects real companies, writes personalized outreach, and lines it up for your one-tap approval. You review. It does the grind. No lists to buy, no SDR to hire, nothing to set up.</p>
+    <a class="btn red" href="/signup" style="font-size:17px;padding:13px 26px">Start free →</a>
+    <div style="margin-top:12px;font-size:14px;color:var(--ink2)">15 leads free. No card required.</div>
+  </div>
+
+  <div class="agents">
+    <div class="agent"><b>PROSPECTOR</b><h3>Finds the leads</h3><p>Sources real companies + decision-makers that match your ICP, by live web research.</p></div>
+    <div class="agent"><b>OUTBOUND</b><h3>Writes the emails</h3><p>A personalized cold email for every lead, in your voice — into your approval queue.</p></div>
+    <div class="agent"><b>SCOUT</b><h3>Reads the market</h3><p>A weekly intel brief: who to hit this week, what to say, what to avoid.</p></div>
+    <div class="agent off"><b>VOICE</b><h3>Calls (soon)</h3><p>Tiered AI calling — gated behind compliance review. Off by default.</p></div>
+  </div>
+</div>
+
+<section><div class="wrap">
+  <h2>You approve. It does everything else.</h2>
+  <div class="steps">
+    <div class="step"><div class="n">01</div><h3>Describe your business</h3><p>One short profile: what you sell and who buys it. Two minutes.</p></div>
+    <div class="step"><div class="n">02</div><h3>Hit “Find leads”</h3><p>The team goes and finds real, fitting prospects and drafts an email to each.</p></div>
+    <div class="step"><div class="n">03</div><h3>Approve &amp; send</h3><p>Read each draft, approve the good ones, send from your own inbox. Nothing goes out without you.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Simple pricing.</h2>
+  <div class="price">
+    <div class="amt">$49<span>/mo</span></div>
+    <ul>
+      <li>500 leads a month, found and written for you</li>
+      <li>Overnight auto-runs — wake up to a full approval list</li>
+      <li>Unlimited profiles — run every business you own</li>
+      <li>Approval queue — you control every send</li>
+      <li>Cancel anytime</li>
+    </ul>
+    <a class="btn red" href="/signup" style="display:block">Start free →</a>
+    <div style="margin-top:12px;font-size:14px;color:var(--ink2)">Try 15 leads free first. No card required.</div>
+  </div>
+  <div class="big-cta" style="margin-top:20px;color:var(--ink2);font-size:14px">Every email you got from us? Drafted by TeamZero. That’s the demo.</div>
+</div></section>
+
+<footer><div class="wrap">TeamZero — the AI sales team that sells itself.<br>
+<a href="/login">Log in</a> · <a href="/signup">Start free</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></div></footer>
+</body>
+</html>

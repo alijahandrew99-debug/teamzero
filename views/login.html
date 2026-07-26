@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in — TeamZero</title>
+<style>
+  :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Iowan Old Style",Georgia,serif;background:var(--paper);color:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .box{background:var(--paper2);border:1px solid var(--line);border-radius:12px;padding:34px;width:100%;max-width:400px;box-shadow:0 10px 30px rgba(0,0,0,.06)}
+  .mark{font-weight:800;font-size:24px;text-align:center;margin-bottom:6px}.mark b{color:var(--red)}
+  .sub{text-align:center;color:var(--ink2);margin-bottom:24px;font-size:15px}
+  label{display:block;font-size:13px;color:var(--ink2);margin:12px 0 5px}
+  input{width:100%;padding:11px;border:1px solid var(--line);border-radius:7px;font-size:15px;font-family:ui-monospace,monospace;background:#fff}
+  button{width:100%;margin-top:20px;background:var(--ink);color:#fff;border:none;padding:13px;border-radius:7px;font-size:16px;font-family:inherit;cursor:pointer}
+  .err{background:#fbe9e7;border:1px solid #e6b0a8;color:#a02617;padding:9px 12px;border-radius:6px;font-size:14px;margin-bottom:14px}
+  .err:empty{display:none}
+  .alt{text-align:center;margin-top:18px;font-size:14px;color:var(--ink2)}
+  a{color:var(--red);text-decoration:none}
+</style></head>
+<body>
+  <form class="box" method="POST" action="/login">
+    <div class="mark">Team<b>Zero</b></div>
+    <div class="sub">Welcome back.</div>
+    <div class="err"><!--ERR--></div>
+    <label>Email</label>
+    <input type="email" name="email" required autofocus placeholder="you@company.com">
+    <label>Password</label>
+    <input type="password" name="password" required placeholder="your password">
+    <button type="submit">Log in →</button>
+    <div class="alt"><a href="/forgot">Forgot password?</a></div>
+    <div class="alt">New here? <a href="/signup">Start free</a></div>
+  </form>
+</body></html>

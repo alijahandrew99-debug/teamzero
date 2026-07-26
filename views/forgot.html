@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reset password — TeamZero</title>
+<style>
+  :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b;--ok:#2f7d4f}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Iowan Old Style",Georgia,serif;background:var(--paper);color:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .box{background:var(--paper2);border:1px solid var(--line);border-radius:12px;padding:34px;width:100%;max-width:400px;box-shadow:0 10px 30px rgba(0,0,0,.06)}
+  .mark{font-weight:800;font-size:24px;text-align:center;margin-bottom:6px}.mark b{color:var(--red)}
+  .sub{text-align:center;color:var(--ink2);margin-bottom:22px;font-size:15px}
+  label{display:block;font-size:13px;color:var(--ink2);margin:12px 0 5px}
+  input{width:100%;padding:11px;border:1px solid var(--line);border-radius:7px;font-size:15px;font-family:ui-monospace,monospace;background:#fff}
+  button{width:100%;margin-top:20px;background:var(--ink);color:#fff;border:none;padding:13px;border-radius:7px;font-size:16px;font-family:inherit;cursor:pointer}
+  .msg{padding:10px 12px;border-radius:6px;font-size:14px;margin-bottom:14px}
+  .msg.ok{background:#eaf5ee;border:1px solid #bcdcc8;color:var(--ok)}
+  .msg.err{background:#fbe9e7;border:1px solid #e6b0a8;color:#a02617}
+  .msg:empty{display:none}
+  .alt{text-align:center;margin-top:18px;font-size:14px;color:var(--ink2)}
+  a{color:var(--red);text-decoration:none}
+  .note{font-size:12.5px;color:var(--ink2);background:#fff;border:1px dashed var(--line);border-radius:6px;padding:10px;margin-top:14px;word-break:break-all}
+  .note:empty{display:none}
+</style></head>
+<body>
+  <form class="box" method="POST" action="/forgot">
+    <div class="mark">Team<b>Zero</b></div>
+    <div class="sub">Forgot your password? We'll send you a reset link.</div>
+    <div class="msg __MSGCLASS__"><!--MSG--></div>
+    <div class="note"><!--LINK--></div>
+    <label>Email</label>
+    <input type="email" name="email" required autofocus placeholder="you@company.com">
+    <button type="submit">Send reset link →</button>
+    <div class="alt"><a href="/login">Back to log in</a></div>
+  </form>
+</body></html>

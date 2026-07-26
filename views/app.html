@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamZero — Operator Desk</title>
+<style>
+  :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b;--ok:#2f7d4f;--gold:#b8892b;--shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.06)}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Iowan Old Style",Georgia,serif;background:var(--paper);color:var(--ink)}
+  a{color:var(--red)}
+  header{border-bottom:2px solid var(--ink);padding:14px 24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .mark{font-weight:800;font-size:22px;letter-spacing:-.5px}.mark b{color:var(--red)}
+  header .who{margin-left:auto;color:var(--ink2);font-size:13px;font-family:ui-monospace,monospace;display:flex;gap:12px;align-items:center}
+  .badge{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:2px 7px;color:var(--ink2)}
+  .tabs{display:flex;gap:4px;padding:0 24px;border-bottom:1px solid var(--line);background:var(--paper2)}
+  .tab{padding:13px 20px;font-size:15px;cursor:pointer;border:0;background:none;color:var(--ink2);border-bottom:3px solid transparent;font-family:inherit}
+  .tab.active{color:var(--ink);font-weight:700;border-bottom-color:var(--red)}
+  .tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:6px;vertical-align:middle}
+  .wrap{max-width:1120px;margin:0 auto;padding:20px 24px 80px}
+  .lockbar{background:#2a1512;color:#fbeae7;border-radius:8px;padding:14px 18px;margin-bottom:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .lockbar b{color:#fff}.lockbar button{margin-left:auto}
+  .trialbar{background:#fff7e6;border:1px solid #e8d3a8;color:#7a5310;border-radius:8px;padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;font-size:14px}
+  .trialbar b{color:#5c3f0c}
+  .grid{display:grid;grid-template-columns:1.35fr 1fr;gap:20px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--paper2);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);margin-bottom:20px;overflow:hidden}
+  .card h2{margin:0;padding:12px 16px;font-size:14px;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .agent{font-size:11px;color:#fff;background:var(--ink);border-radius:3px;padding:2px 6px;letter-spacing:1px}
+  .card .body{padding:16px}
+  .muted{color:var(--ink2);font-size:13px}
+  button{font-family:inherit;font-size:13px;border:1px solid var(--ink);background:var(--ink);color:var(--paper2);padding:8px 14px;border-radius:5px;cursor:pointer}
+  button:hover{opacity:.92}button.ghost{background:transparent;color:var(--ink)}
+  button.red{background:var(--red);border-color:var(--red)}button.ok{background:var(--ok);border-color:var(--ok)}
+  button.sm{padding:5px 10px;font-size:12px}button:disabled{opacity:.5;cursor:wait}
+  textarea,input,select{font-family:ui-monospace,monospace;font-size:13px;width:100%;padding:9px;border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--ink);margin-bottom:4px}
+  textarea{min-height:60px;resize:vertical}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .pill{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--ink2)}
+  .pill.new{background:#eef2f7;color:#3a5a8a}.pill.drafted{background:#fff7e6;color:var(--gold)}.pill.approved{background:#eaf5ee;color:var(--ok)}.pill.sent{background:#ececec;color:#666}
+  .pill.verified{background:#eaf5ee;color:var(--ok);border-color:#bcdcc8}
+  .pill.role,.pill.site{background:#eef2f7;color:#3a5a8a;border-color:#c3d2e4}
+  .pill.pattern{background:#fff4e0;color:#9a6b12;border-color:#e8d3a8}
+  .pill.invalid{background:#fbe9e7;color:#a02617;border-color:#e6b0a8}
+  .warnbox{background:#fff4e0;border:1px solid #e8d3a8;color:#7a5310;border-radius:5px;padding:7px 10px;font-size:12.5px;margin-bottom:9px}
+  .warnbox.bad{background:#fbe9e7;border-color:#e6b0a8;color:#a02617}
+  .lead{border-top:1px dashed var(--line);padding:9px 0;font-size:13px}.lead:first-child{border-top:0}
+  .qitem{border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:12px;background:#fff}
+  .qitem .subj{font-weight:700;margin:2px 0 6px}
+  .qitem pre{white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.5;margin:0 0 10px;color:var(--ink2)}
+  .qitem .to{font-size:12px;color:var(--ink2);font-family:ui-monospace,monospace}
+  .stamp{display:inline-block;transform:rotate(-4deg);border:2px solid var(--red);color:var(--red);border-radius:4px;padding:1px 7px;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase}
+  .feed{font-size:12px;font-family:ui-monospace,monospace;color:var(--ink2);max-height:240px;overflow:auto}
+  .feed div{padding:4px 0;border-top:1px dotted var(--line)}.feed .t{color:var(--red)}
+  .empty{color:var(--ink2);font-style:italic;padding:8px 0}
+  .brief{white-space:pre-wrap;font-size:13.5px;line-height:1.55;background:#fff;border:1px solid var(--line);border-radius:6px;padding:14px;max-height:340px;overflow:auto}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper2);padding:10px 18px;border-radius:6px;font-size:13px;box-shadow:var(--shadow);opacity:0;transition:.2s;pointer-events:none}.toast.show{opacity:1}
+  .progress{display:none;background:var(--paper2);border:1px solid var(--line);border-left:4px solid var(--red);border-radius:8px;padding:13px 16px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .progress.on{display:block}
+  .pbar{height:7px;background:var(--line);border-radius:4px;overflow:hidden;margin-bottom:9px}
+  .pfill{height:100%;width:32%;background:var(--red);border-radius:4px;animation:pslide 1.5s infinite ease-in-out}
+  @keyframes pslide{0%{margin-left:-34%}100%{margin-left:102%}}
+  .pfill.determinate{animation:none;margin-left:0;transition:width .5s ease}
+  .prow{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .prow .msg{font-size:14px}.prow .msg b{color:var(--red)}
+  .prow .time{font-family:ui-monospace,monospace;font-size:12px;color:var(--ink2);white-space:nowrap}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;font-weight:700;margin-bottom:3px}
+  .field .hint{font-size:12px;color:var(--ink2);margin-bottom:6px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:600px){.two{grid-template-columns:1fr}}
+  .hide{display:none}
+</style></head>
+<body>
+<header>
+  <span class="mark">Team<b>Zero</b></span>
+  <span class="badge" id="aimode">AI: __AIMODE__</span>
+  <span class="badge" id="ownerBadge" style="display:none;border-color:var(--red);color:var(--red)">OWNER · free</span>
+  <span class="who"><span>__EMAIL__</span><a href="/logout">Log out</a></span>
+</header>
+
+<div class="tabs">
+  <button class="tab active" id="tabBusinessBtn" onclick="showTab('business')">🏢 Your Business <span class="dot hide" id="bizDot"></span></button>
+  <button class="tab" id="tabDeskBtn" onclick="showTab('desk')">🎯 Sales Desk</button>
+</div>
+
+<div class="wrap">
+  <div class="lockbar" id="lockbar" style="display:none">
+    <span id="lockmsg">⚑ <b>You've used your free leads.</b> Upgrade to keep your sales team working.</span>
+    <button class="red" onclick="location.href='/checkout'">Upgrade — $49/mo →</button>
+  </div>
+  <div class="trialbar" id="trialbar" style="display:none">
+    <span id="trialmsg"></span>
+    <a href="/checkout" style="margin-left:auto"><button class="sm">Upgrade →</button></a>
+  </div>
+
+  <!-- ===================== BUSINESS TAB ===================== -->
+  <div id="tab-business">
+    <div class="row" style="margin-bottom:14px">
+      <strong>Business:</strong>
+      <select id="profileSel" style="max-width:340px;margin:0"></select>
+      <button class="sm ghost" onclick="newProfile()">+ Add another business</button>
+    </div>
+
+    <div class="card">
+      <h2>Tell your sales team about this business</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 16px">The more specific you are, the sharper your team's leads and emails. Fill this in, hit <b>Save</b>, then head to the Sales Desk.</p>
+        <div class="two">
+          <div class="field"><label>Business name</label><div class="hint">What this profile is called.</div><input id="f_name" placeholder="e.g. Skinner Insulation, TeamZero, Glass Tables"></div>
+          <div class="field"><label>Your name (signs the emails)</label><div class="hint">Who the outreach comes from.</div><input id="f_senderName" placeholder="e.g. Alijah Skinner"></div>
+        </div>
+        <div class="field"><label>What do you sell / do?</label><div class="hint">The product or service, plainly.</div><textarea id="f_offer" placeholder="e.g. Utility-funded energy-efficiency projects that cut plant operating costs at $0 upfront."></textarea></div>
+        <div class="field"><label>Who is your ideal customer?</label><div class="hint">Industry, company size, and the ROLE of the person you sell to. This is who the team goes and finds.</div><textarea id="f_icp" placeholder="e.g. Plant managers & facility directors at plastics manufacturers in IL, NJ, CT with 50+ employees."></textarea></div>
+        <div class="field"><label>Your core value proposition</label><div class="hint">The real reason someone buys — the outcome you deliver.</div><textarea id="f_valueProp" placeholder="e.g. We save six figures a year on energy with zero capital outlay — the utility pays for it."></textarea></div>
+        <div class="two">
+          <div class="field"><label>Proof / credibility</label><div class="hint">Results, case studies, notable clients.</div><textarea id="f_proof" placeholder="e.g. Saved a client $203K/yr at $0 cost."></textarea></div>
+          <div class="field"><label>Tone &amp; voice</label><div class="hint">How the emails should sound.</div><textarea id="f_tone" placeholder="e.g. Direct, warm, concrete. No fluff, no hype."></textarea></div>
+        </div>
+        <div class="two">
+          <div class="field"><label>Call to action</label><div class="hint">What you want the reader to do.</div><input id="f_cta" placeholder="e.g. A 15-minute call, or a short reply."></div>
+          <div class="field"><label>Extra notes (optional)</label><div class="hint">Anything else the team should know.</div><input id="f_notes" placeholder="e.g. Email only — no cold calls."></div>
+        </div>
+        <div class="row"><button onclick="saveProfile()" id="saveBtn">Save business →</button><span class="muted" id="saveMsg"></span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="agent">NIGHT SHIFT</span> Work while you sleep</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 12px">Pick a time and the team wakes up on its own, sources leads and writes every email — so a full approval list is waiting for you in the morning.</p>
+        <div class="row">
+          <label><input type="checkbox" id="sch_enabled" style="width:auto;margin:0 6px 0 0"> Run automatically every night</label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="muted">Start at</label><input id="sch_time" type="time" value="02:00" style="width:120px;margin:0">
+          <label class="muted">Leads</label><input id="sch_count" type="number" min="1" max="50" value="50" style="width:70px;margin:0">
+          <input id="sch_hints" placeholder="optional focus (e.g. 'plastics plants in Illinois')" style="flex:1;min-width:170px;margin:0">
+        </div>
+        <div class="row" style="margin-top:10px"><button onclick="saveSchedule()" id="schBtn">Save schedule</button><span class="muted" id="schMsg"></span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="agent">SENDING</span> Connect your mailbox (to send automatically)</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 6px">Optional. Connect a mailbox and you can approve &amp; send the whole batch in one click. Leave it empty and you'll keep sending by hand with the Gmail button.</p>
+        <div class="warnbox" style="margin-bottom:12px">For Gmail you must use an <b>App Password</b> (not your normal password) — Google Account → Security → 2-Step Verification → App passwords. Your password is stored on your own server and never shown again.</div>
+        <div class="two">
+          <div class="field"><label>Your email address</label><input id="sm_user" placeholder="you@gmail.com"></div>
+          <div class="field"><label>App password</label><input id="sm_pass" type="password" placeholder="16-character app password"></div>
+          <div class="field"><label>Name emails come from</label><input id="sm_fromName" placeholder="Alijah Skinner"></div>
+          <div class="field"><label>SMTP server</label><input id="sm_host" placeholder="smtp.gmail.com" value="smtp.gmail.com"></div>
+          <div class="field"><label>Seconds between sends</label><div class="hint">Spacing protects your reputation. 25–60 is sensible.</div><input id="sm_delay" type="number" min="0" value="25"></div>
+          <div class="field"><label>Max sends per day</label><div class="hint">Keep low on a new mailbox and ramp up.</div><input id="sm_cap" type="number" min="1" value="50"></div>
+        </div>
+        <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><span class="muted" id="smMsg"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== SALES DESK TAB ===================== -->
+  <div id="tab-desk" class="hide">
+    <div class="row" style="margin-bottom:12px">
+      <strong>Selling for:</strong> <span id="deskProfileName" class="badge"></span>
+      <button class="sm ghost" onclick="runScout()" id="scoutBtn">🔍 SCOUT brief</button>
+    </div>
+
+    <div class="progress" id="progress">
+      <div class="pbar"><div class="pfill"></div></div>
+      <div class="prow">
+        <span class="msg" id="pmsg">Working…</span>
+        <span class="time" id="ptime">0s</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="agent">PROSPECTOR</span> Find leads automatically</h2>
+      <div class="body">
+        <div class="muted" style="margin-bottom:8px">The team sources its own pipeline — real companies + decision-makers matching this business's ideal customer, found by live web research. No list needed.</div>
+        <div class="muted" style="margin-bottom:8px;font-style:italic">Real web research — up to 50 per run. Leads are found in parallel batches and appear as they come in; each run auto-skips companies you already have.</div>
+        <div class="row">
+          <label class="muted">How many:</label>
+          <input id="pcount" type="number" value="5" min="1" max="50" style="width:64px;margin:0">
+          <input id="phints" placeholder="optional focus (e.g. 'plastics plants in Illinois')" style="flex:1;min-width:160px;margin:0">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button onclick="runProspect(false)" id="prospBtn">🎯 Find leads</button>
+          <button class="ok" onclick="runProspect(true)" id="prospDraftBtn">🎯→✉ Find leads + draft emails</button>
+          <button class="sm ghost" onclick="runOutbound()" id="runBtn">Draft all new</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h2><span class="agent">QUEUE</span> Approval queue <span class="muted" id="qcount"></span></h2>
+          <div class="body">
+            <div class="row" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px dashed var(--line)">
+              <button class="sm ok" onclick="approveAll()" id="apprAllBtn">✓ Approve all</button>
+              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✓✉ Approve &amp; send all</button>
+              <span class="muted" id="sendInfo"></span>
+            </div>
+            <div class="progress" id="sendProgress" style="margin-bottom:14px">
+              <div class="pbar"><div class="pfill" id="sendFill"></div></div>
+              <div class="prow"><span class="msg" id="smsg">Sending…</span><span class="time" id="stime"></span></div>
+            </div>
+            <div id="queue"><div class="empty">Nothing pending yet.</div></div>
+          </div>
+        </div>
+        <div class="card" id="briefCard" style="display:none">
+          <h2><span class="agent">SCOUT</span> Latest intel brief</h2>
+          <div class="body"><div class="brief" id="brief"></div></div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h2><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span></h2>
+          <div class="body">
+            <details><summary style="cursor:pointer;color:var(--red);font-size:13px">Import a CSV instead</summary>
+              <div class="muted" style="margin:6px 0">Headers: name, title, company, email, notes</div>
+              <textarea id="csv" placeholder="name,title,company,email,notes"></textarea>
+              <button class="sm" onclick="importCSV()">Import CSV</button>
+            </details>
+            <div id="leads" style="margin-top:10px"></div>
+          </div>
+        </div>
+        <div class="card"><h2><span class="agent">LOG</span> Activity</h2><div class="body"><div class="feed" id="feed"></div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+let STATE={profiles:[],leads:[],queue:[],activity:[]};let curTab='business';
+const $=(id)=>document.getElementById(id);
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
+function pid(){return $('profileSel').value;}
+function curProfile(){return STATE.profiles.find(p=>p.id===pid());}
+function isStarter(p){return !p||!p.offer||/edit me|describe what you sell/i.test(p.offer||'');}
+function showTab(t){curTab=t;$('tab-business').classList.toggle('hide',t!=='business');$('tab-desk').classList.toggle('hide',t!=='desk');$('tabBusinessBtn').classList.toggle('active',t==='business');$('tabDeskBtn').classList.toggle('active',t==='desk');if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}}
+async function api(path,data){
+  let r;
+  try{r=await fetch(path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});}
+  catch(e){throw new Error('Lost connection to TeamZero — the app restarted or closed. Refresh this page and try again.');}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){if(j.locked)$('lockbar').style.display='';throw new Error(j.error||'error');}
+  return j;
+}
+async function load(){
+  STATE=await api('/api/state');
+  $('lockbar').style.display=STATE.locked?'':'none';
+  $('ownerBadge').style.display=STATE.isOwner?'':'none';
+  // trial meter — show what's left so the upgrade ask lands after real value
+  const u=STATE.usage||{};
+  if(!STATE.locked && !u.unlimited && u.plan==='trial'){
+    $('trialbar').style.display='';
+    $('trialmsg').innerHTML=`✨ <b>Free trial</b> — ${u.remaining} of ${u.limit} free leads left. No card needed.`;
+  } else if(!STATE.locked && !u.unlimited && u.isPro && u.remaining<=50){
+    $('trialbar').style.display='';
+    $('trialmsg').innerHTML=`You have <b>${u.remaining}</b> of ${u.limit} leads left this month.`;
+  } else $('trialbar').style.display='none';
+  if(STATE.locked&&u.isPro)$('lockmsg').innerHTML=`⚑ <b>You've used all ${u.limit} leads this month.</b> Your allowance resets next month.`;
+  $('aimode').textContent='AI: '+STATE.aiMode;
+  const sel=$('profileSel');const cur=sel.value;
+  sel.innerHTML=STATE.profiles.map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
+  if(cur&&STATE.profiles.some(p=>p.id===cur))sel.value=cur;
+  // nudge new users to fill in their business
+  $('bizDot').classList.toggle('hide',!isStarter(curProfile()));
+  fillForm();
+  fillSettings();
+  render();
+}
+function render(){
+  const P=pid();const p=curProfile();
+  if(curTab==='desk')$('deskProfileName').textContent=p?p.name:'—';
+  const leads=STATE.leads.filter(l=>l.profileId===P);
+  const queue=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  $('leadcount').textContent=`· ${leads.length}`;
+  $('leads').innerHTML=leads.length?leads.map(l=>{
+    const c=l.emailConfidence||'';
+    const label={verified:'real email',role:'company inbox',site:'site email',pattern:'GUESS',invalid:'no valid email'}[c]||'';
+    return `<div class="lead"><div class="row" style="justify-content:space-between"><div><b>${esc(l.name||'(no name)')}</b> ${l.title?'· '+esc(l.title):''} ${l.company?'· '+esc(l.company):''}<div class="muted">${esc(l.email||'no email')} ${label?`<span class="pill ${c}" title="${esc(l.emailSource||'')}">${label}</span>`:''}</div></div><span class="pill ${l.status}">${l.status}</span></div></div>`;
+  }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
+  $('qcount').textContent=`· ${queue.length} pending`;
+  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">Nothing pending. Find leads, then draft.</div>';
+  $('feed').innerHTML=(STATE.activity||[]).map(a=>`<div><span class="t">${new Date(a.at).toLocaleTimeString()}</span> [${a.agent}] ${esc(a.msg)}</div>`).join('')||'<div class="empty">No activity yet.</div>';
+}
+function qcard(q){
+  const approved=q.status==='approved';
+  const lead=(STATE.leads||[]).find(l=>l.id===q.leadId)||{};
+  const c=lead.emailConfidence||'';
+  const warn = c==='invalid' ? `<div class="warnbox bad">⚠ No valid email for this company — sending will bounce. Find the address manually before sending.</div>`
+    : c==='pattern' ? `<div class="warnbox">⚠ This address is a <b>guess</b> — no published email was found. Verify it before sending, or it may bounce and hurt your sending reputation.</div>`
+    : c==='site' ? `<div class="warnbox">ℹ This address was published on their site but may belong to a <b>different person</b> — check the recipient matches the greeting.</div>` : '';
+  const e=encodeURIComponent;
+  const to=e(q.to||''),su=e(q.subject||''),bo=e(q.body||'');
+  const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${bo}`;
+  const outlook=`https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${su}&body=${bo}`;
+  const mailto=`mailto:${to}?subject=${su}&body=${bo}`;
+  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
+}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes'];
+function fillForm(){const p=curProfile()||{};FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});window._editId=(p&&p.id)||'';}
+function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');showTab('business');toast('Fill in the new business, then Save');}
+async function saveProfile(){
+  const b=$('saveBtn');b.disabled=true;
+  const data={id:window._editId||undefined};FIELDS.forEach(k=>data[k]=$('f_'+k).value);
+  if(!data.name){toast('Give the business a name');b.disabled=false;return;}
+  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');await load();$('profileSel').value=r.profile.id;render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+// ---- busy manager: progress bar, staged messages, running timer, button lock ----
+let _busyTimer=null,_stageTimer=null,_busyStart=0;
+const ACTION_BTNS=['prospBtn','prospDraftBtn','runBtn','scoutBtn'];
+function lockButtons(b){ACTION_BTNS.forEach(id=>{const el=$(id);if(el)el.disabled=b;});}
+function startBusy(stages){
+  lockButtons(true);$('progress').classList.add('on');
+  _busyStart=Date.now();let i=0;$('pmsg').innerHTML=stages[0];
+  clearInterval(_stageTimer);_stageTimer=setInterval(()=>{if(i<stages.length-1){i++;$('pmsg').innerHTML=stages[i];}},8000);
+  clearInterval(_busyTimer);_busyTimer=setInterval(()=>{$('ptime').textContent=Math.round((Date.now()-_busyStart)/1000)+'s';},500);
+}
+function setBusyMsg(m){$('pmsg').innerHTML=m;}
+function stopBusy(){lockButtons(false);$('progress').classList.remove('on');clearInterval(_busyTimer);clearInterval(_stageTimer);}
+function fmtETA(ms){
+  if(ms==null) return '';
+  const s=Math.round(ms/1000);
+  if(s<60) return `about ${s}s left`;
+  const m=Math.round(s/60);
+  return m<=1?'about a minute left':`about ${m} min left`;
+}
+// Runs as a background job on the server: start it, then poll for progress + ETA.
+async function runProspect(thenDraft){
+  if(isStarter(curProfile())){toast('Fill in your business first');showTab('business');return;}
+  const want=Number($('pcount').value)||5;
+  startBusy(['🔎 Starting the search…']);
+  let jobId;
+  try{
+    const r=await api('/api/prospect/run',{profileId:pid(),count:want,hints:$('phints').value,thenDraft});
+    jobId=r.jobId;
+  }catch(e){toast(e.message);stopBusy();return;}
+
+  // poll until done — the browser never waits on one long request
+  const poll=async()=>{
+    let s;
+    try{s=await api('/api/prospect/status?jobId='+encodeURIComponent(jobId));}
+    catch(e){stopBusy();toast('Lost track of the run — refresh to see what landed.');return;}
+
+    const pct=s.total?Math.round((s.done/s.total)*100):0;
+    const fill=document.querySelector('.pfill');
+    if(fill){fill.classList.add('determinate');fill.style.width=Math.max(4,pct)+'%';}
+    const eta=fmtETA(s.etaMs);
+    if(s.phase==='finding'){
+      setBusyMsg(`🔎 Researching real companies — <b>${s.added}</b> of ${want} leads found${eta?` · ${eta}`:''}`);
+    }else if(s.phase==='drafting'){
+      setBusyMsg(`✍️ Writing personalized emails — <b>${s.done}</b> of ${s.total} done${eta?` · ${eta}`:''}`);
+    }
+    await load(); // leads/drafts stream in as they're saved
+
+    if(s.status==='running'){setTimeout(poll,3000);return;}
+    stopBusy();
+    if(fill){fill.classList.remove('determinate');fill.style.width='';}
+    if(s.status==='error')toast('Run failed: '+(s.error||'unknown'));
+    else toast(`Done — found ${s.added} lead${s.added===1?'':'s'}${thenDraft?`, drafted ${s.drafted}`:''}`);
+  };
+  poll();
+}
+async function runOutbound(){
+  startBusy(['✍️ Writing personalized emails for your new leads…','Still drafting — each email is tailored to the lead…']);
+  try{const r=await api('/api/outbound/run',{profileId:pid()});await load();toast(r.drafted?`Drafted ${r.drafted}`:'No new leads to draft');}catch(e){toast(e.message);}finally{stopBusy();}
+}
+async function runScout(){
+  startBusy(['🔍 Researching the market for your business…','Reading current sources…','Writing your brief…']);
+  try{const r=await api('/api/scout/brief',{profileId:pid()});$('briefCard').style.display='';$('brief').textContent=r.brief;toast('Brief ready');await load();}catch(e){toast(e.message);}finally{stopBusy();}
+}
+async function importCSV(){const csv=$('csv').value.trim();if(!csv)return toast('Paste CSV first');try{const r=await api('/api/leads/import',{profileId:pid(),csv});$('csv').value='';toast(`Imported ${r.added}`);await load();}catch(e){toast(e.message);}}
+// populate the schedule + mailbox panels from saved settings
+function fillSettings(){
+  const p=curProfile()||{};const s=p.schedule||{};
+  const set=(id,v)=>{const el=$(id);if(el&&document.activeElement!==el)el.value=v;};
+  if($('sch_enabled')&&document.activeElement!==$('sch_enabled'))$('sch_enabled').checked=!!s.enabled;
+  set('sch_time',s.time||'02:00');set('sch_count',s.count||50);set('sch_hints',s.hints||'');
+  $('schMsg').textContent=s.enabled?`On — nightly at ${s.time||'02:00'}`:'';
+  const m=STATE.smtp||{};
+  set('sm_user',m.user||'');set('sm_fromName',m.fromName||'');set('sm_host',m.host||'smtp.gmail.com');
+  set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);
+  $('smMsg').textContent=m.connected?`Connected as ${m.user} ✓`:'Not connected — you will send by hand';
+  const info=$('sendInfo');
+  if(info)info.textContent=m.connected?`via ${m.user} · ${STATE.sentToday||0}/${STATE.dailyCap??50} sent today`:'connect a mailbox to send automatically';
+}
+// ---- night shift schedule ----
+async function saveSchedule(){
+  const b=$('schBtn');b.disabled=true;
+  try{
+    await api('/api/profile/schedule',{profileId:pid(),enabled:$('sch_enabled').checked,time:$('sch_time').value,
+      count:$('sch_count').value,hints:$('sch_hints').value,tzOffset:new Date().getTimezoneOffset()});
+    $('schMsg').textContent=$('sch_enabled').checked?`Saved — runs nightly at ${$('sch_time').value}`:'Saved — nightly run off';
+    toast('Schedule saved');await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+// ---- sending mailbox ----
+async function saveSmtp(){
+  const b=$('smBtn');b.disabled=true;const o=b.textContent;b.textContent='Verifying…';
+  try{
+    await api('/api/settings/smtp',{user:$('sm_user').value,pass:$('sm_pass').value,fromName:$('sm_fromName').value,
+      host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,verify:!!$('sm_pass').value});
+    $('sm_pass').value='';$('smMsg').textContent='Mailbox connected ✓';toast('Mailbox connected');await load();
+  }catch(e){$('smMsg').textContent='';toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+}
+// ---- bulk approve / send ----
+async function approveAll(){
+  const b=$('apprAllBtn');b.disabled=true;
+  try{const r=await api('/api/queue/approve-all',{profileId:pid()});toast(`Approved ${r.approved}`);await load();}
+  catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+async function approveAndSendAll(){
+  if(!STATE.smtp||!STATE.smtp.connected){toast('Connect your mailbox first (Your Business tab)');showTab('business');return;}
+  const pend=STATE.queue.filter(q=>q.profileId===pid()&&(q.status==='pending'||q.status==='approved')).length;
+  if(!pend)return toast('Nothing to send');
+  if(!confirm(`Approve and SEND ${pend} email(s) from ${STATE.smtp.user}?\n\nThey go out spaced ${STATE.sendDelaySec}s apart. This cannot be undone.`))return;
+  const b=$('sendAllBtn'),ab=$('apprAllBtn');b.disabled=true;ab.disabled=true;
+  try{
+    await api('/api/queue/approve-all',{profileId:pid()});
+    const r=await api('/api/send/run',{profileId:pid()});
+    $('sendProgress').classList.add('on');
+    const fill=$('sendFill');fill.classList.add('determinate');
+    const poll=async()=>{
+      let s;try{s=await api('/api/send/status?jobId='+encodeURIComponent(r.jobId));}
+      catch(e){$('sendProgress').classList.remove('on');b.disabled=false;ab.disabled=false;await load();return;}
+      const pct=s.total?Math.round((s.done/s.total)*100):100;
+      fill.style.width=Math.max(4,pct)+'%';
+      $('smsg').innerHTML=`✉ Sending — <b>${s.sent}</b> sent${s.failed?`, ${s.failed} failed`:''} of ${s.total}`;
+      $('stime').textContent=fmtETA(s.etaMs)||'';
+      await load();
+      if(s.status==='running'){setTimeout(poll,2500);return;}
+      $('sendProgress').classList.remove('on');b.disabled=false;ab.disabled=false;
+      if(s.status==='error')toast('Send failed: '+s.error);
+      else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
+    };
+    poll();
+  }catch(e){toast(e.message);b.disabled=false;ab.disabled=false;}
+}
+async function approve(id){try{await api('/api/queue/approve',{id});await load();}catch(e){toast(e.message);}}
+async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'reject'),{id});toast(kind==='sent'?'Logged as sent':'Rejected');await load();}catch(e){toast(e.message);}}
+function copyBody(id){const q=STATE.queue.find(x=>x.id===id);if(!q)return;navigator.clipboard.writeText(`Subject: ${q.subject}\n\n${q.body}`);toast('Copied');}
+$('profileSel').addEventListener('change',()=>{fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
+load().then(()=>{ if(isStarter(curProfile()))showTab('business'); });
+setInterval(()=>{load().catch(()=>{});},20000); // background poll: stay quiet on blips
+</script>
+</body></html>

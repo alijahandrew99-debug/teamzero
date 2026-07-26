@@ -1,0 +1,35 @@
+# One-click deploy config for Render.com (render.com/docs/blueprint-spec).
+# Push this repo to GitHub, then in Render: New + -> Blueprint -> pick the repo.
+# Render reads this file, creates the service, and asks for the secret values below.
+services:
+  - type: web
+    name: teamzero
+    runtime: node
+    plan: starter
+    buildCommand: "echo no build needed"
+    startCommand: "node server.js"
+    disk:
+      name: teamzero-data
+      mountPath: /app/data   # persists accounts/leads across deploys
+      sizeGB: 1
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false          # you paste it in the Render dashboard
+      - key: TEAMZERO_MODEL
+        value: claude-sonnet-5
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_ID
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false          # optional — verified emails; leave blank to skip
+      - key: PUBLIC_URL
+        sync: false          # set to your live https URL, e.g. https://teamzero.onrender.com
+      - key: DEV_UNLOCK
+        value: "0"
+      - key: ALLOW_CLI_FALLBACK
+        value: "0"

@@ -1,0 +1,12 @@
+{
+  "name": "teamzero-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TeamZero Cloud — a sellable, multi-tenant AI sales team SaaS. Buyers sign up, pay, and use it with zero setup. Zero npm dependencies: raw Node http, server-side Claude API, Stripe billing.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
