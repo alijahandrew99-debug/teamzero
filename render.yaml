@@ -5,13 +5,13 @@ services:
   - type: web
     name: teamzero
     runtime: node
-    plan: starter              # paid: always-on (no sleep) + persistent disk below
+    plan: starter              # paid: always-on (no idle sleep)
     buildCommand: "echo no build needed"
     startCommand: "node server.js"
-    disk:
-      name: teamzero-data
-      mountPath: /app/data     # accounts + leads persist across restarts/deploys
-      sizeGB: 1
+    # NOTE: the persistent disk is added MANUALLY in the Render dashboard
+    # (Settings -> Disks -> Add Disk, mount path /app/data, 1GB). Render can't
+    # add a disk to an existing service via blueprint sync, so it lives here as
+    # a comment only — do not re-add a `disk:` block or the sync will fail again.
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false          # you paste it in the Render dashboard
