@@ -488,6 +488,13 @@ const server = http.createServer(async (req, res) => {
           activity: db.getActivity(acc, 40),
         });
       }
+      // Onboarding: paste a website URL → AI drafts the whole profile.
+      if (p === '/api/profile/autofill' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const fields = await agents.autofillFromWebsite(f.url);
+        return json(res, { fields });
+      }
+
       if (p === '/api/profile/save' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
         const fields = ['name', 'senderName', 'offer', 'icp', 'valueProp', 'proof', 'tone', 'cta', 'notes'];

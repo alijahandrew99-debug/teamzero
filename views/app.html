@@ -102,7 +102,16 @@
     <div class="card">
       <h2>Tell your sales team about this business</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 16px">The more specific you are, the sharper your team's leads and emails. Fill this in, hit <b>Save</b>, then head to the Sales Desk.</p>
+        <div style="background:#fff;border:1px solid var(--line);border-left:4px solid var(--red);border-radius:8px;padding:14px 16px;margin-bottom:16px">
+          <div style="font-weight:700;margin-bottom:4px">✨ Have a website? Let AI fill this out.</div>
+          <div class="muted" style="margin-bottom:10px">Paste your site and the team reads it to draft your whole profile — then just review &amp; save.</div>
+          <div class="row">
+            <input id="autoUrl" placeholder="yourbusiness.com" style="flex:1;min-width:180px;margin:0">
+            <button onclick="autofill()" id="autoBtn">✨ Fill with AI</button>
+          </div>
+          <span class="muted" id="autoMsg"></span>
+        </div>
+        <p class="muted" style="margin:0 0 16px">Or fill it in yourself. The more specific you are, the sharper your team's leads and emails. Hit <b>Save</b>, then head to the Sales Desk.</p>
         <div class="two">
           <div class="field"><label>Business name</label><div class="hint">What this profile is called.</div><input id="f_name" placeholder="e.g. Skinner Insulation, TeamZero, Glass Tables"></div>
           <div class="field"><label>Your name (signs the emails)</label><div class="hint">Who the outreach comes from.</div><input id="f_senderName" placeholder="e.g. Alijah Skinner"></div>
@@ -303,6 +312,20 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes'];
 function fillForm(){const p=curProfile()||{};FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});window._editId=(p&&p.id)||'';}
 function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');showTab('business');toast('Fill in the new business, then Save');}
+async function autofill(){
+  const url=$('autoUrl').value.trim();
+  if(!url)return toast('Paste your website first');
+  const b=$('autoBtn');b.disabled=true;const o=b.textContent;b.textContent='Reading your site…';
+  $('autoMsg').textContent='';
+  try{
+    const r=await api('/api/profile/autofill',{url});
+    const f=r.fields||{};
+    ['name','senderName','offer','icp','valueProp','proof','tone','cta'].forEach(k=>{ if(f[k])$('f_'+k).value=f[k]; });
+    $('autoMsg').textContent='Filled from your site — review the fields and hit Save.';
+    toast('Profile drafted from your website — review & save');
+  }catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
+  finally{b.disabled=false;b.textContent=o;}
+}
 async function saveProfile(){
   const b=$('saveBtn');b.disabled=true;
   const data={id:window._editId||undefined};FIELDS.forEach(k=>data[k]=$('f_'+k).value);
