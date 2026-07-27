@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TeamZero — Operator Desk</title>
+<title>Dawnpipe — Operator Desk</title>
 <style>
   :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b;--ok:#2f7d4f;--gold:#b8892b;--shadow:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.06)}
   *{box-sizing:border-box}
@@ -70,7 +70,7 @@
 </style></head>
 <body>
 <header>
-  <span class="mark">Team<b>Zero</b></span>
+  <span class="mark">Dawn<b>pipe</b></span>
   <span class="badge" id="aimode">AI: __AIMODE__</span>
   <span class="badge" id="ownerBadge" style="display:none;border-color:var(--red);color:var(--red)">OWNER · free</span>
   <span class="who"><span>__EMAIL__</span><a href="/logout">Log out</a></span>
@@ -113,7 +113,7 @@
         </div>
         <p class="muted" style="margin:0 0 16px">Or fill it in yourself. The more specific you are, the sharper your team's leads and emails. Hit <b>Save</b>, then head to the Sales Desk.</p>
         <div class="two">
-          <div class="field"><label>Business name</label><div class="hint">What this profile is called.</div><input id="f_name" placeholder="e.g. Skinner Insulation, TeamZero, Glass Tables"></div>
+          <div class="field"><label>Business name</label><div class="hint">What this profile is called.</div><input id="f_name" placeholder="e.g. Skinner Insulation, Dawnpipe, Glass Tables"></div>
           <div class="field"><label>Your name (signs the emails)</label><div class="hint">Who the outreach comes from.</div><input id="f_senderName" placeholder="e.g. Alijah Skinner"></div>
         </div>
         <div class="field"><label>What do you sell / do?</label><div class="hint">The product or service, plainly.</div><textarea id="f_offer" placeholder="e.g. Utility-funded energy-efficiency projects that cut plant operating costs at $0 upfront."></textarea></div>
@@ -250,7 +250,7 @@ function showTab(t){curTab=t;$('tab-business').classList.toggle('hide',t!=='busi
 async function api(path,data){
   let r;
   try{r=await fetch(path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});}
-  catch(e){throw new Error('Lost connection to TeamZero — the app restarted or closed. Refresh this page and try again.');}
+  catch(e){throw new Error('Lost connection to Dawnpipe — the app restarted or closed. Refresh this page and try again.');}
   const j=await r.json().catch(()=>({}));
   if(!r.ok){if(j.locked)$('lockbar').style.display='';throw new Error(j.error||'error');}
   return j;

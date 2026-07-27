@@ -1,4 +1,4 @@
-// TeamZero Cloud — multi-tenant SaaS server. Zero dependencies (raw http).
+// Dawnpipe Cloud — multi-tenant SaaS server. Zero dependencies (raw http).
 require('./lib/env');
 const http = require('http');
 const fs = require('fs');
@@ -100,9 +100,9 @@ setInterval(() => {
 const LEGAL_UPDATED = 'Last updated: 23 July 2026';
 const LEGAL_TERMS = `
 <h1>Terms of Service</h1><div class="updated">${LEGAL_UPDATED}</div>
-<p>These terms govern your use of TeamZero ("the Service"). By creating an account you agree to them.</p>
+<p>These terms govern your use of Dawnpipe ("the Service"). By creating an account you agree to them.</p>
 <h2>What the Service does</h2>
-<p>TeamZero researches publicly available information to identify potential business contacts, and drafts outreach emails for your review. Drafts are not sent without your approval.</p>
+<p>Dawnpipe researches publicly available information to identify potential business contacts, and drafts outreach emails for your review. Drafts are not sent without your approval.</p>
 <h2>Your responsibilities</h2>
 <ul>
 <li>You are the sender of any message you approve. You are responsible for its content and for complying with anti-spam law (including CAN-SPAM and, where applicable, GDPR/PECR).</li>
@@ -637,6 +637,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`\n  TeamZero Cloud → http://localhost:${PORT}`);
+  console.log(`\n  Dawnpipe Cloud → http://localhost:${PORT}`);
   console.log(`  AI mode: ${aiMode()}  |  Billing: ${stripe.configured() ? 'Stripe configured' : 'not configured (DEV_UNLOCK=' + (process.env.DEV_UNLOCK || '0') + ')'}\n`);
 });
