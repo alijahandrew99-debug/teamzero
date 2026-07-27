@@ -21,6 +21,8 @@ services:
         value: claude-haiku-4-5   # cheap tier for email drafting (3x cheaper)
       - key: OWNER_EMAILS
         value: btk18000@gmail.com # you get the product free
+      - key: DATA_DIR
+        value: /app/data          # MUST match the disk's mount path (persistence)
       - key: SESSION_SECRET
         generateValue: true
       - key: STRIPE_SECRET_KEY
