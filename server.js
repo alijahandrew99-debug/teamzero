@@ -330,24 +330,6 @@ const server = http.createServer(async (req, res) => {
       return json(res, { ok: true, ai: aiMode(), uptime: Math.round(process.uptime()) });
     }
 
-    // ---------- storage diagnostic (structural only, no account contents) ----------
-    if (req.method === 'GET' && p === '/_diag') {
-      const fsx = require('fs'); const pathx = require('path');
-      const dir = db.DATA;
-      let exists = false, files = [], writable = false, writeErr = null, accounts = null;
-      try { exists = fsx.existsSync(dir); } catch {}
-      try { if (exists) files = fsx.readdirSync(dir); } catch {}
-      try { const t = pathx.join(dir, '.wtest'); fsx.writeFileSync(t, 'x'); fsx.unlinkSync(t); writable = true; }
-      catch (e) { writeErr = e.message; }
-      try { accounts = (db.getAccountByEmail('___none___'), require('fs').existsSync(pathx.join(dir, 'accounts.json'))
-        ? JSON.parse(require('fs').readFileSync(pathx.join(dir, 'accounts.json'), 'utf8')).length : 0); } catch {}
-      return json(res, {
-        DATA_DIR_env: process.env.DATA_DIR || '(unset)',
-        dataDirUsed: dir, exists, writable, writeErr,
-        filesInDataDir: files, accountsOnDisk: accounts,
-        cwd: process.cwd(), dirname: __dirname, uptime: Math.round(process.uptime()),
-      });
-    }
 
     // ---------- public ----------
     if (req.method === 'GET' && p === '/') {
