@@ -441,7 +441,8 @@ const server = http.createServer(async (req, res) => {
     // start checkout
     if (req.method === 'GET' && p === '/checkout') {
       if (!stripe.configured()) return html(res, `<p style="font-family:system-ui;padding:40px">Billing isn't configured yet. Set STRIPE_* in .env, or use DEV_UNLOCK=1 for testing. <a href="/app">Back</a></p>`);
-      const link = await stripe.createCheckout(account);
+      const tier = url.searchParams.get('tier') || 'starter';
+      const link = await stripe.createCheckout(account, tier);
       return redirect(res, link);
     }
 
@@ -475,6 +476,7 @@ const server = http.createServer(async (req, res) => {
           isOwner: stripe.isOwner(account),
           usage: plans.usage(account, stripe.isOwner(account)),
           isPaid: stripe.isPaid(account),
+          tiers: plans.tierList(),
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
           // masked: the app never ships the app-password back to the browser

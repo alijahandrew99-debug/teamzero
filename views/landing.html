@@ -36,6 +36,17 @@
   .step .n{font-family:ui-monospace,monospace;color:var(--red);font-size:14px}
   .step h3{font-size:18px;margin:6px 0}
   .step p{color:var(--ink2);font-size:15px}
+  .tiers3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start}
+  @media(max-width:820px){.tiers3{grid-template-columns:1fr;max-width:420px;margin:0 auto}}
+  .tier{border:1px solid var(--line);border-radius:12px;background:var(--paper2);padding:26px 22px;position:relative}
+  .tier.featured{border:2px solid var(--red);box-shadow:0 10px 30px rgba(192,42,27,.10)}
+  .tbadge{position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--red);color:#fff;font-size:12px;font-weight:700;padding:3px 12px;border-radius:20px;white-space:nowrap}
+  .tname{font-size:15px;letter-spacing:1px;text-transform:uppercase;color:var(--ink2);font-family:ui-monospace,monospace}
+  .tamt{font-size:40px;font-weight:800;margin:6px 0 2px}.tamt span{font-size:16px;color:var(--ink2);font-weight:400}
+  .tlead{font-size:15px;font-weight:700;color:var(--red);margin-bottom:14px}
+  .tier ul{list-style:none;text-align:left;margin:0 0 18px;padding:0}
+  .tier li{padding:6px 0;border-top:1px dashed var(--line);font-size:14px;color:var(--ink2)}
+  .tier li:before{content:"→ ";color:var(--red)}
   .price{border:2px solid var(--ink);border-radius:12px;background:var(--paper2);padding:32px;max-width:420px;margin:0 auto;text-align:center}
   .price .amt{font-size:48px;font-weight:800}.price .amt span{font-size:18px;color:var(--ink2);font-weight:400}
   .price ul{list-style:none;text-align:left;margin:20px 0}
@@ -78,20 +89,48 @@
 </div></section>
 
 <section><div class="wrap">
-  <h2>Simple pricing.</h2>
-  <div class="price">
-    <div class="amt">$49<span>/mo</span></div>
-    <ul>
-      <li>500 leads a month, found and written for you</li>
-      <li>Overnight auto-runs — wake up to a full approval list</li>
-      <li>Unlimited profiles — run every business you own</li>
-      <li>Approval queue — you control every send</li>
-      <li>Cancel anytime</li>
-    </ul>
-    <a class="btn red" href="/signup" style="display:block">Start free →</a>
-    <div style="margin-top:12px;font-size:14px;color:var(--ink2)">Try 15 leads free first. No card required.</div>
+  <h2>Pricing that replaces an SDR.</h2>
+  <p style="color:var(--ink2);margin-bottom:26px">A human sales rep costs $5,000/mo. Dawnpipe does the prospecting and writing for a fraction — pick the volume you need.</p>
+  <div class="tiers3">
+    <div class="tier">
+      <div class="tname">Starter</div>
+      <div class="tamt">$99<span>/mo</span></div>
+      <div class="tlead">200 leads / month</div>
+      <ul>
+        <li>Found &amp; written for you</li>
+        <li>Overnight auto-runs</li>
+        <li>Unlimited businesses</li>
+        <li>Approval queue</li>
+      </ul>
+      <a class="btn red" href="/signup" style="display:block">Start free →</a>
+    </div>
+    <div class="tier featured">
+      <div class="tbadge">Most popular</div>
+      <div class="tname">Growth</div>
+      <div class="tamt">$299<span>/mo</span></div>
+      <div class="tlead">750 leads / month</div>
+      <ul>
+        <li>Everything in Starter</li>
+        <li>~25 leads a day, on autopilot</li>
+        <li>For teams scaling outbound</li>
+        <li>Priority support</li>
+      </ul>
+      <a class="btn red" href="/signup" style="display:block">Start free →</a>
+    </div>
+    <div class="tier">
+      <div class="tname">Scale</div>
+      <div class="tamt">$699<span>/mo</span></div>
+      <div class="tlead">2,000 leads / month</div>
+      <ul>
+        <li>Everything in Growth</li>
+        <li>Agency-level volume</li>
+        <li>Run pipeline for many clients</li>
+        <li>Priority support</li>
+      </ul>
+      <a class="btn red" href="/signup" style="display:block">Start free →</a>
+    </div>
   </div>
-  <div class="big-cta" style="margin-top:20px;color:var(--ink2);font-size:14px">Every email you got from us? Drafted by Dawnpipe. That’s the demo.</div>
+  <div class="big-cta" style="margin-top:24px;color:var(--ink2);font-size:15px;text-align:center">Try <b>15 leads free</b> first — no card required. Every email you got from us? Drafted by Dawnpipe. That’s the demo.</div>
 </div></section>
 
 <footer><div class="wrap">Dawnpipe — wake up to a full pipeline.<br>

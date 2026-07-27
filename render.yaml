@@ -31,6 +31,12 @@ services:
         sync: false
       - key: STRIPE_PRICE_ID
         sync: false
+      - key: STRIPE_PRICE_STARTER
+        value: price_1TxvZvC2rJK5vGmDZbAvu31t   # $99 / 200 leads
+      - key: STRIPE_PRICE_GROWTH
+        value: price_1Txva7C2rJK5vGmDoPWPK8mM   # $299 / 750 leads
+      - key: STRIPE_PRICE_SCALE
+        value: price_1TxvaFC2rJK5vGmDRQaZpjbj   # $699 / 2,000 leads
       - key: APOLLO_API_KEY
         sync: false          # optional — verified emails; leave blank to skip
       - key: PUBLIC_URL

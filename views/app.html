@@ -19,6 +19,13 @@
   .lockbar b{color:#fff}.lockbar button{margin-left:auto}
   .trialbar{background:#fff7e6;border:1px solid #e8d3a8;color:#7a5310;border-radius:8px;padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;font-size:14px}
   .trialbar b{color:#5c3f0c}
+  .tiergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:700px){.tiergrid{grid-template-columns:1fr}}
+  .tcard{border:1px solid var(--line);border-radius:10px;padding:18px;background:#fff;text-align:center}
+  .tcard.hot{border:2px solid var(--red)}
+  .tcard .tn{font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--ink2)}
+  .tcard .tp{font-size:30px;font-weight:800;margin:4px 0}.tcard .tp span{font-size:14px;color:var(--ink2);font-weight:400}
+  .tcard .tl{font-size:14px;font-weight:700;color:var(--red);margin-bottom:12px}
   .grid{display:grid;grid-template-columns:1.35fr 1fr;gap:20px}
   @media(max-width:900px){.grid{grid-template-columns:1fr}}
   .card{background:var(--paper2);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);margin-bottom:20px;overflow:hidden}
@@ -83,12 +90,18 @@
 
 <div class="wrap">
   <div class="lockbar" id="lockbar" style="display:none">
-    <span id="lockmsg">⚑ <b>You've used your free leads.</b> Upgrade to keep your sales team working.</span>
-    <button class="red" onclick="location.href='/checkout'">Upgrade — $49/mo →</button>
+    <span id="lockmsg">⚑ <b>You've used your free leads.</b> Pick a plan to keep your sales team working.</span>
+    <button class="red" onclick="showUpgrade()">Choose a plan →</button>
   </div>
   <div class="trialbar" id="trialbar" style="display:none">
     <span id="trialmsg"></span>
-    <a href="/checkout" style="margin-left:auto"><button class="sm">Upgrade →</button></a>
+    <button class="sm" onclick="showUpgrade()" style="margin-left:auto">Upgrade →</button>
+  </div>
+  <div class="card" id="upgradePanel" style="display:none">
+    <h2>Choose your plan <button class="sm ghost" onclick="$('upgradePanel').style.display='none'" style="margin-left:auto">✕</button></h2>
+    <div class="body"><div id="tierCards" class="tiergrid"></div>
+      <div class="muted" style="margin-top:10px">Cancel anytime. Prices in USD. You keep your businesses and leads when you upgrade.</div>
+    </div>
   </div>
 
   <!-- ===================== BUSINESS TAB ===================== -->
@@ -267,9 +280,9 @@ async function load(){
     $('trialmsg').innerHTML=`✨ <b>Free trial</b> — ${u.remaining} of ${u.limit} free leads left. No card needed.`;
   } else if(!STATE.locked && !u.unlimited && u.isPro && u.remaining<=50){
     $('trialbar').style.display='';
-    $('trialmsg').innerHTML=`You have <b>${u.remaining}</b> of ${u.limit} leads left this month.`;
+    $('trialmsg').innerHTML=`<b>${u.tierName}</b> — ${u.remaining} of ${u.limit} leads left this month.`;
   } else $('trialbar').style.display='none';
-  if(STATE.locked&&u.isPro)$('lockmsg').innerHTML=`⚑ <b>You've used all ${u.limit} leads this month.</b> Your allowance resets next month.`;
+  if(STATE.locked&&u.isPro)$('lockmsg').innerHTML=`⚑ <b>${u.tierName}: you've used all ${u.limit} leads this month.</b> Resets next month, or upgrade for more.`;
   $('aimode').textContent='AI: '+STATE.aiMode;
   const sel=$('profileSel');const cur=sel.value;
   sel.innerHTML=STATE.profiles.map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
@@ -319,6 +332,19 @@ async function deleteProfile(){
   if(!confirm(`Delete "${p.name}" and its leads/drafts? This can't be undone.`))return;
   try{await api('/api/profile/delete',{id:p.id});toast('Business deleted');await load();}
   catch(e){toast(e.message);}
+}
+function showUpgrade(){
+  const tiers=STATE.tiers||[];const cur=(STATE.usage||{}).tier;
+  $('tierCards').innerHTML=tiers.map(t=>`
+    <div class="tcard ${t.id==='growth'?'hot':''}">
+      <div class="tn">${esc(t.name)}</div>
+      <div class="tp">$${t.price}<span>/mo</span></div>
+      <div class="tl">${t.leads.toLocaleString()} leads / mo</div>
+      ${cur===t.id?'<button class="sm ghost" disabled>Current plan</button>'
+        :`<button class="red sm" onclick="location.href='/checkout?tier=${t.id}'">${cur?'Switch':'Choose'} ${esc(t.name)} →</button>`}
+    </div>`).join('');
+  $('upgradePanel').style.display='';
+  $('upgradePanel').scrollIntoView({behavior:'smooth',block:'center'});
 }
 async function autofill(){
   const url=$('autoUrl').value.trim();
