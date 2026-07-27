@@ -10,6 +10,7 @@ const agents = require('./lib/agents');
 const smtp = require('./lib/smtp');
 const plans = require('./lib/plans');
 const mailer = require('./lib/mailer');
+const emailApi = require('./lib/emailapi');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
@@ -485,6 +486,8 @@ const server = http.createServer(async (req, res) => {
           sendDelaySec: account.sendDelaySec ?? 25,
           dailyCap: account.dailyCap ?? 50,
           sentToday: (account.sentToday && account.sentToday.date === db.today()) ? account.sentToday.count : 0,
+          // key itself is never echoed back — connected flag only
+          emailData: { connected: !!account.emailApiKey, fallback: !!process.env.HUNTER_API_KEY },
           profiles: db.getProfiles(acc),
           leads: db.getLeads(acc),
           queue: db.getQueue(acc),
@@ -559,6 +562,17 @@ const server = http.createServer(async (req, res) => {
         db.logActivity(acc, { agent: 'NIGHT SHIFT', profileId: f.profileId,
           msg: schedule.enabled ? `Scheduled: ${schedule.count} leads nightly at ${schedule.time}` : 'Nightly run turned off' });
         return json(res, { schedule });
+      }
+
+      // ---- email data key (Hunter.io) — bring-your-own-key per account ----
+      if (p === '/api/settings/emailkey' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const key = (f.key || '').trim();
+        if (!key) { db.updateAccount(acc, { emailApiKey: '' }); return json(res, { ok: true, connected: false }); }
+        const t = await emailApi.testKey(key);
+        if (!t.ok) return json(res, { error: `That key didn't work: ${t.error}` }, 400);
+        db.updateAccount(acc, { emailApiKey: key });
+        return json(res, { ok: true, connected: true });
       }
 
       // ---- sending mailbox settings ----

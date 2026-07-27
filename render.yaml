@@ -39,6 +39,8 @@ services:
         value: price_1TxvaFC2rJK5vGmDRQaZpjbj   # $699 / 2,000 leads
       - key: APOLLO_API_KEY
         sync: false          # optional — verified emails; leave blank to skip
+      - key: HUNTER_API_KEY
+        sync: false          # optional owner-fallback data key; customers can BYO key in-app
       - key: PUBLIC_URL
         sync: false          # set to your live https URL, e.g. https://teamzero.onrender.com
       - key: DEV_UNLOCK

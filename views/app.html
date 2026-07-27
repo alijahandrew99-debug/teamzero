@@ -162,6 +162,20 @@
     </div>
 
     <div class="card">
+      <h2><span class="agent">EMAIL DATA</span> Get real, verified email addresses</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 6px">Without this, addresses the team can't find on a company's website are <b>guesses</b> and often bounce. Connect a free <a href="https://hunter.io/api-keys" target="_blank" rel="noopener">Hunter.io</a> key and leads come back with <b>database-verified</b> emails instead — your key, your quota.</p>
+        <div class="muted" style="margin-bottom:10px">Get one free: hunter.io → sign up → API. Free tier includes searches to test with; paid plans from ~$34/mo for volume.</div>
+        <div class="row">
+          <input id="hk_key" type="password" placeholder="Hunter.io API key" style="flex:1;min-width:200px;margin:0">
+          <button onclick="saveEmailKey()" id="hkBtn">Connect &amp; verify</button>
+          <button class="sm ghost" onclick="removeEmailKey()">Remove</button>
+        </div>
+        <span class="muted" id="hkMsg"></span>
+      </div>
+    </div>
+
+    <div class="card">
       <h2><span class="agent">SENDING</span> Connect your mailbox (to send automatically)</h2>
       <div class="body">
         <p class="muted" style="margin:0 0 6px">Optional. Connect a mailbox and you can approve &amp; send the whole batch in one click. Leave it empty and you'll keep sending by hand with the Gmail button.</p>
@@ -441,8 +455,22 @@ function fillSettings(){
   set('sm_user',m.user||'');set('sm_fromName',m.fromName||'');set('sm_host',m.host||'smtp.gmail.com');
   set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);
   $('smMsg').textContent=m.connected?`Connected as ${m.user} ✓`:'Not connected — you will send by hand';
+  const ed=STATE.emailData||{};
+  $('hkMsg').textContent=ed.connected?'Connected ✓ — leads use verified emails.':(ed.fallback?'Using the site-wide data key.':'Not connected — unfound emails will be guesses.');
   const info=$('sendInfo');
   if(info)info.textContent=m.connected?`via ${m.user} · ${STATE.sentToday||0}/${STATE.dailyCap??50} sent today`:'connect a mailbox to send automatically';
+}
+// ---- email data key ----
+async function saveEmailKey(){
+  const key=$('hk_key').value.trim();if(!key)return toast('Paste your Hunter.io API key');
+  const b=$('hkBtn');b.disabled=true;const o=b.textContent;b.textContent='Checking…';
+  try{await api('/api/settings/emailkey',{key});$('hk_key').value='';$('hkMsg').textContent='Connected ✓ — new leads will use verified emails.';toast('Email data connected');await load();}
+  catch(e){$('hkMsg').textContent='';toast(e.message);}
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function removeEmailKey(){
+  try{await api('/api/settings/emailkey',{key:''});$('hkMsg').textContent='Removed.';toast('Email data key removed');await load();}
+  catch(e){toast(e.message);}
 }
 // ---- night shift schedule ----
 async function saveSchedule(){
