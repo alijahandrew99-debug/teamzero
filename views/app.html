@@ -97,6 +97,7 @@
       <strong>Business:</strong>
       <select id="profileSel" style="max-width:340px;margin:0"></select>
       <button class="sm ghost" onclick="newProfile()">+ Add another business</button>
+      <button class="sm ghost" onclick="deleteProfile()" style="color:var(--red)">Delete this business</button>
     </div>
 
     <div class="card">
@@ -312,6 +313,13 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes'];
 function fillForm(){const p=curProfile()||{};FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});window._editId=(p&&p.id)||'';}
 function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');showTab('business');toast('Fill in the new business, then Save');}
+async function deleteProfile(){
+  const p=curProfile();if(!p)return;
+  if(STATE.profiles.length<=1)return toast('You need at least one business');
+  if(!confirm(`Delete "${p.name}" and its leads/drafts? This can't be undone.`))return;
+  try{await api('/api/profile/delete',{id:p.id});toast('Business deleted');await load();}
+  catch(e){toast(e.message);}
+}
 async function autofill(){
   const url=$('autoUrl').value.trim();
   if(!url)return toast('Paste your website first');

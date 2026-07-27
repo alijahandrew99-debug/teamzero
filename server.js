@@ -496,6 +496,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, { fields });
       }
 
+      if (p === '/api/profile/delete' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (db.getProfiles(acc).length <= 1) return json(res, { error: 'You need at least one business.' }, 400);
+        const ok = db.deleteProfile(acc, f.id);
+        return json(res, { deleted: ok });
+      }
+
       if (p === '/api/profile/save' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
         const fields = ['name', 'senderName', 'offer', 'icp', 'valueProp', 'proof', 'tone', 'cta', 'notes'];
