@@ -335,7 +335,12 @@ const server = http.createServer(async (req, res) => {
     // ---------- public ----------
     if (req.method === 'GET' && p === '/') {
       if (account) return redirect(res, '/app');
-      return html(res, view('landing.html'));
+      // Demo video: set DEMO_VIDEO_URL (YouTube/Loom EMBED url) to show it;
+      // until then a styled placeholder keeps the section presentable.
+      const demo = process.env.DEMO_VIDEO_URL
+        ? `<div style="position:relative;padding-top:56.25%;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#000"><iframe src="${process.env.DEMO_VIDEO_URL}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen loading="lazy"></iframe></div>`
+        : `<div style="border:2px dashed var(--line);border-radius:12px;padding:60px 20px;text-align:center;color:var(--ink2);background:var(--paper2)">▶ Demo video coming shortly — <a href="/signup">get started</a> and see it live in your own account.</div>`;
+      return html(res, view('landing.html').replace('__DEMO_VIDEO__', demo));
     }
     // Legal pages — public, and required before Stripe will approve billing.
     if (req.method === 'GET' && (p === '/terms' || p === '/privacy')) {
