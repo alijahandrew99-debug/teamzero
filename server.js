@@ -626,6 +626,14 @@ const server = http.createServer(async (req, res) => {
         db.logActivity(acc, { agent: 'SYSTEM', profileId: f.profileId, msg: `Imported ${added.length} lead(s)` });
         return json(res, { added: added.length });
       }
+      if (p === '/api/leads/clear' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!f.profileId) return json(res, { error: 'No business selected.' }, 400);
+        const mode = f.mode === 'guesses' ? 'guesses' : 'all';
+        const n = db.clearLeads(acc, f.profileId, mode);
+        db.logActivity(acc, { agent: 'SYSTEM', profileId: f.profileId, msg: `Cleared ${n} ${mode === 'guesses' ? 'unverified' : ''} lead(s)` });
+        return json(res, { removed: n });
+      }
       if (p === '/api/outbound/run' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
         return json(res, await agents.outboundRun(acc, f.profileId));

@@ -250,7 +250,12 @@
       </div>
       <div>
         <div class="card">
-          <h2><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span></h2>
+          <h2><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span>
+            <span style="margin-left:auto;display:flex;gap:6px">
+              <button class="sm ghost" onclick="clearLeads('guesses')" title="Delete unverified/guessed leads, keep verified ones">Clear guesses</button>
+              <button class="sm red" onclick="clearLeads('all')" title="Delete every lead for this business">Reject all</button>
+            </span>
+          </h2>
           <div class="body">
             <details><summary style="cursor:pointer;color:var(--red);font-size:13px">Import a CSV instead</summary>
               <div class="muted" style="margin:6px 0">Headers: name, title, company, email, notes</div>
@@ -442,6 +447,14 @@ async function runOutbound(){
 async function runScout(){
   startBusy(['🔍 Researching the market for your business…','Reading current sources…','Writing your brief…']);
   try{const r=await api('/api/scout/brief',{profileId:pid()});$('briefCard').style.display='';$('brief').textContent=r.brief;toast('Brief ready');await load();}catch(e){toast(e.message);}finally{stopBusy();}
+}
+async function clearLeads(mode){
+  const all=mode==='all';
+  const msg=all?'Delete ALL leads for this business? This clears the list and any drafts. Cannot be undone.'
+    :'Delete the unverified/guessed leads (keep verified ones)? Cannot be undone.';
+  if(!confirm(msg))return;
+  try{const r=await api('/api/leads/clear',{profileId:pid(),mode});toast(`Removed ${r.removed} lead(s)`);await load();}
+  catch(e){toast(e.message);}
 }
 async function importCSV(){const csv=$('csv').value.trim();if(!csv)return toast('Paste CSV first');try{const r=await api('/api/leads/import',{profileId:pid(),csv});$('csv').value='';toast(`Imported ${r.added}`);await load();}catch(e){toast(e.message);}}
 // populate the schedule + mailbox panels from saved settings
