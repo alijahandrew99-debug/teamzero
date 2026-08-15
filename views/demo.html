@@ -34,8 +34,8 @@
 
     <!-- step 3: the email -->
     <div class="vd-step" id="vdS3">
-      <div class="vd-mailhead">To: <b>alex.hoffer@hofferplastics.com</b> <span class="vd-pill">real email ✓</span></div>
-      <div class="vd-subj">Question about the molding lines in South Elgin</div>
+      <div class="vd-mailhead">To: <b>d.whitfield@lakeshoremolding.example</b> <span class="vd-pill">real email ✓</span></div>
+      <div class="vd-subj">Question about your molding lines</div>
       <pre class="vd-mail" id="vdMail"></pre>
       <div class="vd-actions" id="vdActions">
         <button class="vd-btn ok" id="vdApprove" type="button">✓ Approve &amp; send</button>
@@ -89,11 +89,11 @@
 (function(){
   var $=function(id){return document.getElementById(id)};
   var LEADS=[
-    ['Alex Hoffer','Chief Operating Officer · Hoffer Plastics · South Elgin, IL'],
-    ['Tom Kappus','President · Kappus Plastic · Chicago, IL'],
-    ['Bill White','Plant Manager · Midwest Molding · Rockford, IL']
+    ['Dana Whitfield','Operations Director · Lakeshore Molding Co. · Illinois'],
+    ['Marcus Reed','President · Prairie Plastics · Illinois'],
+    ['Ivy Sandoval','Plant Manager · Northline Molding · Illinois']
   ];
-  var MAIL="Alex,\n\nRunning 90-odd molding machines under one roof, the heat coming off those barrels is usually the biggest line item nobody's measuring.\n\nWe insulate them under a utility-funded program — one Illinois plant cut $203K a year in electricity with $0 upfront, plus a rebate cheque.\n\nWorth 15 minutes to see if your lines qualify?\n\n— Alijah";
+  var MAIL="Dana,\n\nRunning 90-odd molding machines under one roof, the heat coming off those barrels is usually the biggest line item nobody's measuring.\n\nWe insulate them under a utility-funded program — one Illinois plant cut $203K a year in electricity with $0 upfront, plus a rebate cheque.\n\nWorth 15 minutes to see if your lines qualify?\n\n— Alijah";
   var timers=[], running=false;
   function at(ms,fn){timers.push(setTimeout(fn,ms))}
   function reset(){

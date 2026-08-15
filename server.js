@@ -45,11 +45,20 @@ function redirect(res, location, cookie) {
   res.writeHead(302, h);
   res.end();
 }
+const MAX_BODY = 2 * 1024 * 1024;   // 2MB — generous for a CSV paste, fatal to a flood
 function readBody(req) {
   return new Promise((resolve) => {
     let b = '';
-    req.on('data', (d) => (b += d));
-    req.on('end', () => resolve(b));
+    let over = false;
+    req.on('data', (d) => {
+      if (over) return;
+      b += d;
+      // Unbounded buffering meant any unauthenticated POST could grow the heap
+      // until the process died, taking every tenant down with it.
+      if (b.length > MAX_BODY) { over = true; b = ''; try { req.destroy(); } catch {} resolve(''); }
+    });
+    req.on('end', () => { if (!over) resolve(b); });
+    req.on('error', () => { if (!over) { over = true; resolve(''); } });
   });
 }
 function parseForm(body) { return Object.fromEntries(new URLSearchParams(body)); }
@@ -184,7 +193,11 @@ function startProspectJob(accountId, profileId, { count, hints, thenDraft, notif
           // meter as leads actually land, so an abandoned run still bills fairly
           const acct = db.getAccount(accountId);
           const delta = added - job.added;
-          if (delta > 0) plans.consume(acct, delta, stripe.isOwner(acct));
+          if (delta > 0) {
+            plans.consume(acct, delta, stripe.isOwner(acct));
+            // Mark them charged so drafting doesn't bill the same lead twice.
+            try { for (const l of db.getLeads(acc, profileId)) if (!l.metered) db.updateLead(acc, l.id, { metered: true }); } catch {}
+          }
           job.done = done; job.total = total; job.added = added;
         },
       });
