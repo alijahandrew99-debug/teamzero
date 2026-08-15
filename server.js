@@ -240,8 +240,19 @@ function jobView(job) {
 // protect the user's sending reputation.
 const sendJobs = new Map();
 
+// One send job per account at a time. Without this, a second click or a page
+// reload starts a concurrent run over the same approved queue items and every
+// recipient gets the email twice.
+const activeSends = new Map();
 function startSendJob(account, profileId) {
+  const running = activeSends.get(account.id);
+  if (running && sendJobs.get(running) && sendJobs.get(running).status === 'running') {
+    const e = new Error('A send is already running for this account.');
+    e.alreadyRunning = running;
+    throw e;
+  }
   const id = db.uid();
+  activeSends.set(account.id, id);
   const items = db.getQueue(account.id, profileId).filter((q) => q.status === 'approved');
   const cfg = account.smtp || {};
   const todayStr = db.today();
@@ -341,6 +352,7 @@ function startSendJob(account, profileId) {
       job.status = 'error'; job.error = e.message;
     }
     job.finishedAt = Date.now();
+    if (activeSends.get(account.id) === id) activeSends.delete(account.id);
     setTimeout(() => sendJobs.delete(id), 10 * 60 * 1000);
   })();
 
@@ -385,9 +397,28 @@ function checkSchedules() {
     // fire if we're at/just past the time (15-min catch-up window for restarts)
     if (nowMin < dueMin || nowMin > dueMin + 15) continue;
 
+    // The overnight run spends real AI money, so it must respect the plan and
+    // the remaining allowance exactly like a manual run does. Without this a
+    // cancelled or exhausted account keeps prospecting every night for free.
+    const acct = db.getAccount(p.accountId);
+    if (!acct) continue;
     db.updateProfile(p.accountId, p.id, { schedule: { ...s, lastRunDate: dateKey } });
-    db.logActivity(p.accountId, { agent: 'NIGHT SHIFT', profileId: p.id, msg: `Scheduled run started — sourcing ${s.count || 50} leads` });
-    startProspectJob(p.accountId, p.id, { count: Math.min(Number(s.count) || 50, 50), hints: s.hints || '', thenDraft: true, notify: true });
+    const owner = stripe.isOwner(acct);
+    if (!stripe.hasAccess(acct)) {
+      db.logActivity(p.accountId, { agent: 'NIGHT SHIFT', profileId: p.id, msg: 'Skipped — no active plan. Subscribe to resume overnight runs.' });
+      continue;
+    }
+    const u = plans.usage(acct, owner);
+    let count = Math.min(Number(s.count) || 50, 50);
+    if (!u.unlimited) {
+      if (u.remaining <= 0) {
+        db.logActivity(p.accountId, { agent: 'NIGHT SHIFT', profileId: p.id, msg: `Skipped — this month's ${u.limit} leads are used up. Resets next month.` });
+        continue;
+      }
+      count = Math.min(count, u.remaining);   // never overspend the allowance
+    }
+    db.logActivity(p.accountId, { agent: 'NIGHT SHIFT', profileId: p.id, msg: `Scheduled run started — sourcing ${count} leads` });
+    startProspectJob(p.accountId, p.id, { count, hints: s.hints || '', thenDraft: true, notify: true });
   }
 }
 setInterval(checkSchedules, 60 * 1000);
@@ -529,6 +560,15 @@ const server = http.createServer(async (req, res) => {
         if (out.action === 'book') {
           const d = out.data || {};
           const phone = d.phone || params.From || '';
+          // Put it in the diary. startsAt is the resolved date-time the agent
+          // committed to; whenText keeps their own words for context.
+          const appt = db.addAppointment(call.accountId, {
+            profileId: call.profile.id, callSid: sid,
+            name: d.name || 'Caller', company: d.company || '', phone,
+            email: d.email || '', reason: d.reason || 'callback',
+            whenText: d.when || '', startsAt: d.whenISO || '',
+            source: call.direction === 'inbound' ? 'inbound call' : 'outbound call',
+          });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'booked', transcript: call.turns,
             booking: { name: d.name, company: d.company, phone, reason: d.reason, when: d.when } });
           db.addLeads(call.accountId, call.profile.id, [{
@@ -536,12 +576,16 @@ const server = http.createServer(async (req, res) => {
             emailConfidence: 'imported', emailSource: 'phone call',
             notes: 'PHONE ' + call.direction + ' | ' + phone + ' | wants: ' + (d.reason || 'callback') + ' | when: ' + (d.when || 'unspecified'),
           }]);
-          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Callback booked: ' + (d.name || 'caller') + ' (' + phone + ') - ' + (d.when || 'time TBC') });
-          return xml(res, voice.sayAndHangup(out.say || "Perfect, that's booked. Someone'll be in touch. Thanks!", call && call.account ? voice.voiceFor(call.account) : undefined));
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Appointment booked: ' + (d.name || 'caller') + ' (' + phone + ') - ' + (d.whenISO || d.when || 'time TBC') });
+          // Don't cut them off the instant the confirmation lands.
+          return xml(res, voice.sayAndSignOff(
+            out.say || "Perfect, that's booked in.",
+            voice.voiceFor(call.account),
+            'Someone will be in touch. Thanks for your time, and have a good one. Bye now.'));
         }
         if (out.action === 'end') {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ended', transcript: call.turns });
-          return xml(res, voice.sayAndHangup(out.say, call && call.account ? voice.voiceFor(call.account) : undefined));
+          return xml(res, voice.sayAndSignOff(out.say, voice.voiceFor(call.account), 'Thanks for your time. Bye now.'));
         }
         return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account)));
       }
@@ -863,6 +907,20 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, connected: true });
       }
 
+      // ---- appointments (the diary the AI books into) ----
+      if (p === '/api/appointments' && req.method === 'GET') {
+        return json(res, { appointments: db.getAppointments(acc) });
+      }
+      if (p === '/api/appointments/update' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const patch = {};
+        if (f.status) patch.status = f.status;
+        if (f.startsAt !== undefined) patch.startsAt = f.startsAt;
+        if (f.notes !== undefined) patch.notes = f.notes;
+        const a = db.updateAppointment(acc, f.id, patch);
+        return json(res, { ok: !!a, appointment: a });
+      }
+
       // ---- voice settings + calls ----
       if (p === '/api/voice/save' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
@@ -1010,7 +1068,12 @@ const server = http.createServer(async (req, res) => {
       // ---- send all approved (background, throttled) ----
       if (p === '/api/send/run' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const job = startSendJob(account, f.profileId);
+        let job;
+        try { job = startSendJob(account, f.profileId); }
+        catch (e) {
+          if (e.alreadyRunning) return json(res, { error: e.message, jobId: e.alreadyRunning }, 409);
+          throw e;
+        }
         return json(res, { jobId: job.id, ...sendJobView(job) });
       }
       if (p === '/api/send/status' && req.method === 'GET') {

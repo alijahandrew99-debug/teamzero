@@ -458,8 +458,25 @@ function qcard(q){
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress','website','pricing'];
-function fillForm(){const p=curProfile()||{};FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});window._editId=(p&&p.id)||'';}
-function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');showTab('business');toast('Fill in the new business, then Save');}
+// The 20s background poll used to repaint every input from the last SAVED
+// server values — wiping whatever was being typed, and blanking all eight
+// AI-autofilled fields before they could be saved. Once anything is edited we
+// leave the forms alone until it is saved.
+let _dirty=false;
+const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_hours','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+function markDirty(){_dirty=true;}
+function clearDirty(){_dirty=false;}
+window.addEventListener('DOMContentLoaded',()=>{
+  FIELDS.forEach(k=>{const el=$('f_'+k); if(el)el.addEventListener('input',markDirty);});
+  VOICE_FIELDS.forEach(id=>{const el=$(id); if(el){el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);}});
+});
+function fillForm(force){
+  if(_dirty&&!force)return;                      // never clobber unsaved edits
+  const p=curProfile()||{};
+  FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});
+  window._editId=(p&&p.id)||'';
+}
+function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');markDirty();showTab('business');toast('Fill in the new business, then Save');}
 async function deleteProfile(){
   const p=curProfile();if(!p)return;
   if(STATE.profiles.length<=1)return toast('You need at least one business');
@@ -476,6 +493,7 @@ function renderVoice(){
   $('vStatus').innerHTML = v.configured
     ? `<div class="okbox">✓ Twilio keys detected on the server${v.envNumber?` · number ${esc(v.envNumber)}`:''}</div>`
     : `<div class="warnbox bad">⚠ Twilio keys not found. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER in Render → Environment, then redeploy.</div>`;
+  if(_dirty)return;                             // don't clobber unsaved edits
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
   $('v_transferTo').value=v.transferTo||'';
@@ -507,7 +525,7 @@ async function saveVoice(){
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,number:(STATE.voice||{}).envNumber||'',
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
       ttsVoice:$('v_ttsVoice').value});
-    $('vMsg').textContent='Saved ✓';toast('Voice agent saved');await load();
+    $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 async function testCall(){
@@ -636,6 +654,7 @@ async function autofill(){
     const r=await api('/api/profile/autofill',{url});
     const f=r.fields||{};
     ['name','senderName','offer','icp','valueProp','proof','tone','cta'].forEach(k=>{ if(f[k])$('f_'+k).value=f[k]; });
+    markDirty();   // AI-filled values are unsaved edits — the poll must not wipe them
     $('autoMsg').textContent='Filled from your site — review the fields and hit Save.';
     toast('Profile drafted from your website — review & save');
   }catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
@@ -645,7 +664,7 @@ async function saveProfile(){
   const b=$('saveBtn');b.disabled=true;
   const data={id:window._editId||undefined};FIELDS.forEach(k=>data[k]=$('f_'+k).value);
   if(!data.name){toast('Give the business a name');b.disabled=false;return;}
-  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');await load();$('profileSel').value=r.profile.id;render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
+  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');clearDirty();await load();$('profileSel').value=r.profile.id;render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 // ---- busy manager: progress bar, staged messages, running timer, button lock ----
 let _busyTimer=null,_stageTimer=null,_busyStart=0;
@@ -816,7 +835,7 @@ async function approveAndSendAll(){
 async function approve(id){try{await api('/api/queue/approve',{id});await load();}catch(e){toast(e.message);}}
 async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'reject'),{id});toast(kind==='sent'?'Logged as sent':'Rejected');await load();}catch(e){toast(e.message);}}
 function copyBody(id){const q=STATE.queue.find(x=>x.id===id);if(!q)return;navigator.clipboard.writeText(`Subject: ${q.subject}\n\n${q.body}`);toast('Copied');}
-$('profileSel').addEventListener('change',()=>{fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
+$('profileSel').addEventListener('change',()=>{clearDirty();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
 load().then(()=>{ if(isStarter(curProfile()))showTab('business'); });
 setInterval(()=>{load().catch(()=>{});},20000); // background poll: stay quiet on blips
 </script>
