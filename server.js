@@ -769,7 +769,7 @@ const server = http.createServer(async (req, res) => {
         // No number configured — drop the call panel rather than show a dead link.
         page = page.replace(/<div class="calldemo">[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/, '');
       }
-      return html(res, page);
+      return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
     }
     // Legal pages — public, and required before Stripe will approve billing.
     if (req.method === 'GET' && (p === '/terms' || p === '/privacy')) {
@@ -911,7 +911,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, {
           error: u.isPro
             ? `You've used all ${u.limit} leads this month — your allowance resets next month.`
-            : `Pick a plan to turn your sales team on — from $99/mo.`,
+            : `Pick a plan to turn your sales team on — from ${plans.fromPrice()}/mo.`,
           locked: true, needUpgrade: !u.isPro,
         }, 402);
       }
@@ -981,7 +981,7 @@ const server = http.createServer(async (req, res) => {
             return json(res, {
               error: u.isPro
                 ? `You've used all ${u.limit} leads this month. It resets next month.`
-                : `Pick a plan to turn your sales team on — from $99/mo.`,
+                : `Pick a plan to turn your sales team on — from ${plans.fromPrice()}/mo.`,
               needUpgrade: !u.isPro, quotaExhausted: true,
             }, 402);
           }
