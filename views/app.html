@@ -73,8 +73,22 @@
   .field .hint{font-size:12px;color:var(--ink2);margin-bottom:6px}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media(max-width:600px){.two{grid-template-columns:1fr}}
-  .hide{display:none}
-</style></head>
+.hide{display:none}
+  .dcheck{padding:7px 0;border-top:1px dashed var(--line);font-size:13.5px}
+  .dcheck:first-child{border-top:0}
+  .dok{color:var(--ok);font-weight:800}.dbad{color:var(--red);font-weight:800}
+  .dval{font-family:ui-monospace,monospace;font-size:12px;color:var(--ink2);background:#fff;border:1px solid var(--line);border-radius:4px;padding:4px 7px;margin-top:4px;word-break:break-all}
+  .dfix{border:1px solid var(--line);border-radius:6px;padding:11px;margin-top:9px;background:#fff}
+  .dtab{width:100%;border-collapse:collapse;margin:6px 0;font-size:12.5px}
+  .dtab td{padding:4px 6px;border-top:1px dashed var(--line);vertical-align:top}
+  .dtab td:first-child{color:var(--ink2);white-space:nowrap;width:110px}
+  .dtab code{font-size:12px;word-break:break-all}
+  .okbox{background:#eaf5ee;border:1px solid #bcdcc8;color:#1f5c39;border-radius:5px;padding:8px 11px;font-size:13px}
+  .spamflag{font-size:12.5px;padding:3px 0}
+  .spamflag .sv{font-weight:700}
+  .sv.high{color:var(--red)}.sv.med{color:#9a6b12}.sv.low{color:var(--ink2)}
+</style><script src="/favicon.js" defer></script>
+</head>
 <body>
 <header>
   <span class="mark">Dawn<b>pipe</b></span>
@@ -158,6 +172,17 @@
           <input id="sch_hints" placeholder="optional focus (e.g. 'plastics plants in Illinois')" style="flex:1;min-width:170px;margin:0">
         </div>
         <div class="row" style="margin-top:10px"><button onclick="saveSchedule()" id="schBtn">Save schedule</button><span class="muted" id="schMsg"></span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="agent">DELIVERABILITY</span> Your sending domain <span class="muted" id="delivDomain"></span>
+        <button class="sm ghost" onclick="checkDomain()" id="delivBtn" style="margin-left:auto">Re-check DNS</button>
+      </h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 10px">Gmail and Outlook silently send unauthenticated mail to spam. These three DNS records prove the mail is really from you. <b>Sending stays blocked until all three pass.</b></p>
+        <div id="delivResult"><div class="muted">Connect a mailbox below, then click Re-check DNS.</div></div>
+        <div id="warmupBox" style="margin-top:14px"></div>
       </div>
     </div>
 
@@ -332,6 +357,11 @@ function qcard(q){
   const approved=q.status==='approved';
   const lead=(STATE.leads||[]).find(l=>l.id===q.leadId)||{};
   const c=lead.emailConfidence||'';
+  const sp=q.spam||null;
+  const spamBox = (sp && sp.level!=='clean')
+    ? `<div class="warnbox ${sp.level==='risky'?'bad':''}"><b>${sp.level==='risky'?'⚠ High spam risk':'⚠ Spam signals'}</b> (score ${sp.score}) — fix before sending:
+        ${(sp.flags||[]).map(f=>`<div class="spamflag"><span class="sv ${f.sev}">•</span> ${esc(f.msg)}</div>`).join('')}</div>`
+    : '';
   const warn = c==='invalid' ? `<div class="warnbox bad">⚠ No valid email for this company — sending will bounce. Find the address manually before sending.</div>`
     : c==='pattern' ? `<div class="warnbox">⚠ This address is a <b>guess</b> — no published email was found. Verify it before sending, or it may bounce and hurt your sending reputation.</div>`
     : c==='site' ? `<div class="warnbox">ℹ This address was published on their site but may belong to a <b>different person</b> — check the recipient matches the greeting.</div>` : '';
@@ -340,7 +370,7 @@ function qcard(q){
   const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${bo}`;
   const outlook=`https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${su}&body=${bo}`;
   const mailto=`mailto:${to}?subject=${su}&body=${bo}`;
-  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
+  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes'];
@@ -351,6 +381,63 @@ async function deleteProfile(){
   if(STATE.profiles.length<=1)return toast('You need at least one business');
   if(!confirm(`Delete "${p.name}" and its leads/drafts? This can't be undone.`))return;
   try{await api('/api/profile/delete',{id:p.id});toast('Business deleted');await load();}
+  catch(e){toast(e.message);}
+}
+// ---- deliverability (SPF/DKIM/DMARC) ----
+function renderDeliv(r){
+  const box=$('delivResult');
+  if(r.error){box.innerHTML=`<div class="warnbox">${esc(r.error)}</div>`;return;}
+  $('delivDomain').textContent=r.domain?'· '+r.domain:'';
+  if(r.freemail){
+    box.innerHTML=`<div class="dcheck"><span class="dok">✓</span> <b>${esc(r.domain)} handles authentication for you</b> — SPF, DKIM and DMARC are managed by your provider.</div>
+      <div class="warnbox" style="margin-top:10px">${esc(r.warning||'')}</div>`;
+    return;
+  }
+  const row=(k,v)=>{
+    const ok=v.ok;
+    return `<div class="dcheck"><span class="${ok?'dok':'dbad'}">${ok?'✓':'✕'}</span> <b>${k}</b>
+      <span class="muted">${esc(v.detail||'')}</span>
+      ${v.value&&ok?`<div class="dval">${esc(v.value)}</div>`:''}</div>`;
+  };
+  const recs=r.records||{};
+  let html=row('SPF',recs.spf||{})+row('DKIM',recs.dkim||{})+row('DMARC',recs.dmarc||{});
+  if(r.ok){
+    html+=`<div class="okbox" style="margin-top:10px">✓ <b>All three pass.</b> Your domain is authenticated — sending is unlocked.</div>`;
+  }else{
+    html+=`<div class="warnbox bad" style="margin-top:10px">⚠ <b>Sending is blocked</b> until these pass. Add the records below at your DNS provider (where you bought the domain), then click Re-check. DNS can take up to an hour to update.</div>`;
+    for(const h of (r.howTo||[])){
+      html+=`<div class="dfix"><b>${esc(h.record)}</b> — add a <b>${esc(h.type)}</b> record
+        <table class="dtab"><tr><td>Host / Name</td><td><code>${esc(h.host)}</code></td></tr>
+        <tr><td>Value</td><td><code>${esc(h.value)}</code></td></tr></table>
+        <div class="muted">${esc(h.note)}</div></div>`;
+    }
+  }
+  box.innerHTML=html;
+}
+function renderWarmup(){
+  const w=STATE.warmup||{};const box=$('warmupBox');
+  if(!w.enabled){box.innerHTML=`<div class="muted">Warmup off — connect a mailbox to start it.</div>`;return;}
+  const pct=Math.min(100,Math.round((w.allowance/w.ceiling)*100));
+  box.innerHTML=`<div style="border-top:1px dashed var(--line);padding-top:12px">
+    <div class="row" style="justify-content:space-between">
+      <b>Domain warmup — day ${w.day}</b>
+      <span class="muted">${w.atCeiling?'at full speed':`ramping to ${w.ceiling}/day in ~${w.daysToFull} day(s)`}</span>
+    </div>
+    <div class="pbar" style="margin:8px 0 6px"><div class="pfill determinate" style="width:${pct}%"></div></div>
+    <div class="muted">Today you can send <b>${w.allowance}</b> emails on ${esc(w.domain||'this domain')} (ceiling ${w.ceiling}/day). New domains that blast at full volume get filtered for months — this ramp protects you. Sent today: ${STATE.sentToday||0}.</div>
+    <div class="row" style="margin-top:8px">
+      <label class="muted">Ceiling/day <input id="wCeil" type="number" min="1" max="500" value="${w.ceiling}" style="width:90px;margin:0 0 0 6px"></label>
+      <button class="sm ghost" onclick="saveWarmup()">Save</button>
+    </div></div>`;
+}
+async function checkDomain(){
+  const b=$('delivBtn');b.disabled=true;const o=b.textContent;b.textContent='Checking DNS…';
+  try{const r=await api('/api/deliverability/check',{});renderDeliv(r);}
+  catch(e){$('delivResult').innerHTML=`<div class="warnbox">${esc(e.message)}</div>`;}
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function saveWarmup(){
+  try{await api('/api/settings/warmup',{ceiling:Number($('wCeil').value)||40});toast('Warmup updated');await load();}
   catch(e){toast(e.message);}
 }
 function showUpgrade(){
@@ -470,6 +557,8 @@ function fillSettings(){
   set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);
   $('smMsg').textContent=m.connected?`Connected as ${m.user} ✓`:'Not connected — you will send by hand';
   const ed=STATE.emailData||{};
+  renderWarmup();
+  if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
   $('hkMsg').textContent=ed.connected?'Connected ✓ — leads use verified emails.':(ed.fallback?'Using the site-wide data key.':'Not connected — unfound emails will be guesses.');
   const info=$('sendInfo');
   if(info)info.textContent=m.connected?`via ${m.user} · ${STATE.sentToday||0}/${STATE.dailyCap??50} sent today`:'connect a mailbox to send automatically';

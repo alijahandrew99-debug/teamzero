@@ -11,6 +11,8 @@ const smtp = require('./lib/smtp');
 const plans = require('./lib/plans');
 const mailer = require('./lib/mailer');
 const emailApi = require('./lib/emailapi');
+const dnsauth = require('./lib/dnsauth');
+const sending = require('./lib/sending');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
@@ -236,19 +238,30 @@ function startSendJob(account, profileId) {
   const id = db.uid();
   const items = db.getQueue(account.id, profileId).filter((q) => q.status === 'approved');
   const cfg = account.smtp || {};
-  const delayMs = Math.max(0, Number(account.sendDelaySec ?? 25)) * 1000;
-  const cap = Number(account.dailyCap ?? 50);
   const todayStr = db.today();
   const sentToday = (account.sentToday && account.sentToday.date === todayStr) ? account.sentToday.count : 0;
+  // Daily ceiling is the LOWER of the user's cap and today's warmup allowance —
+  // a new domain that blasts its full cap on day one gets filtered for months.
+  const warmAllow = sending.warmupAllowance(account.warmup, todayStr);
+  const cap = Math.min(Number(account.dailyCap ?? 50), warmAllow);
   const allowed = Math.max(0, cap - sentToday);
 
   const job = { id, accountId: account.id, status: 'running', done: 0, total: Math.min(items.length, allowed),
-    sent: 0, failed: 0, skipped: Math.max(0, items.length - allowed), startedAt: Date.now(), error: null, lastError: null };
+    sent: 0, failed: 0, deferred: 0, skipped: Math.max(0, items.length - allowed),
+    warmupCap: Number.isFinite(warmAllow) ? warmAllow : null,
+    startedAt: Date.now(), error: null, lastError: null };
   sendJobs.set(id, job);
 
   (async () => {
     try {
       if (!cfg.user || !cfg.pass) throw new Error('No sending mailbox connected — add it in Settings first.');
+      // HARD GATE: an unauthenticated domain gets spam-foldered, and the damage
+      // is slow and permanent. Refuse to send until SPF+DKIM+DMARC pass.
+      const auth = await dnsauth.checkDomain(cfg.fromEmail || cfg.user).catch(() => null);
+      if (auth && auth.ok === false) {
+        const bad = Object.entries(auth.records || {}).filter(([, v]) => !v.ok).map(([k]) => k.toUpperCase()).join(', ');
+        throw new Error(`Sending is blocked: ${bad} not set up for ${auth.domain}. Fix it on the Your Business tab (Deliverability), then re-check.`);
+      }
       let count = sentToday;
       for (const it of items.slice(0, allowed)) {
         try {
@@ -264,6 +277,13 @@ function startSendJob(account, profileId) {
             job.done++;
             continue;
           }
+          // Land in their inbox while they're at their desk, in THEIR timezone.
+          const bh = sending.withinBusinessHours(lead, {});
+          if (!bh.ok) {
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Holding ${it.to} — ${bh.reason}` });
+            job.deferred++; job.done++;
+            continue; // stays approved; the next run picks it up in-hours
+          }
           await smtp.sendMail({ ...cfg, fromName: cfg.fromName || '' }, { to: it.to, subject: it.subject, body: it.body });
           db.updateQueueItem(account.id, it.id, { status: 'sent', sentAt: db.nowISO() });
           if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'sent' });
@@ -275,7 +295,8 @@ function startSendJob(account, profileId) {
           db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Send FAILED to ${it.toName || it.to}: ${e.message}` });
         }
         job.done++;
-        if (job.done < job.total && delayMs) await new Promise((r) => setTimeout(r, delayMs));
+        // Randomised 3-8 min gap: a fixed interval is a machine fingerprint.
+        if (job.done < job.total) await new Promise((r) => setTimeout(r, sending.nextDelayMs()));
       }
       job.status = 'done';
     } catch (e) {
@@ -292,10 +313,12 @@ function sendJobView(j) {
   const elapsed = Date.now() - j.startedAt;
   let etaMs = null;
   if (j.status === 'running' && j.total > j.done) {
-    etaMs = j.done > 0 ? Math.round((elapsed / j.done) * (j.total - j.done)) : j.total * 26000;
+    // pacing is now randomised 3-8 min, so estimate from the ~5.5 min midpoint
+    etaMs = j.done > 0 ? Math.round((elapsed / j.done) * (j.total - j.done)) : j.total * 330000;
   }
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
-    skipped: j.skipped, etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
+    skipped: j.skipped, deferred: j.deferred || 0, warmupCap: j.warmupCap ?? null,
+    etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
 }
 
 // ---- NIGHT SHIFT scheduler ----
@@ -339,6 +362,13 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // ---------- health ----------
+    // animated tab icon (drawn client-side on canvas)
+    if (req.method === 'GET' && p === '/favicon.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+      return res.end(view('favicon.js'));
+    }
+    if (req.method === 'GET' && p === '/favicon.ico') { res.writeHead(204); return res.end(); }
+
     if (req.method === 'GET' && p === '/health') {
       return json(res, { ok: true, ai: aiMode(), uptime: Math.round(process.uptime()) });
     }
@@ -505,6 +535,8 @@ const server = http.createServer(async (req, res) => {
           sentToday: (account.sentToday && account.sentToday.date === db.today()) ? account.sentToday.count : 0,
           // key itself is never echoed back — connected flag only
           emailData: { connected: !!account.emailApiKey, fallback: !!process.env.HUNTER_API_KEY },
+          warmup: sending.warmupStatus(account.warmup),
+          sendDomain: dnsauth.domainOfEmail((account.smtp || {}).fromEmail || (account.smtp || {}).user || ''),
           profiles: db.getProfiles(acc),
           leads: db.getLeads(acc),
           queue: db.getQueue(acc),
@@ -592,6 +624,29 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, connected: true });
       }
 
+      // ---- deliverability: SPF / DKIM / DMARC on the sending domain ----
+      if (p === '/api/deliverability/check' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const cfg = account.smtp || {};
+        const from = f.email || cfg.fromEmail || cfg.user || '';
+        if (!from) return json(res, { error: 'Connect a sending mailbox first — then we can check its domain.' }, 400);
+        const report = await dnsauth.checkDomain(from, { selector: f.selector || '', force: true });
+        return json(res, report);
+      }
+
+      // ---- warmup settings ----
+      if (p === '/api/settings/warmup' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const cur = account.warmup || {};
+        const domain = dnsauth.domainOfEmail((account.smtp || {}).fromEmail || (account.smtp || {}).user || '');
+        const patch = f.enabled === false
+          ? { ...cur, enabled: false }
+          : { ...sending.startWarmup(domain, f.ceiling ?? cur.ceiling), ...(cur.domain === domain && cur.startDate ? { startDate: cur.startDate } : {}),
+              ceiling: Math.max(1, Number(f.ceiling ?? cur.ceiling ?? sending.WARMUP_CEILING)) };
+        db.updateAccount(acc, { warmup: patch });
+        return json(res, { ok: true, warmup: sending.warmupStatus(patch) });
+      }
+
       // ---- email data quota (answers "why am I getting guesses?") ----
       if (p === '/api/settings/emailkey/status' && req.method === 'GET') {
         const st = await emailApi.accountStatus(db.getAccount(acc));
@@ -608,10 +663,16 @@ const server = http.createServer(async (req, res) => {
           const v = await smtp.verify(cfg);
           if (!v.ok) return json(res, { error: `Could not sign in to that mailbox: ${v.error}` }, 400);
         }
-        db.updateAccount(acc, { smtp: cfg,
+        // A different sending domain means a fresh reputation — restart warmup.
+        const newDomain = dnsauth.domainOfEmail(cfg.fromEmail || cfg.user);
+        const prev = account.warmup || {};
+        const warmup = (prev.domain === newDomain && prev.startDate)
+          ? prev
+          : sending.startWarmup(newDomain, prev.ceiling);
+        db.updateAccount(acc, { smtp: cfg, warmup,
           sendDelaySec: Math.max(0, Number(f.sendDelaySec ?? account.sendDelaySec ?? 25)),
           dailyCap: Math.max(1, Number(f.dailyCap ?? account.dailyCap ?? 50)) });
-        return json(res, { ok: true });
+        return json(res, { ok: true, warmup: sending.warmupStatus(warmup) });
       }
 
       // ---- bulk approve ----
