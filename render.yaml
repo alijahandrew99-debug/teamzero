@@ -31,6 +31,10 @@ services:
         sync: false
       - key: STRIPE_PRICE_ID
         sync: false
+      - key: STRIPE_PRICE_TESTER
+        sync: false          # $49 Tester
+      - key: STRIPE_PRICE_COMPLETE
+        sync: false          # $1,499 Complete (email + phone)
       - key: STRIPE_PRICE_STARTER
         value: price_1TxvZvC2rJK5vGmDZbAvu31t   # $99 / 200 leads
       - key: STRIPE_PRICE_GROWTH
