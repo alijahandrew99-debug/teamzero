@@ -15,6 +15,7 @@ const dnsauth = require('./lib/dnsauth');
 const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
 const voice = require('./lib/voice');
+const notify = require('./lib/notify');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
@@ -526,7 +527,9 @@ const server = http.createServer(async (req, res) => {
         inCall.turns.push({ who: 'agent', text: greeting });
         db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
           profileId: profile.id, status: 'in-progress', transcript: [] });
-        db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown') });
+        const inDnc = suppress.isPhoneSuppressed(account.id, params.From || '');
+        db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown')
+          + (inDnc.blocked ? ' (this number is on your do-not-call list — they called you, so we answered)' : '') });
         return xml(res, voice.sayAndGather(greeting, base + '/voice/turn', voice.voiceFor(account)));
       }
 
@@ -592,8 +595,7 @@ const server = http.createServer(async (req, res) => {
 
         if (out.action === 'dnc') {
           const num = call.direction === 'inbound' ? params.From : call.to;
-          suppress.suppress(call.accountId, String(num || '').replace(/[^0-9+]/g, '') + '@phone.invalid',
-            'unsubscribe', { note: 'do-not-call, by phone' });
+          suppress.suppressPhone(call.accountId, num, 'unsubscribe', { note: 'do-not-call, asked on a call' });
           if (call.lead && call.lead.email) suppress.suppress(call.accountId, call.lead.email, 'unsubscribe', { note: 'do-not-call, by phone' });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'do-not-call', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'DO NOT CALL requested by ' + num + ' - suppressed' });
@@ -626,6 +628,17 @@ const server = http.createServer(async (req, res) => {
             notes: 'PHONE ' + call.direction + ' | ' + phone + ' | wants: ' + (d.reason || 'callback') + ' | when: ' + (d.when || 'unspecified'),
           }]);
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Appointment booked: ' + (d.name || 'caller') + ' (' + phone + ') - ' + (d.whenISO || d.when || 'time TBC') });
+          // Close the loop OUT of the server: text the caller, and put a calendar
+          // invite in the owner's inbox. Fire-and-forget so a failed text can
+          // never cost us the booking or delay the goodbye.
+          notify.announceBooking({ appointment: appt, profile: call.profile, account: call.account })
+            .then((r) => {
+              const bits = [];
+              if (r.sms) bits.push(r.sms.ok ? 'confirmation texted' : `text failed: ${r.sms.error}`);
+              if (r.email) bits.push(r.email.ok ? 'invite emailed to you' : `email failed: ${r.email.error}`);
+              if (bits.length) db.logActivity(call.accountId, { agent: 'VOICE', msg: bits.join(' · ') });
+            })
+            .catch((e) => db.logActivity(call.accountId, { agent: 'VOICE', msg: `Booking notifications failed: ${e.message}` }));
           // Don't cut them off the instant the confirmation lands.
           return xml(res, voice.sayAndSignOff(
             out.say || "Perfect, that's booked in.",
@@ -1035,6 +1048,10 @@ const server = http.createServer(async (req, res) => {
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
         const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
+        // DO NOT CALL is absolute and legally binding. Checked at the dial
+        // boundary so no route can place a call to someone who opted out.
+        const dnc = suppress.isPhoneSuppressed(acc, to);
+        if (dnc.blocked) return json(res, { error: `That number asked not to be contacted (${dnc.note || dnc.reason}). Calling it anyway is a legal risk.` }, 403);
         try {
           const call = await voice.placeCall({ to, from,
             answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });

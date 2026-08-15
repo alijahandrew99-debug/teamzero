@@ -33,6 +33,8 @@ services:
         sync: false
       - key: STRIPE_PRICE_TESTER
         sync: false          # $49 Tester
+      - key: STRIPE_PRICE_FRONTDESK
+        sync: false          # $399 Front Desk (voice-first)
       - key: STRIPE_PRICE_COMPLETE
         sync: false          # $1,499 Complete (email + phone)
       - key: STRIPE_PRICE_STARTER
