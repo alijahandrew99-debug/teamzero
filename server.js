@@ -415,7 +415,7 @@ const server = http.createServer(async (req, res) => {
       const params = parseForm(raw);
       const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
       const sig = req.headers['x-twilio-signature'];
-      if (!voice.configured()) return xml(res, voice.sayAndHangup('Voice is not configured yet. Goodbye.'));
+      if (!voice.configured()) return xml(res, voice.sayAndHangup("Sorry, this line isn't set up yet. Bye for now."));
       if (!voice.verifySignature(base + p, params, sig)) {
         db.logActivity('system', { agent: 'VOICE', msg: 'Rejected unsigned webhook on ' + p });
         res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -426,7 +426,7 @@ const server = http.createServer(async (req, res) => {
       // ---- inbound: someone rang the number ----
       if (p === '/voice/incoming') {
         const account = db.accountByVoiceNumber(params.To || '');
-        if (!account) return xml(res, voice.sayAndHangup('Thanks for calling. This line is not set up yet. Goodbye.'));
+        if (!account) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
         const vcfg = account.voice || {};
         const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
@@ -439,7 +439,7 @@ const server = http.createServer(async (req, res) => {
         db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
           profileId: profile.id, status: 'in-progress', transcript: [] });
         db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown') });
-        return xml(res, voice.sayAndGather(greeting, base + '/voice/turn'));
+        return xml(res, voice.sayAndGather(greeting, base + '/voice/turn', voice.voiceFor(account)));
       }
 
       // ---- outbound call answered ----
@@ -448,31 +448,31 @@ const server = http.createServer(async (req, res) => {
         if (/machine|fax/i.test(params.AnsweredBy || '')) {
           const vm = (call && call.account.voice && call.account.voice.voicemail)
             || ('Hi, this is an AI assistant calling from ' + (call ? call.profile.name : 'our team')
-                + '. Sorry to miss you, we will try again another time.');
+                + ". Sorry I missed you - I'll try again another time.");
           if (call) db.saveCall(call.accountId, { sid, status: 'voicemail', outcome: 'voicemail' });
-          return xml(res, voice.sayAndHangup(vm));
+          return xml(res, voice.sayAndHangup(vm, call ? voice.voiceFor(call.account) : undefined));
         }
-        if (!call) return xml(res, voice.sayAndHangup('Sorry, there was a problem. Goodbye.'));
+        if (!call) return xml(res, voice.sayAndHangup("Sorry, something went wrong on my end. Bye for now.", call && call.account ? voice.voiceFor(call.account) : undefined));
         const agentName = (call.account.voice && call.account.voice.agentName) || 'Sarah';
         const who = call.lead && call.lead.name ? ' Am I speaking with ' + call.lead.name + '?' : '';
         const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
           + call.profile.name + '.' + who + ' Did I catch you at an okay time?';
-        return xml(res, voice.sayAndGather(opener, base + '/voice/turn'));
+        return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account)));
       }
 
       // ---- one conversational turn ----
       if (p === '/voice/turn') {
         const call = voice.getCall(sid);
-        if (!call) return xml(res, voice.sayAndHangup('Sorry, this call timed out. Goodbye.'));
+        if (!call) return xml(res, voice.sayAndHangup("Sorry, we got cut off there. Give us a call back?", call && call.account ? voice.voiceFor(call.account) : undefined));
         const heard = (params.SpeechResult || '').trim();
 
         if (!heard) {
           call.silence = (call.silence || 0) + 1;
           if (call.silence >= 2) {
             db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'no-response', transcript: call.turns });
-            return xml(res, voice.sayAndHangup('I could not hear anything, so I will let you go. Call back anytime. Goodbye.'));
+            return xml(res, voice.sayAndHangup("I can't hear anything, so I'll let you go. Call back anytime.", call && call.account ? voice.voiceFor(call.account) : undefined));
           }
-          return xml(res, voice.sayAndGather('Sorry, I did not catch that. Could you say it again?', base + '/voice/turn'));
+          return xml(res, voice.sayAndGather("Sorry, you cut out - say that again?", base + '/voice/turn', voice.voiceFor(call.account)));
         }
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
@@ -481,11 +481,11 @@ const server = http.createServer(async (req, res) => {
         if (elapsedSec > voice.MAX_CALL_SECONDS) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'time-limit', transcript: call.turns,
             durationSec: elapsedSec, estCost: voice.estimateCost({ durationSec: elapsedSec, turns: call.turns.length }) });
-          return xml(res, voice.sayAndHangup('I need to wrap up here, but someone from the team will follow up with you. Thanks, and goodbye.'));
+          return xml(res, voice.sayAndHangup("I've got to wrap up, but someone'll follow up with you. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
         if (call.turns.length > voice.MAX_TURNS) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'max-length', transcript: call.turns });
-          return xml(res, voice.sayAndHangup('I have taken enough of your time. Someone from the team will follow up. Goodbye.'));
+          return xml(res, voice.sayAndHangup("I've taken enough of your time - someone'll follow up. Thanks.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
 
         let out;
@@ -493,7 +493,7 @@ const server = http.createServer(async (req, res) => {
         catch (e) {
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'AI error mid-call: ' + e.message });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ai-error', transcript: call.turns });
-          return xml(res, voice.sayAndHangup('I am having a technical problem on my end. I will have someone call you back. Sorry about that, goodbye.'));
+          return xml(res, voice.sayAndHangup("Something's glitching on my end - sorry. I'll get someone to call you back.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
         call.turns.push({ who: 'agent', text: out.say });
         db.saveCall(call.accountId, { sid, transcript: call.turns });
@@ -505,14 +505,14 @@ const server = http.createServer(async (req, res) => {
           if (call.lead && call.lead.email) suppress.suppress(call.accountId, call.lead.email, 'unsubscribe', { note: 'do-not-call, by phone' });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'do-not-call', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'DO NOT CALL requested by ' + num + ' - suppressed' });
-          return xml(res, voice.sayAndHangup(out.say || 'Understood, I have removed you from our list. Goodbye.'));
+          return xml(res, voice.sayAndHangup(out.say || "Understood - you're off the list. Sorry to have bothered you.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
         if (out.action === 'transfer') {
           const to = (call.account.voice && call.account.voice.transferTo) || '';
-          if (!to) return xml(res, voice.sayAndGather('I do not have anyone free to transfer you to right now, but I can take a message. What is the best number?', base + '/voice/turn'));
+          if (!to) return xml(res, voice.sayAndGather("There's nobody free right this second, but I can take a message. What's the best number for you?", base + '/voice/turn', voice.voiceFor(call.account)));
           db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Transferring call to ' + to });
-          return xml(res, voice.sayAndDial(out.say || 'Connecting you now, one moment.', to));
+          return xml(res, voice.sayAndDial(out.say || 'One sec, putting you through.', to, null, voice.voiceFor(call.account)));
         }
         if (out.action === 'book') {
           const d = out.data || {};
@@ -525,13 +525,13 @@ const server = http.createServer(async (req, res) => {
             notes: 'PHONE ' + call.direction + ' | ' + phone + ' | wants: ' + (d.reason || 'callback') + ' | when: ' + (d.when || 'unspecified'),
           }]);
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Callback booked: ' + (d.name || 'caller') + ' (' + phone + ') - ' + (d.when || 'time TBC') });
-          return xml(res, voice.sayAndHangup(out.say || 'Perfect, I have that booked. Someone will be in touch. Goodbye.'));
+          return xml(res, voice.sayAndHangup(out.say || "Perfect, that's booked. Someone'll be in touch. Thanks!", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
         if (out.action === 'end') {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ended', transcript: call.turns });
-          return xml(res, voice.sayAndHangup(out.say));
+          return xml(res, voice.sayAndHangup(out.say, call && call.account ? voice.voiceFor(call.account) : undefined));
         }
-        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn'));
+        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account)));
       }
 
       // ---- call finished ----
@@ -542,13 +542,15 @@ const server = http.createServer(async (req, res) => {
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: call.turns.length,
-            estCost: voice.estimateCost({ durationSec: dur, turns: call.turns.length }) });
+            estCost: voice.estimateCost({ durationSec: dur, turns: call.turns.length,
+              chars: call.turns.filter((t) => t.who !== 'caller').reduce((n, t) => n + (t.text || '').length, 0),
+              tier: /Generative|Chirp3/.test(voice.voiceFor(call.account)) ? 'generative' : 'neural' }) });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
           voice.endCall(sid);
         }
         res.writeHead(204); return res.end();
       }
-      return xml(res, voice.sayAndHangup('Goodbye.'));
+      return xml(res, voice.sayAndHangup("Thanks, bye."));
     }
 
     // ---- PUBLIC one-click unsubscribe (no login; must never 404) ----
@@ -740,7 +742,7 @@ const server = http.createServer(async (req, res) => {
           // key itself is never echoed back — connected flag only
           emailData: { connected: !!account.emailApiKey, fallback: !!process.env.HUNTER_API_KEY },
           warmup: sending.warmupStatus(account.warmup),
-          voice: { ...(account.voice || {}), configured: voice.configured(),
+          voice: { ...(account.voice || {}), configured: voice.configured(), catalogue: voice.VOICES, defaultVoice: voice.DEFAULT_VOICE,
             envNumber: process.env.TWILIO_PHONE_NUMBER || '',
             webhookBase: (process.env.PUBLIC_URL || '').replace(/\/$/, '') },
           sendDomain: dnsauth.domainOfEmail((account.smtp || {}).fromEmail || (account.smtp || {}).user || ''),
@@ -846,6 +848,7 @@ const server = http.createServer(async (req, res) => {
           transferTo: voice.toE164((f.transferTo ?? cur.transferTo ?? '')),
           voicemail: (f.voicemail ?? cur.voicemail ?? '').trim(),
           faq: (f.faq ?? cur.faq ?? '').trim(),
+          ttsVoice: (f.ttsVoice ?? cur.ttsVoice ?? voice.DEFAULT_VOICE),
           objective: (f.objective ?? cur.objective ?? '').trim(),
           qualifying: (f.qualifying ?? cur.qualifying ?? '').trim(),
           objections: (f.objections ?? cur.objections ?? '').trim(),

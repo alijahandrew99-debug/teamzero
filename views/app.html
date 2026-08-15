@@ -336,6 +336,7 @@
       <div id="vKnows" class="warnbox" style="background:#eef2f7;border-color:#c3d2e4;color:#3a5a8a"></div>
       <div class="two">
         <div class="field"><label>Agent name</label><div class="hint">It always says it's an AI — this is just the name.</div><input id="v_agentName" placeholder="Sarah"></div>
+        <div class="field"><label>Voice</label><div class="hint">Generative voices sound markedly more human but cost ~4x per character spoken (and are still Twilio beta). Neural is cheaper and rock-solid.</div><select id="v_ttsVoice"></select></div>
         <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
       </div>
       <div class="field"><label>Greeting <span class="muted">(optional)</span></label><div class="hint">Leave blank for: "Hi, this is [name], an AI assistant for [business]. How can I help you today?"</div><input id="v_greeting" placeholder=""></div>
@@ -490,6 +491,9 @@ function renderVoice(){
   if(!prof.offer)miss.push('what you sell');
   $('vKnows').innerHTML = `It answers using <b>${esc(prof.name||'your business')}</b>'s profile — what you sell, who you serve, your proof, <b>website</b> and <b>pricing</b> — plus everything you write below.`
     + (miss.length?` <b>Missing: ${miss.join(', ')}</b> — fill those in on the 🏢 Your Business tab or it will say it doesn't know.`:' All the key facts are filled in ✓');
+  const vs=$('v_ttsVoice');
+  vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}${x.tier==='generative'?'':' · cheaper'}</option>`).join('');
+  vs.value=v.ttsVoice||v.defaultVoice||'';
   const sel=$('v_profileId');
   sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
   if(v.profileId)sel.value=v.profileId;
@@ -500,7 +504,8 @@ async function saveVoice(){
     await api('/api/voice/save',{enabled:true,agentName:$('v_agentName').value,profileId:$('v_profileId').value,
       greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,number:(STATE.voice||{}).envNumber||'',
-      objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value});
+      objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
+      ttsVoice:$('v_ttsVoice').value});
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
