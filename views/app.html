@@ -507,6 +507,7 @@ async function loadCalls(){
       return `<div class="qitem"><div class="row" style="justify-content:space-between">
         <span class="to">${c.direction==='inbound'?'⬅ from '+esc(c.from||'?'):'➡ to '+esc(c.to||'?')} · ${new Date(c.at).toLocaleString()}</span>
         <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome||c.status||'')}</span></div>
+        <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${c.estCost?`<b>~$${c.estCost.toFixed(2)}</b> est. cost`:''}</div>
         ${c.booking?`<div class="okbox" style="margin:8px 0">📅 ${esc(c.booking.name||'Caller')} · ${esc(c.booking.phone||'')} · ${esc(c.booking.when||'')} — ${esc(c.booking.reason||'')}</div>`:''}
         ${t?`<div class="feed" style="max-height:180px;margin-top:8px">${t}</div>`:''}</div>`;
     }).join(''):'<div class="empty">No calls yet. Point Twilio at the webhook above, then call your number.</div>';

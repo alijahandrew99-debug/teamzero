@@ -477,6 +477,12 @@ const server = http.createServer(async (req, res) => {
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
 
+        const elapsedSec = Math.round((Date.now() - call.startedAt) / 1000);
+        if (elapsedSec > voice.MAX_CALL_SECONDS) {
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'time-limit', transcript: call.turns,
+            durationSec: elapsedSec, estCost: voice.estimateCost({ durationSec: elapsedSec, turns: call.turns.length }) });
+          return xml(res, voice.sayAndHangup('I need to wrap up here, but someone from the team will follow up with you. Thanks, and goodbye.'));
+        }
         if (call.turns.length > voice.MAX_TURNS) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'max-length', transcript: call.turns });
           return xml(res, voice.sayAndHangup('I have taken enough of your time. Someone from the team will follow up. Goodbye.'));
@@ -532,8 +538,11 @@ const server = http.createServer(async (req, res) => {
       if (p === '/voice/status') {
         const call = voice.getCall(sid);
         if (call) {
+          const dur = Number(params.CallDuration || 0);
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
-            durationSec: Number(params.CallDuration || 0), transcript: call.turns });
+            durationSec: dur, transcript: call.turns,
+            turns: call.turns.length,
+            estCost: voice.estimateCost({ durationSec: dur, turns: call.turns.length }) });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
           voice.endCall(sid);
         }
