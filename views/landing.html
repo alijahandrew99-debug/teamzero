@@ -11,9 +11,15 @@
 <meta property="og:title" content="Dawnpipe — the AI that answers your phone and finds your next customer">
 <meta property="og:description" content="Every missed call is a job someone else got. Dawnpipe answers all of them, books the work, and finds you new customers. Call the AI yourself: (213) 682-2616.">
 <meta property="og:url" content="https://dawnpipe.com/">
-<meta name="twitter:card" content="summary">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Dawnpipe — the AI that answers your phone and finds your next customer">
 <meta name="twitter:description" content="It answers the phone you can't get to, books the job, and finds your next customer. Call it: (213) 682-2616.">
+<meta property="og:image" content="https://dawnpipe.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Dawnpipe - the AI that answers your phone. Call it: (213) 682-2616">
+<meta name="twitter:image" content="https://dawnpipe.com/og.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#151228">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script type="application/ld+json">
@@ -83,6 +89,12 @@
   .price li:before{content:"→ ";color:var(--red)}
   footer{padding:40px 0;border-top:2px solid var(--ink);color:var(--ink2);font-size:14px;text-align:center}
   .big-cta{text-align:center;padding:20px 0 10px}
+  .navtel{font-weight:800;white-space:nowrap}
+  @media(max-width:600px){.navtel{display:none}}
+  .gbar{margin-top:18px;background:#eaf5ee;border:1px solid #bcdcc8;color:#1f5c39;border-radius:10px;padding:14px 18px;font-size:15px;text-align:center}
+  .faq details{border:1px solid var(--line);border-radius:8px;background:var(--paper2);margin-bottom:9px;padding:0 16px}
+  .faq summary{cursor:pointer;font-weight:700;font-size:16px;padding:13px 0;list-style-position:inside}
+  .faq p{color:var(--ink2);font-size:15px;padding:0 0 14px;margin:0}
   .calldemo{display:grid;grid-template-columns:1.2fr 1fr;gap:0;border:2px solid var(--ink);border-radius:14px;overflow:hidden;background:var(--paper2)}
   @media(max-width:720px){.calldemo{grid-template-columns:1fr}}
   .cd-left{padding:30px 28px;background:#151228;color:#f4f1ea}
@@ -117,127 +129,22 @@
 <body>
 <header><div class="wrap">
   <span class="mark">Dawn<b>pipe</b></span>
-  <nav class="nav"><a href="/login">Log in</a><a class="btn red" href="/signup">Get started</a></nav>
+  <nav class="nav"><a href="tel:__DEMO_TEL__" class="navtel">__DEMO_NUM__</a><a href="/login">Log in</a><a class="btn red" href="/signup">Get started</a></nav>
 </div></header>
 
 <div class="wrap">
   <div class="hero">
-    <span class="kicker">Your overnight sales team</span>
-    <h1>A sales team that <span class="r">finds its own leads</span> while you sleep.</h1>
-    <p>Dawnpipe prospects real companies, writes personalized outreach, and lines it up for your one-tap approval. You review. It does the grind. No lists to buy, no SDR to hire, nothing to set up.</p>
-    <a class="btn red" href="/signup" style="font-size:17px;padding:13px 26px">Get started →</a> <a class="btn ghost" href="#demo" style="font-size:17px;padding:13px 26px">📞 Talk to the AI</a>
-    <div style="margin-top:12px;font-size:14px;color:var(--ink2)">Plans from __FROM_PRICE__/mo · cancel anytime.</div>
+    <span class="kicker">Built for HVAC, plumbing, roofing &amp; local service businesses</span>
+    <h1>Every call answered. <span class="r">Every job booked.</span><br>Even the ones you miss.</h1>
+    <p>Dawnpipe picks up when you're on a roof, under a sink, or asleep — books the appointment, texts the customer a confirmation, and drops it in your calendar. Between calls, it goes out and finds your next customers and writes the emails. You approve everything. Nothing to install, nobody to hire.</p>
+    <a class="btn red" href="tel:__DEMO_TEL__" style="font-size:17px;padding:13px 26px">📞 Call the AI — __DEMO_NUM__</a> <a class="btn ghost" href="#pricing" style="font-size:17px;padding:13px 26px">See pricing</a>
+    <div style="margin-top:14px;font-size:15px;color:var(--ink2)">It answers 24/7, tells you it's an AI, and can sign you up on the call.<br>Plans from __FROM_PRICE__/mo · cancel anytime · first month guaranteed.</div>
   </div>
 
-  <div class="agents">
-    <div class="agent"><b>PROSPECTOR</b><h3>Finds the leads</h3><p>Sources real companies + decision-makers that match your ICP, by live web research.</p></div>
-    <div class="agent"><b>OUTBOUND</b><h3>Writes the emails</h3><p>A personalized cold email for every lead, in your voice — into your approval queue.</p></div>
-    <div class="agent"><b>SCOUT</b><h3>Reads the market</h3><p>A weekly intel brief: who to hit this week, what to say, what to avoid.</p></div>
-    <div class="agent"><b>VOICE</b><h3>Answers &amp; calls</h3><p>Picks up every call, books the meeting, and works your list by phone. It says it's an AI, and it takes no for an answer.</p></div>
-  </div>
+  
 </div>
 
-<section><div class="wrap">
-  <h2>You approve. It does everything else.</h2>
-  <div class="steps">
-    <div class="step"><div class="n">01</div><h3>Describe your business</h3><p>One short profile: what you sell and who buys it. Two minutes.</p></div>
-    <div class="step"><div class="n">02</div><h3>Hit “Find leads”</h3><p>The team goes and finds real, fitting prospects and drafts an email to each.</p></div>
-    <div class="step"><div class="n">03</div><h3>Approve &amp; send</h3><p>Read each draft, approve the good ones, send from your own inbox. Nothing goes out without you.</p></div>
-  </div>
-</div></section>
 
-<section><div class="wrap">
-  <h2>Pricing that replaces a sales hire.</h2>
-  <p style="color:var(--ink2);margin-bottom:26px">A sales rep costs about $5,000 a month and still misses the phone. Start at $49 to see it work, or hand the whole job over.</p>
-  <div class="tiers4">
-    <div class="tier">
-      <div class="tname">Tester</div>
-      <div class="tamt">$49<span>/mo</span></div>
-      <div class="tlead">50 leads / month</div>
-      <ul>
-        <li>Real verified emails</li>
-        <li>Written for each company</li>
-        <li>Approval queue</li>
-        <li>See if it works for you</li>
-      </ul>
-      <a class="btn" href="/signup" style="display:block">Try it →</a>
-    </div>
-    <div class="tier">
-      <div class="tname">Starter</div>
-      <div class="tamt">$99<span>/mo</span></div>
-      <div class="tlead">200 leads / month</div>
-      <ul>
-        <li>Everything in Tester</li>
-        <li>Overnight auto-runs</li>
-        <li>Unlimited businesses</li>
-        <li>One person doing outbound</li>
-      </ul>
-      <a class="btn" href="/signup" style="display:block">Get started →</a>
-    </div>
-    <div class="tier">
-      <div class="tname">Growth</div>
-      <div class="tamt">$299<span>/mo</span></div>
-      <div class="tlead">750 leads / month</div>
-      <ul>
-        <li>Everything in Starter</li>
-        <li>~25 leads a day</li>
-        <li>For teams scaling outbound</li>
-        <li>Priority support</li>
-      </ul>
-      <a class="btn" href="/signup" style="display:block">Get started →</a>
-    </div>
-    <div class="tier">
-      <div class="tname">Scale</div>
-      <div class="tamt">$699<span>/mo</span></div>
-      <div class="tlead">2,000 leads / month</div>
-      <ul>
-        <li>Everything in Growth</li>
-        <li>Agency-level volume</li>
-        <li>Run many clients</li>
-        <li>Priority support</li>
-      </ul>
-      <a class="btn" href="/signup" style="display:block">Get started →</a>
-    </div>
-  </div>
-
-  <div class="complete" style="background:#1d2a20;margin-top:26px">
-    <div class="cbadge" style="background:#2f7d4f">For anyone who misses calls</div>
-    <div class="cgrid">
-      <div>
-        <div class="tname" style="color:#9fe0b8">Front Desk</div>
-        <div class="camt">$399<span>/mo</span></div>
-        <div class="cnote">Every call answered. Every job booked.</div>
-        <a class="btn red" href="/signup" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Stop missing calls →</a>
-      </div>
-      <div class="cfeat">
-        <div class="cf"><b>It picks up when you can't</b><span>on a roof, under a sink, driving between jobs, or asleep. The call gets answered, every time.</span></div>
-        <div class="cf"><b>It books the job into your calendar</b><span>takes their name and number, finds a time, texts them a confirmation, and drops the appointment straight into your phone.</span></div>
-        <div class="cf"><b>It only says what you told it to</b><span>your prices, your answers. If it doesn't know, it says so and takes a message — it never makes something up to a customer.</span></div>
-        <div class="cf"><b>400 minutes + 200 leads a month</b><span>and between calls it goes looking for new customers for you.</span></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="complete">
-    <div class="cbadge">The whole sales team</div>
-    <div class="cgrid">
-      <div>
-        <div class="tname" style="color:#f0c860">Complete</div>
-        <div class="camt">$1,499<span>/mo</span></div>
-        <div class="cnote">Everything above, plus the phone.</div>
-        <a class="btn red" href="/signup" style="margin-top:16px">Get the full team →</a>
-      </div>
-      <div class="cfeat">
-        <div class="cf"><b>2,000 leads a month</b><span>found, verified and written — same as Scale</span></div>
-        <div class="cf"><b>It answers your phone</b><span>every call picked up, day or night. It knows your business, answers questions, and books the callback instead of letting it ring out.</span></div>
-        <div class="cf"><b>It makes the calls too</b><span>works your lead list by phone, qualifies them, and hands the hot ones straight to you.</span></div>
-        <div class="cf"><b>1,000 talk-minutes</b><span>shared across answering and calling. It transfers to you the moment someone's ready to buy.</span></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="big-cta" style="margin-top:24px;color:var(--ink2);font-size:15px;text-align:center">Every email you got from us? Drafted by Dawnpipe. The voice that answered? Also Dawnpipe. That's the pitch.</div>
-</div></section>
 
 <section id="demo"><div class="wrap">
   <h2>Don't take our word for it. Talk to it.</h2>
@@ -297,7 +204,133 @@ Worth 15 minutes to see if your lines qualify?
   __DEMO_VIDEO__
 </div></section>
 
-<footer><div class="wrap">Dawnpipe — wake up to a full pipeline.<br>
-<a href="/login">Log in</a> · <a href="/signup">Get started</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></div></footer>
+<section><div class="wrap">
+  <h2>You approve. It does everything else.</h2>
+  <div class="steps">
+    <div class="step"><div class="n">01</div><h3>Describe your business</h3><p>One short profile: what you sell and who buys it. Two minutes.</p></div>
+    <div class="step"><div class="n">02</div><h3>Hit “Find leads”</h3><p>The team goes and finds real, fitting prospects and drafts an email to each.</p></div>
+    <div class="step"><div class="n">03</div><h3>Approve &amp; send</h3><p>Read each draft, approve the good ones, send from your own inbox. Nothing goes out without you.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Meet the team.</h2>
+  <div class="agents">
+    <div class="agent"><b>VOICE — the receptionist</b><h3>Answers &amp; books</h3><p>Picks up every call, answers from the facts you gave it, books the job, texts the confirmation. It says it is an AI — and it takes no for an answer.</p></div>
+    <div class="agent"><b>PROSPECTOR — the finder</b><h3>Finds the leads</h3><p>Live web research for real local companies that match the customers you want. Every email verified, or it is thrown away.</p></div>
+    <div class="agent"><b>OUTBOUND — the writer</b><h3>Writes the emails</h3><p>A personal email for every lead, in your voice — into your approval queue. Nothing sends without you.</p></div>
+    <div class="agent"><b>KEEPER — the closer</b><h3>Follows up</h3><p>Remembers every lead, comes back at day 3, 7 and 14 with a new angle each time, and stops the moment they reply or book.</p></div>
+  </div>
+</div></section>
+
+<section id="pricing"><div class="wrap">
+  <h2>Pricing you can see. Imagine that.</h2>
+  <p style="color:var(--ink2);margin-bottom:26px">Every AI receptionist company makes you “book a demo” to learn the price. Ours is right here. For scale: the best-known answering service charges about $300 a month for 30 answered calls, and a full-time hire is $5,000 and still misses the phone. Start at $49 to watch it work, or hand the whole front desk over for $399.</p>
+  <div class="complete" style="background:#1d2a20;margin-top:26px">
+    <div class="cbadge" style="background:#2f7d4f">For anyone who misses calls</div>
+    <div class="cgrid">
+      <div>
+        <div class="tname" style="color:#9fe0b8">Front Desk</div>
+        <div class="camt">$399<span>/mo</span></div>
+        <div class="cnote">Every call answered. Every job booked.</div>
+        <a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Stop missing calls →</a>
+        <div style="margin-top:12px;font-size:13.5px;color:#b9c9bd">Not sure? Call it first: <a href="tel:__DEMO_TEL__" style="color:#9fe0b8">__DEMO_NUM__</a> — you will be talking to the exact thing you are buying.</div>
+      </div>
+      <div class="cfeat">
+        <div class="cf"><b>It picks up when you can't</b><span>on a roof, under a sink, driving between jobs, or asleep. The call gets answered, every time.</span></div>
+        <div class="cf"><b>It books the job into your calendar</b><span>takes their name and number, finds a time, texts them a confirmation, and drops the appointment straight into your phone.</span></div>
+        <div class="cf"><b>It only says what you told it to</b><span>your prices, your answers. If it doesn't know, it says so and takes a message — it never makes something up to a customer.</span></div>
+        <div class="cf"><b>400 minutes + 200 leads a month</b><span>and between calls it goes looking for new customers for you.</span></div>
+      </div>
+    </div>
+  </div>
+
+  
+  <div class="tiers4" style="grid-template-columns:repeat(3,1fr)">
+    <div class="tier">
+      <div class="tname">Tester</div>
+      <div class="tamt">$49<span>/mo</span></div>
+      <div class="tlead">50 leads / month</div>
+      <ul>
+        <li>Real verified emails</li>
+        <li>Written for each company</li>
+        <li>Approval queue</li>
+        <li>See if it works for you</li>
+      </ul>
+      <a class="btn" href="/signup?tier=tester" style="display:block">Try it →</a>
+    </div>
+    <div class="tier featured">
+      <div class="tbadge">Most popular</div>
+      <div class="tname">Starter</div>
+      <div class="tamt">$99<span>/mo</span></div>
+      <div class="tlead">200 leads / month</div>
+      <ul>
+        <li>Everything in Tester</li>
+        <li>Overnight auto-runs</li>
+        <li>Unlimited businesses</li>
+        <li>One person doing outbound</li>
+      </ul>
+      <a class="btn" href="/signup?tier=starter" style="display:block">Get started →</a>
+    </div>
+    <div class="tier">
+      <div class="tname">Growth</div>
+      <div class="tamt">$299<span>/mo</span></div>
+      <div class="tlead">750 leads / month</div>
+      <ul>
+        <li>Everything in Starter</li>
+        <li>~25 leads a day</li>
+        <li>For teams scaling outbound</li>
+        <li>Priority support</li>
+      </ul>
+      <a class="btn" href="/signup?tier=growth" style="display:block">Get started →</a>
+    </div>
+    
+  </div>
+
+  <div class="complete">
+    <div class="cbadge">The whole sales team</div>
+    <div class="cgrid">
+      <div>
+        <div class="tname" style="color:#f0c860">Complete</div>
+        <div class="camt">$1,499<span>/mo</span></div>
+        <div class="cnote">Everything above, plus the phone.</div>
+        <a class="btn red" href="/signup?tier=complete" style="margin-top:16px">Get the full team →</a>
+      </div>
+      <div class="cfeat">
+        <div class="cf"><b>2,000 leads a month</b><span>found, verified and written — same as Scale</span></div>
+        <div class="cf"><b>It answers your phone</b><span>every call picked up, day or night. It knows your business, answers questions, and books the callback instead of letting it ring out.</span></div>
+        <div class="cf"><b>It makes the calls too</b><span>works your lead list by phone, qualifies them, and hands the hot ones straight to you.</span></div>
+        <div class="cf"><b>1,000 talk-minutes</b><span>shared across answering and calling. It transfers to you the moment someone's ready to buy.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="big-cta" style="margin-top:10px;color:var(--ink2);font-size:14px;text-align:center">Agency volume? <b>Scale</b> — 2,000 leads/mo for $699. <a href="/signup?tier=scale">Get started →</a></div>
+
+  <div class="gbar"><b>First month guaranteed.</b> If Dawnpipe does not answer a real call or put real leads in your queue in your first month, email us and we refund it in full. Month to month, cancel in one click, no setup fee, no contract — and no overage charges, ever.</div>
+
+  <div class="big-cta" style="margin-top:24px;color:var(--ink2);font-size:15px;text-align:center">Every email you got from us? Drafted by Dawnpipe. The voice that answered? Also Dawnpipe. That's the pitch.</div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Questions an owner actually asks.</h2>
+  <div class="faq">
+    <details><summary>Will it say something dumb to my customers?</summary><p>It can only state facts you typed in — your prices, your hours, your services. If it does not know, it says so and takes a message. It cannot invent a price, a promise, or a discount. That is enforced in the software, not in a training document.</p></details>
+    <details><summary>Does it pretend to be a person?</summary><p>No. It introduces itself as an AI assistant, and if someone asks, it says so plainly. Callers stay because it is useful, not because it fooled them.</p></details>
+    <details><summary>What happens when I run out of minutes or leads?</summary><p>It stops. No overage charges, ever. Minutes and leads reset every month.</p></details>
+    <details><summary>Where do the leads come from? Is this a bought list?</summary><p>No list. It researches the web live for companies matching the customers you want, finds the decision-maker, and verifies the email against a live database. If the address cannot be verified, the lead is thrown away instead of saved.</p></details>
+    <details><summary>Will it spam people on my behalf?</summary><p>Nothing sends without your approval. Every email carries your real business address and a working unsubscribe link, follow-ups stop the moment someone replies, and anyone who opts out is never contacted again — by email or phone.</p></details>
+    <details><summary>What do I need to set it up?</summary><p>Your website address and about two minutes. Paste your site, the AI reads it and fills in your business profile, you review it, done.</p></details>
+    <details><summary>Is it a contract?</summary><p>Month to month. Cancel in one click from your billing page. And your first month is guaranteed — if it does not do what this page says, email us and we refund it.</p></details>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <b>Dawnpipe</b> — wake up to a full pipeline.<br>
+  Built and run by Alijah Skinner · Illinois, USA<br>
+  Questions? Email <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a> or call <a href="tel:__DEMO_TEL__">__DEMO_NUM__</a> — yes, the AI answers.<br>
+  <a href="/login">Log in</a> · <a href="/signup">Get started</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a><br>
+  <span style="font-size:12px">© 2026 Dawnpipe · Payments processed by Stripe · Every email verified before it is saved</span>
+</div></footer>
 </body>
 </html>

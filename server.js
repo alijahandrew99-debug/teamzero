@@ -123,6 +123,16 @@ const LEGAL_TERMS = `
 <p>These terms govern your use of Dawnpipe ("the Service"). By creating an account you agree to them.</p>
 <h2>What the Service does</h2>
 <p>Dawnpipe researches publicly available information to identify potential business contacts, and drafts outreach emails for your review. Drafts are not sent without your approval.</p>
+<h2>Phone agent (Front Desk and Complete plans)</h2>
+<ul>
+<li>Some plans include an AI phone agent that answers calls to your Dawnpipe number and, if you enable it, places outbound calls to your leads.</li>
+<li>The agent identifies itself as an AI and states only business facts you provide. It is instructed never to invent prices or commitments, but AI output can contain errors; confirm anything that matters before relying on it.</li>
+<li>Calls handled by the agent are transcribed to text and stored in your account so you can review what was said.</li>
+<li>Outbound calling runs at your instruction and you are responsible for it: you must comply with the TCPA, national and state Do-Not-Call rules, and state call-consent laws, and only call numbers you may lawfully call. Numbers that ask not to be contacted are suppressed and will not be dialled again.</li>
+<li>Plan minutes are talk time on calls the agent answers or places, rounded up to the next whole minute per call.</li>
+</ul>
+<h2>Text messages</h2>
+<p>When the agent books an appointment it sends the caller one SMS confirmation, which includes "Reply STOP to opt out." We do not send marketing texts. Message and data rates may apply.</p>
 <h2>Your responsibilities</h2>
 <ul>
 <li>You are the sender of any message you approve. You are responsible for its content and for complying with anti-spam law (including CAN-SPAM and, where applicable, GDPR/PECR).</li>
@@ -135,6 +145,8 @@ const LEGAL_TERMS = `
 <h2>Subscription and billing</h2>
 <ul>
 <li>Paid plans are billed monthly in advance via Stripe.</li>
+<li><b>First-month guarantee:</b> if the Service does not perform as described within 30 days of your first payment, email us and we will refund that month in full.</li>
+<li>Plan allowances (leads and phone minutes) are hard caps: when used up, the Service pauses until the monthly reset. There are no overage charges and allowances do not roll over.</li>
 <li>Plans include a monthly usage allowance. We may apply fair-use limits to protect the Service.</li>
 <li>You can cancel at any time; access continues to the end of the paid period. We do not provide pro-rata refunds for partial months except where required by law.</li>
 </ul>
@@ -145,7 +157,7 @@ const LEGAL_TERMS = `
 <h2>Changes</h2>
 <p>We may update these terms; material changes will be notified by email. Continued use constitutes acceptance.</p>
 <h2>Contact</h2>
-<p>Questions: <a href="mailto:btk18000@gmail.com">btk18000@gmail.com</a></p>
+<p>Questions: <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a></p>
 `;
 const LEGAL_PRIVACY = `
 <h1>Privacy Policy</h1><div class="updated">${LEGAL_UPDATED}</div>
@@ -157,6 +169,8 @@ const LEGAL_PRIVACY = `
 <li><b>Lead data:</b> business contact information gathered from publicly available web sources.</li>
 <li><b>Mailbox credentials:</b> if you connect a mailbox to send email, those credentials are stored on the server to send on your behalf. They are never displayed back to you or shared.</li>
 <li><b>Payment data:</b> handled entirely by Stripe. We never see or store your card details.</li>
+<li><b>Call and appointment data:</b> when the AI phone agent handles a call, we store a text transcript, the caller's number, and details they give the agent (name, company, reason, appointment time) so you can review and act on them.</li>
+<li><b>SMS records:</b> the appointment confirmations we send and any STOP opt-outs.</li>
 </ul>
 <h2>How we use it</h2>
 <p>Solely to operate the Service: researching leads, drafting emails, sending messages you approve, and billing. We do not sell your data or share it for advertising.</p>
@@ -169,7 +183,7 @@ const LEGAL_PRIVACY = `
 <h2>Security</h2>
 <p>Passwords are hashed (scrypt). Traffic is served over HTTPS. No system is perfectly secure; use a unique password and an app-specific password for any connected mailbox.</p>
 <h2>Contact</h2>
-<p>Privacy questions or deletion requests: <a href="mailto:btk18000@gmail.com">btk18000@gmail.com</a></p>
+<p>Privacy questions or deletion requests: <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a></p>
 `;
 
 // ---- background jobs ----
@@ -497,9 +511,26 @@ const server = http.createServer(async (req, res) => {
     // ---------- health ----------
     // Static favicon (search results and link previews can't run the animated
     // JS one). Same night scene, one frame.
+    // One canonical host: GETs on the old onrender hostname 301 to dawnpipe.com.
+    // POST paths (Stripe webhook, Twilio voice) deliberately untouched so nothing
+    // breaks while their consoles still point at the old URL.
+    {
+      const hostHdr = String(req.headers.host || '').toLowerCase();
+      if (req.method === 'GET' && hostHdr.includes('onrender.com')
+          && !p.startsWith('/webhook') && !p.startsWith('/voice') && !p.startsWith('/api')) {
+        return redirect(res, 'https://dawnpipe.com' + (req.url || p));
+      }
+    }
     if (req.method === 'GET' && p === '/favicon.svg') {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
       return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="13" fill="#151228"/><circle cx="46" cy="17" r="10" fill="#f0c860"/><circle cx="41.5" cy="14" r="9.5" fill="#151228"/><rect x="6" y="42" width="52" height="17" rx="5" fill="#2a2547"/><rect x="9" y="40" width="15" height="10" rx="4" fill="#f4f1ea"/><circle cx="21" cy="44" r="6.2" fill="#e8b48f"/><rect x="26" y="43" width="31" height="13" rx="5" fill="#6b5ea8"/><g transform="rotate(12 45 34)"><rect x="37.5" y="28.5" width="15" height="11" rx="3.5" fill="#c02a1b"/><rect x="39.5" y="30.5" width="11" height="7" rx="2" fill="#ffe9a8"/></g></svg>`);
+    }
+    if (req.method === 'GET' && (p === '/og.png' || p === '/apple-touch-icon.png')) {
+      try {
+        const img = fs.readFileSync(path.join(VIEWS, p === '/og.png' ? 'og.png' : 'apple-touch-icon.png'));
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=604800' });
+        return res.end(img);
+      } catch { res.writeHead(404); return res.end(); }
     }
     if (req.method === 'GET' && p === '/robots.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -557,7 +588,7 @@ const server = http.createServer(async (req, res) => {
         const agentName = vcfg.agentName || 'Sarah';
         // Transparency is mandatory: the caller is told it is an AI up front.
         const greeting = vcfg.greeting
-          || ('Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. How can I help you today?');
+          || ('Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + " — quick heads up, this call may be transcribed. What can I do for you?");
         // Does this caller already exist as a lead? If so the AI opens the call
         // knowing what we emailed them and where they stand — the thing no
         // email tool and no answering service can do.
@@ -744,6 +775,11 @@ const server = http.createServer(async (req, res) => {
       return xml(res, voice.sayAndHangup("Thanks, bye."));
     }
 
+    // Mail scanners and uptime monitors probe with HEAD; Node suppresses the
+    // body automatically, so treating it as GET is safe and stops the homepage
+    // "redirecting to /login" in link-checker eyes.
+    if (req.method === 'HEAD') req.method = 'GET';
+
     // ---- PUBLIC one-click unsubscribe (no login; must never 404) ----
     // Gmail/Yahoo send an automated POST here (List-Unsubscribe-Post). Humans
     // arrive by GET from the footer link. Both suppress immediately.
@@ -802,7 +838,10 @@ const server = http.createServer(async (req, res) => {
       return html(res, view('legal.html').replace('__TITLE__', isTerms ? 'Terms of Service' : 'Privacy Policy').replace('__BODY__', body));
     }
 
-    if (req.method === 'GET' && p === '/signup') return html(res, view('signup.html'));
+    if (req.method === 'GET' && p === '/signup') {
+      const t = (url.searchParams.get('tier') || '').toLowerCase();
+      return html(res, view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : ''));
+    }
     if (req.method === 'GET' && p === '/login') return html(res, view('login.html'));
 
     // ---- password reset ----
@@ -861,6 +900,12 @@ const server = http.createServer(async (req, res) => {
       seedStarterProfile(acc.id, email);
       db.logActivity(acc.id, { agent: 'SYSTEM', msg: 'Account created' });
       const token = db.createSession(acc.id);
+      // Came from a pricing card? Skip the re-decision and go straight to the
+      // plan they already chose. Every extra decision point loses buyers.
+      const wantTier = String(f.tier || '').toLowerCase();
+      if (/^[a-z]+$/.test(wantTier) && plans.TIERS[wantTier]) {
+        return redirect(res, '/checkout?tier=' + wantTier, auth.sessionCookie(token));
+      }
       return redirect(res, '/app', auth.sessionCookie(token));
     }
     if (req.method === 'POST' && p === '/login') {
@@ -929,8 +974,17 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/api/')) {
       // Read-only endpoints stay open so a locked user can still see their work
       // (and be sold to). Only actions that cost money are gated.
-      const READ_ONLY = ['/api/state', '/api/prospect/status', '/api/send/status'];
-      if (!stripe.hasAccess(account) && !READ_ONLY.includes(p)) {
+      // Setup is free — the paywall guards AI SPEND, not the door. A locked user
+      // can build their whole profile (sunk effort converts); only finding
+      // leads, drafting and sending cost money.
+      const READ_ONLY = ['/api/state', '/api/prospect/status', '/api/send/status',
+        '/api/profile/save', '/api/profile/delete', '/api/pipeline'];
+      // A locked account gets 2 free website-autofills so the in-person demo
+      // ("watch it read YOUR site") works before any card.
+      const freeAutofill = p === '/api/profile/autofill' && !stripe.hasAccess(account)
+        && Number(account.autofillsUsed || 0) < 2;
+      if (freeAutofill) db.updateAccount(account.id, { autofillsUsed: Number(account.autofillsUsed || 0) + 1 });
+      if (!stripe.hasAccess(account) && !READ_ONLY.includes(p) && !freeAutofill) {
         const u = plans.usage(account, stripe.isOwner(account));
         return json(res, {
           error: u.isPro

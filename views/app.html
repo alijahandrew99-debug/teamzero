@@ -32,7 +32,7 @@
   .appt.past .apwhen{color:var(--ink2)}
   .apwho{font-size:14px}
   .apgroup{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink2);margin-top:10px}
-  .tiergrid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .tiergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   @media(max-width:900px){.tiergrid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:520px){.tiergrid{grid-template-columns:1fr}}
   .tcard{border:1px solid var(--line);border-radius:10px;padding:18px;background:#fff;text-align:center}
@@ -121,7 +121,7 @@
 
 <div class="wrap">
   <div class="lockbar" id="lockbar" style="display:none">
-    <span id="lockmsg">⚑ <b>Pick a plan to turn your sales team on.</b> It starts finding leads and writing outreach the moment you do.</span>
+    <span id="lockmsg">⚑ <b>Set up your business below — that part is free.</b> Pick a plan when you are ready to hit "Find leads."</span>
     <button class="red" onclick="showUpgrade()">Choose a plan →</button>
   </div>
   <div class="trialbar" id="trialbar" style="display:none">
@@ -422,6 +422,18 @@ async function api(path,data){
   const j=await r.json().catch(()=>({}));
   if(!r.ok){if(j.locked)$('lockbar').style.display='';throw new Error(j.error||'error');}
   return j;
+}
+let _coTries=0;
+function checkoutReturn(){
+  if(new URLSearchParams(location.search).get('checkout')!=='success')return;
+  history.replaceState(null,'','/app');
+  toast('Payment received — switching your team on…');
+  const t=setInterval(async()=>{
+    try{const st=await api('/api/state');
+      if(!st.locked){clearInterval(t);await load();toast('You are live — '+(st.usage&&st.usage.limit)+' leads a month. Step 1: tell us about your business ↓');return;}
+    }catch(e){}
+    if(++_coTries>20)clearInterval(t);
+  },2000);
 }
 async function load(){
   STATE=await api('/api/state');
@@ -734,11 +746,13 @@ async function saveWarmup(){
 }
 function showUpgrade(){
   const tiers=STATE.tiers||[];const cur=(STATE.usage||{}).tier;
-  $('tierCards').innerHTML=tiers.map(t=>`
+  const routing='<div class="muted" style="margin-bottom:10px;grid-column:1/-1"><b>Missing calls?</b> Front Desk answers your phone and books jobs. <b>Just want leads?</b> Tester is $49 to see it work.</div>';
+  $('tierCards').innerHTML=routing+tiers.map(t=>`
     <div class="tcard ${t.id==='complete'?'hot':''}">
       <div class="tn">${esc(t.name)}</div>
       <div class="tp">$${t.price}<span>/mo</span></div>
       <div class="tl">${t.leads.toLocaleString()} leads / mo${t.voiceMinutes?`<br>+ ${t.voiceMinutes.toLocaleString()} phone min`:''}</div>
+      <div class="muted" style="font-size:12.5px;margin:4px 0 8px">${esc(t.blurb||'')}</div>
       ${cur===t.id?'<button class="sm ghost" disabled>Current plan</button>'
         : (STATE.usage&&STATE.usage.isPro)
           ? `<button class="red sm" onclick="location.href='/billing'">Switch to ${esc(t.name)} →</button>`
@@ -942,6 +956,7 @@ async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'
 function copyBody(id){const q=STATE.queue.find(x=>x.id===id);if(!q)return;navigator.clipboard.writeText(`Subject: ${q.subject}\n\n${q.body}`);toast('Copied');}
 $('profileSel').addEventListener('change',()=>{clearDirty();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
 load().then(()=>{ if(isStarter(curProfile()))showTab('business'); });
+checkoutReturn();
 setInterval(()=>{load().catch(()=>{});},20000); // background poll: stay quiet on blips
 </script>
 </body></html>
