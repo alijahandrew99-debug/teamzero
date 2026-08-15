@@ -246,6 +246,13 @@ const sendJobs = new Map();
 const activeSends = new Map();
 function startSendJob(account, profileId) {
   const running = activeSends.get(account.id);
+  const runningJob = running && sendJobs.get(running);
+  // A lock pointing at a job that is gone or finished is stale — clear it.
+  if (running && (!runningJob || runningJob.status !== 'running')) activeSends.delete(account.id);
+  // Also treat a job with no progress for 10 minutes as dead rather than live.
+  if (runningJob && runningJob.status === 'running' && Date.now() - (runningJob.startedAt || 0) > 30 * 60 * 1000) {
+    runningJob.status = 'error'; runningJob.error = 'Timed out'; activeSends.delete(account.id);
+  }
   if (running && sendJobs.get(running) && sendJobs.get(running).status === 'running') {
     const e = new Error('A send is already running for this account.');
     e.alreadyRunning = running;
@@ -327,8 +334,13 @@ function startSendJob(account, profileId) {
           // Live unsubscribe link + CAN-SPAM footer, stamped at send time.
           const unsubUrl = base ? `${base}/u/${suppress.tokenFor(account.id, it.to)}` : '';
           const body = agents.stampFooter(it.body, prof, unsubUrl);
-          await smtp.sendMail({ ...cfg, fromName: cfg.fromName || '' },
-            { to: it.to, subject: it.subject, body, unsubscribeUrl: unsubUrl });
+          // Hard deadline as a backstop: even if the SMTP client ever fails to
+          // settle again, the loop keeps moving instead of wedging the account.
+          await Promise.race([
+            smtp.sendMail({ ...cfg, fromName: cfg.fromName || '' },
+              { to: it.to, subject: it.subject, body, unsubscribeUrl: unsubUrl }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('Send timed out after 90s')), 90000)),
+          ]);
           db.updateQueueItem(account.id, it.id, { status: 'sent', sentAt: db.nowISO() });
           if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'sent' });
           // Immutable audit trail: who was emailed, when, with what, approved by whom.
@@ -373,6 +385,8 @@ function startSendJob(account, profileId) {
       job.status = 'error'; job.error = e.message;
     }
     job.finishedAt = Date.now();
+    // Released here unconditionally — a stuck job must never lock the account
+    // out of sending forever.
     if (activeSends.get(account.id) === id) activeSends.delete(account.id);
     setTimeout(() => sendJobs.delete(id), 10 * 60 * 1000);
   })();
