@@ -833,7 +833,7 @@ const server = http.createServer(async (req, res) => {
           profileId: f.profileId || cur.profileId || '',
           agentName: (f.agentName ?? cur.agentName ?? 'Sarah').trim(),
           greeting: (f.greeting ?? cur.greeting ?? '').trim(),
-          transferTo: (f.transferTo ?? cur.transferTo ?? '').trim(),
+          transferTo: voice.toE164((f.transferTo ?? cur.transferTo ?? '')),
           voicemail: (f.voicemail ?? cur.voicemail ?? '').trim(),
           faq: (f.faq ?? cur.faq ?? '').trim(),
           hours: (f.hours ?? cur.hours ?? '').trim(),
