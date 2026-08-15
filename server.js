@@ -490,11 +490,14 @@ const server = http.createServer(async (req, res) => {
         if (elapsedSec > voice.MAX_CALL_SECONDS) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'time-limit', transcript: call.turns,
             durationSec: elapsedSec, estCost: voice.estimateCost({ durationSec: elapsedSec, turns: call.turns.length }) });
-          return xml(res, voice.sayAndHangup("I've got to wrap up, but someone'll follow up with you. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
+          return xml(res, voice.sayAndHangup("I've got to run, but someone will follow up with you. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
-        if (call.turns.length > voice.MAX_TURNS) {
+        // Count the caller's turns, not every utterance — an exchange is a
+        // pair, and our own opener is in here too.
+        const exchanges = call.turns.filter((t) => t.who === 'caller').length;
+        if (exchanges > voice.MAX_EXCHANGES) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'max-length', transcript: call.turns });
-          return xml(res, voice.sayAndHangup("I've taken enough of your time - someone'll follow up. Thanks.", call && call.account ? voice.voiceFor(call.account) : undefined));
+          return xml(res, voice.sayAndHangup("Listen, I don't want to keep you all day - let me get someone to follow up properly. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
 
         let out;
