@@ -434,8 +434,11 @@ const server = http.createServer(async (req, res) => {
         // Transparency is mandatory: the caller is told it is an AI up front.
         const greeting = vcfg.greeting
           || ('Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. How can I help you today?');
-        voice.startCall(sid, { accountId: account.id, account, profile, direction: 'inbound',
+        const inCall = voice.startCall(sid, { accountId: account.id, account, profile, direction: 'inbound',
           from: params.From || '', to: params.To || '' });
+        // Record what we just said. Without this the model can't see its own
+        // opener and asks the same question again on the next turn.
+        inCall.turns.push({ who: 'agent', text: greeting });
         db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
           profileId: profile.id, status: 'in-progress', transcript: [] });
         db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown') });
@@ -457,6 +460,7 @@ const server = http.createServer(async (req, res) => {
         const who = call.lead && call.lead.name ? ' Am I speaking with ' + call.lead.name + '?' : '';
         const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
           + call.profile.name + '.' + who + ' Did I catch you at an okay time?';
+        call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
         return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account)));
       }
 
