@@ -16,6 +16,7 @@ const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
 const voice = require('./lib/voice');
 const notify = require('./lib/notify');
+const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
@@ -356,7 +357,15 @@ function startSendJob(account, profileId) {
             new Promise((_, rej) => setTimeout(() => rej(new Error('Send timed out after 90s')), 90000)),
           ]);
           db.updateQueueItem(account.id, it.id, { status: 'sent', sentAt: db.nowISO() });
-          if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'sent' });
+          if (it.leadId) {
+            db.updateLead(account.id, it.leadId, { status: 'sent' });
+            // Remember it, advance the stage, and schedule the next touch.
+            const sentLead = db.getLeads(account.id, profileId).find((l) => l.id === it.leadId);
+            if (sentLead) memory.remember(account.id, sentLead, {
+              kind: 'email-sent', channel: 'email',
+              summary: `touch #${it.touch || 1}: ${String(it.subject || '').slice(0, 60)}`,
+            });
+          }
           // Immutable audit trail: who was emailed, when, with what, approved by whom.
           db.logSend(account.id, { profileId, leadId: it.leadId || null, to: it.to, toName: it.toName || '',
             company: it.company || '', subject: it.subject || '', body, approvedBy: account.email,
@@ -468,6 +477,11 @@ function checkSchedules() {
       count = Math.min(count, u.remaining);   // never overspend the allowance
     }
     db.logActivity(p.accountId, { agent: 'NIGHT SHIFT', profileId: p.id, msg: `Scheduled run started — sourcing ${count} leads` });
+    // Follow-ups first: a lead already in the pipeline is worth more than a new
+    // one, and this is the half a normal tool never does.
+    agents.keeperRun(p.accountId, p.id)
+      .then((r) => { if (r.drafted) db.logActivity(p.accountId, { agent: 'KEEPER', profileId: p.id, msg: `${r.drafted} follow-up(s) drafted overnight` }); })
+      .catch((e) => db.logActivity(p.accountId, { agent: 'KEEPER', profileId: p.id, msg: `Follow-ups failed: ${e.message}` }));
     startProspectJob(p.accountId, p.id, { count, hints: s.hints || '', thenDraft: true, notify: true });
   }
 }
@@ -520,8 +534,14 @@ const server = http.createServer(async (req, res) => {
         // Transparency is mandatory: the caller is told it is an AI up front.
         const greeting = vcfg.greeting
           || ('Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. How can I help you today?');
+        // Does this caller already exist as a lead? If so the AI opens the call
+        // knowing what we emailed them and where they stand — the thing no
+        // email tool and no answering service can do.
+        const knownLead = db.getLeads(account.id, profile.id)
+          .find((l) => suppress.phoneKey(l.phone || '') && suppress.phoneKey(l.phone) === suppress.phoneKey(params.From || ''));
         const inCall = voice.startCall(sid, { accountId: account.id, account, profile, direction: 'inbound',
-          from: params.From || '', to: params.To || '' });
+          from: params.From || '', to: params.To || '', lead: knownLead || null,
+          leadBrief: knownLead ? memory.briefFor(knownLead) : '' });
         // Record what we just said. Without this the model can't see its own
         // opener and asks the same question again on the next turn.
         inCall.turns.push({ who: 'agent', text: greeting });
@@ -568,6 +588,11 @@ const server = http.createServer(async (req, res) => {
         }
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
+        // They engaged. That outranks anything a drip campaign can tell us.
+        if (!call.markedWarm && call.lead) {
+          call.markedWarm = true;
+          try { memory.remember(call.accountId, call.lead, { kind: 'call-answered', channel: 'phone', summary: 'spoke with them on the phone' }); } catch {}
+        }
 
         const elapsedSec = Math.round((Date.now() - call.startedAt) / 1000);
         if (elapsedSec > voice.MAX_CALL_SECONDS) {
@@ -596,6 +621,7 @@ const server = http.createServer(async (req, res) => {
         if (out.action === 'dnc') {
           const num = call.direction === 'inbound' ? params.From : call.to;
           suppress.suppressPhone(call.accountId, num, 'unsubscribe', { note: 'do-not-call, asked on a call' });
+          if (call.lead) { try { memory.remember(call.accountId, call.lead, { kind: 'note', channel: 'phone', stage: 'dnc', summary: 'asked not to be contacted' }); } catch {} }
           if (call.lead && call.lead.email) suppress.suppress(call.accountId, call.lead.email, 'unsubscribe', { note: 'do-not-call, by phone' });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'do-not-call', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'DO NOT CALL requested by ' + num + ' - suppressed' });
@@ -627,6 +653,15 @@ const server = http.createServer(async (req, res) => {
             emailConfidence: 'imported', emailSource: 'phone call',
             notes: 'PHONE ' + call.direction + ' | ' + phone + ' | wants: ' + (d.reason || 'callback') + ' | when: ' + (d.when || 'unspecified'),
           }]);
+          if (call.lead) {
+            try {
+              memory.remember(call.accountId, call.lead, {
+                kind: 'call-booked', channel: 'phone', stage: 'hot',
+                summary: `booked ${d.whenISO || d.when || 'a callback'}`,
+                facts: [d.reason ? `Wants: ${d.reason}` : '', d.company ? `Company: ${d.company}` : ''].filter(Boolean),
+              });
+            } catch {}
+          }
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Appointment booked: ' + (d.name || 'caller') + ' (' + phone + ') - ' + (d.whenISO || d.when || 'time TBC') });
           // Close the loop OUT of the server: text the caller, and put a calendar
           // invite in the owner's inbox. Fire-and-forget so a failed text can
@@ -1198,6 +1233,31 @@ const server = http.createServer(async (req, res) => {
         db.logActivity(acc, { agent: 'SYSTEM', profileId: f.profileId, msg: `Cleared ${n} ${mode === 'guesses' ? 'unverified' : ''} lead(s)` });
         return json(res, { removed: n });
       }
+      // Draft every follow-up that's due today.
+      if (p === '/api/keeper/run' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        return json(res, await agents.keeperRun(acc, f.profileId));
+      }
+      // Where every lead stands, and how many are due a touch.
+      if (p === '/api/pipeline' && req.method === 'GET') {
+        const pid = url.searchParams.get('profileId') || '';
+        return json(res, { pipeline: memory.pipeline(acc, pid), stages: memory.STAGES, cadence: memory.CADENCE });
+      }
+      // Manual stage change — the human always outranks the machine.
+      if (p === '/api/lead/stage' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const lead = db.getLeads(acc).find((l) => l.id === f.id);
+        if (!lead) return json(res, { error: 'Lead not found' }, 404);
+        const stage = memory.STAGES[f.stage] ? f.stage : null;
+        if (!stage) return json(res, { error: 'Unknown stage' }, 400);
+        const kind = f.stage === 'customer' ? 'note' : (f.replied ? 'email-replied' : 'note');
+        memory.remember(acc, lead, { kind, summary: f.note || `marked ${memory.STAGES[stage].label}`, stage,
+          facts: f.note ? [f.note] : [] });
+        if (stage === 'dnc') suppress.suppress(acc, lead.email, 'manual', { note: 'marked do-not-contact' });
+        db.logActivity(acc, { agent: 'OPERATOR', msg: `${lead.name || lead.email} → ${memory.STAGES[stage].label}` });
+        return json(res, { ok: true });
+      }
+
       if (p === '/api/outbound/run' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
         return json(res, await agents.outboundRun(acc, f.profileId));

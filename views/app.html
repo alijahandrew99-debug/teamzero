@@ -19,6 +19,12 @@
   .lockbar b{color:#fff}.lockbar button{margin-left:auto}
   .trialbar{background:#fff7e6;border:1px solid #e8d3a8;color:#7a5310;border-radius:8px;padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;font-size:14px}
   .trialbar b{color:#5c3f0c}
+  .pipe{display:flex;gap:0;border-bottom:1px solid var(--line);background:#fff}
+  .pcell{flex:1;text-align:center;padding:9px 4px;border-right:1px solid var(--line)}
+  .pcell:last-child{border-right:0}
+  .pcell b{display:block;font-size:19px;font-weight:800}
+  .pcell span{font-size:10.5px;color:var(--ink2);text-transform:uppercase;letter-spacing:.5px}
+  .pcell.due b{color:var(--red)}
   .appt{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:center;border-top:1px dashed var(--line);padding:10px 0}
   @media(max-width:640px){.appt{grid-template-columns:1fr;gap:4px}}
   .appt.past{opacity:.55}
@@ -276,6 +282,7 @@
         <div class="row" style="margin-top:10px">
           <button onclick="runProspect(false)" id="prospBtn">🎯 Find leads</button>
           <button class="ok" onclick="runProspect(true)" id="prospDraftBtn">🎯→✉ Find leads + draft emails</button>
+          <button onclick="runKeeper()" id="keeperBtn" title="Draft the next touch for every lead that's due">🔁 Draft follow-ups</button>
           <button class="sm ghost" onclick="runOutbound()" id="runBtn">Draft all new</button>
         </div>
       </div>
@@ -305,6 +312,7 @@
       </div>
       <div>
         <div class="card">
+          <div id="pipeStrip" class="pipe"></div>
           <h2><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span>
             <span style="margin-left:auto;display:flex;gap:6px">
               <button class="sm ghost" onclick="clearLeads('guesses')" title="Delete leads without a real email, keep the sendable ones">Clear guesses</button>
@@ -446,7 +454,26 @@ function render(){
   $('leads').innerHTML=leads.length?leads.map(l=>{
     const c=l.emailConfidence||'';
     const label={verified:'real email',role:'company inbox',site:'site email',imported:'your import',pattern:'GUESS',invalid:'no valid email'}[c]||'';
-    return `<div class="lead"><div class="row" style="justify-content:space-between"><div><b>${esc(l.name||'(no name)')}</b> ${l.title?'· '+esc(l.title):''} ${l.company?'· '+esc(l.company):''}<div class="muted">${esc(l.email||'no email')} ${label?`<span class="pill ${c}" title="${esc(l.emailSource||'')}">${label}</span>`:''}</div></div><span class="pill ${l.status}">${l.status}</span></div></div>`;
+    const ST={new:['Not contacted','new'],contacted:['Contacted','drafted'],warm:['Warm','drafted'],hot:['🔥 Hot','approved'],customer:['✓ Customer','approved'],lost:['Not interested','sent'],dnc:['Do not contact','invalid']};
+    const st=ST[l.stage||'new']||ST.new;
+    const touches=Number(l.touchCount||0);
+    const due=l.nextTouchAt&&new Date(l.nextTouchAt)<=new Date();
+    const mem=(l.memory||[]).slice(-2);
+    return `<div class="lead"><div class="row" style="justify-content:space-between">
+      <div><b>${esc(l.name||'(no name)')}</b> ${l.title?'· '+esc(l.title):''} ${l.company?'· '+esc(l.company):''}
+        <div class="muted">${esc(l.email||'no email')} ${label?`<span class="pill ${c}" title="${esc(l.emailSource||'')}">${label}</span>`:''}</div>
+        ${mem.length?`<div class="muted" style="font-style:italic">remembers: ${mem.map(x=>esc(x)).join(' · ')}</div>`:''}
+      </div>
+      <div style="text-align:right">
+        <span class="pill ${st[1]}">${st[0]}</span>
+        <div class="muted" style="font-size:11px;margin-top:3px">${touches?`${touches} touch${touches>1?'es':''}`:'no contact yet'}${due?' · <b style="color:var(--red)">due</b>':''}</div>
+      </div></div>
+      <div class="row" style="margin-top:5px;gap:4px">
+        <button class="sm ghost" onclick="setStage('${l.id}','warm')" title="They replied or showed interest">Warm</button>
+        <button class="sm ghost" onclick="setStage('${l.id}','hot')" title="Ready to buy">Hot</button>
+        <button class="sm ghost" onclick="setStage('${l.id}','customer')" title="They bought - stops all follow-ups">Won</button>
+        <button class="sm ghost" onclick="setStage('${l.id}','lost')" title="Not interested - stops follow-ups">Not interested</button>
+      </div></div>`;
   }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
   $('qcount').textContent=`· ${queue.length} pending`;
   $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">Nothing pending. Find leads, then draft.</div>';
@@ -598,6 +625,30 @@ async function loadCalls(){
         ${t?`<div class="feed" style="max-height:180px;margin-top:8px">${t}</div>`:''}</div>`;
     }).join(''):'<div class="empty">No calls yet. Point Twilio at the webhook above, then call your number.</div>';
   }catch(e){$('vCalls').innerHTML=`<div class="muted">${esc(e.message)}</div>`;}
+}
+// ---- pipeline + lead stages ----
+async function loadPipeline(){
+  try{
+    const r=await fetch('/api/pipeline?profileId='+encodeURIComponent(pid()||''));
+    const d=await r.json(); const pl=d.pipeline||{};
+    const cell=(k,label)=>`<div class="pcell"><b>${pl[k]||0}</b><span>${label}</span></div>`;
+    $('pipeStrip').innerHTML=
+      cell('new','not contacted')+cell('contacted','contacted')+cell('warm','warm')+
+      cell('hot','hot')+cell('customer','customers')+
+      `<div class="pcell ${pl.dueNow?'due':''}"><b>${pl.dueNow||0}</b><span>due a follow-up</span></div>`;
+  }catch(e){}
+}
+async function setStage(id,stage){
+  const note=stage==='customer'?prompt('Nice. Anything worth remembering about the win?')||'':'';
+  try{await api('/api/lead/stage',{id,stage,note,replied:stage==='warm'});toast('Updated');await load();loadPipeline();}
+  catch(e){toast(e.message);}
+}
+async function runKeeper(){
+  const b=$('keeperBtn');b.disabled=true;const o=b.textContent;b.textContent='Drafting…';
+  try{const r=await api('/api/keeper/run',{profileId:pid()});
+    toast(r.drafted?`${r.drafted} follow-up(s) drafted`:'Nothing due yet — follow-ups start 3 days after the first email');
+    await load();loadPipeline();}
+  catch(e){toast(e.message);}finally{b.disabled=false;b.textContent=o;}
 }
 // ---- suppression list ----
 async function loadSuppression(){
