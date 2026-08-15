@@ -13,6 +13,7 @@ const mailer = require('./lib/mailer');
 const emailApi = require('./lib/emailapi');
 const dnsauth = require('./lib/dnsauth');
 const sending = require('./lib/sending');
+const suppress = require('./lib/suppression');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
@@ -262,6 +263,13 @@ function startSendJob(account, profileId) {
         const bad = Object.entries(auth.records || {}).filter(([, v]) => !v.ok).map(([k]) => k.toUpperCase()).join(', ');
         throw new Error(`Sending is blocked: ${bad} not set up for ${auth.domain}. Fix it on the Your Business tab (Deliverability), then re-check.`);
       }
+      // CAN-SPAM: every commercial email must carry the sender's real physical
+      // postal address. No address = we don't send, rather than send unlawfully.
+      const prof = db.getProfile(account.id, profileId);
+      if (!prof || !String(prof.mailingAddress || '').trim()) {
+        throw new Error('Add your business mailing address (Your Business tab) before sending — the law requires it in every commercial email.');
+      }
+      const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
       let count = sentToday;
       for (const it of items.slice(0, allowed)) {
         try {
@@ -277,6 +285,15 @@ function startSendJob(account, profileId) {
             job.done++;
             continue;
           }
+          // SUPPRESSION: unsubscribes, hard bounces and blocks are absolute.
+          // Checked here at the send boundary so no UI path can bypass it.
+          const sup = suppress.isSuppressed(account.id, it.to);
+          if (sup.blocked) {
+            db.updateQueueItem(account.id, it.id, { status: 'rejected', blockedBy: sup.reason });
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Suppressed ${it.to} — ${sup.note}` });
+            job.suppressed = (job.suppressed || 0) + 1; job.done++;
+            continue;
+          }
           // Land in their inbox while they're at their desk, in THEIR timezone.
           const bh = sending.withinBusinessHours(lead, {});
           if (!bh.ok) {
@@ -284,15 +301,31 @@ function startSendJob(account, profileId) {
             job.deferred++; job.done++;
             continue; // stays approved; the next run picks it up in-hours
           }
-          await smtp.sendMail({ ...cfg, fromName: cfg.fromName || '' }, { to: it.to, subject: it.subject, body: it.body });
+          // Live unsubscribe link + CAN-SPAM footer, stamped at send time.
+          const unsubUrl = base ? `${base}/u/${suppress.tokenFor(account.id, it.to)}` : '';
+          const body = agents.stampFooter(it.body, prof, unsubUrl);
+          await smtp.sendMail({ ...cfg, fromName: cfg.fromName || '' },
+            { to: it.to, subject: it.subject, body, unsubscribeUrl: unsubUrl });
           db.updateQueueItem(account.id, it.id, { status: 'sent', sentAt: db.nowISO() });
           if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'sent' });
+          // Immutable audit trail: who was emailed, when, with what, approved by whom.
+          db.logSend(account.id, { profileId, leadId: it.leadId || null, to: it.to, toName: it.toName || '',
+            company: it.company || '', subject: it.subject || '', body, approvedBy: account.email,
+            approvedAt: it.approvedAt || null, queueId: it.id });
           db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Sent to ${it.toName || it.to}` });
           job.sent++; count++;
           db.updateAccount(account.id, { sentToday: { date: todayStr, count } });
         } catch (e) {
           job.failed++; job.lastError = e.message;
-          db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Send FAILED to ${it.toName || it.to}: ${e.message}` });
+          // A hard bounce means the address is dead. Suppress it permanently —
+          // repeat bounces to the same address are what wreck a sending domain.
+          if (suppress.isHardBounce(e.message)) {
+            suppress.suppress(account.id, it.to, 'bounce', { note: String(e.message).slice(0, 140) });
+            if (it.leadId) db.updateLead(account.id, it.leadId, { emailConfidence: 'invalid', emailSource: 'hard bounce' });
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Hard bounce — ${it.to} suppressed permanently` });
+          } else {
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Send FAILED to ${it.toName || it.to}: ${e.message}` });
+          }
         }
         job.done++;
         // Randomised 3-8 min gap: a fixed interval is a machine fingerprint.
@@ -317,7 +350,7 @@ function sendJobView(j) {
     etaMs = j.done > 0 ? Math.round((elapsed / j.done) * (j.total - j.done)) : j.total * 330000;
   }
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
-    skipped: j.skipped, deferred: j.deferred || 0, warmupCap: j.warmupCap ?? null,
+    skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0, warmupCap: j.warmupCap ?? null,
     etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
 }
 
@@ -368,6 +401,28 @@ const server = http.createServer(async (req, res) => {
       return res.end(view('favicon.js'));
     }
     if (req.method === 'GET' && p === '/favicon.ico') { res.writeHead(204); return res.end(); }
+
+    // ---- PUBLIC one-click unsubscribe (no login; must never 404) ----
+    // Gmail/Yahoo send an automated POST here (List-Unsubscribe-Post). Humans
+    // arrive by GET from the footer link. Both suppress immediately.
+    if (p.startsWith('/u/')) {
+      const parsed = suppress.parseToken(p.slice(3));
+      const done = (msg, sub) => html(res, `<!doctype html><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Unsubscribed</title>
+        <style>body{font-family:"Iowan Old Style",Georgia,serif;background:#f4f1ea;color:#1a1815;
+        display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}
+        .b{background:#fbfaf6;border:1px solid #d9d3c6;border-radius:12px;padding:34px;max-width:460px;text-align:center}
+        h1{font-size:22px;margin:0 0 8px}p{color:#4a463f;margin:0;font-size:15px;line-height:1.55}</style>
+        <div class="b"><h1>${msg}</h1><p>${sub}</p></div>`);
+      if (!parsed) return done('Link not recognised', 'This unsubscribe link is invalid or expired. If you keep receiving mail, reply to the message and ask to be removed.');
+      if (req.method === 'POST' || req.method === 'GET') {
+        suppress.suppress(parsed.accountId, parsed.email, 'unsubscribe', { note: req.method === 'POST' ? 'one-click' : 'footer link' });
+        db.logActivity(parsed.accountId, { agent: 'SEND', msg: `Unsubscribed: ${parsed.email}` });
+        if (req.method === 'POST') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('OK'); }
+        return done('You’re unsubscribed', `We’ve removed <b>${parsed.email}</b>. You won’t receive any more messages from this sender.`);
+      }
+    }
 
     if (req.method === 'GET' && p === '/health') {
       return json(res, { ok: true, ai: aiMode(), uptime: Math.round(process.uptime()) });
@@ -622,6 +677,26 @@ const server = http.createServer(async (req, res) => {
         if (!t.ok) return json(res, { error: `That key didn't work: ${t.error}` }, 400);
         db.updateAccount(acc, { emailApiKey: key });
         return json(res, { ok: true, connected: true });
+      }
+
+      // ---- suppression list ----
+      if (p === '/api/suppression' && req.method === 'GET') {
+        return json(res, { list: db.getSuppression(acc).slice(-500).reverse(), reasons: suppress.REASONS });
+      }
+      if (p === '/api/suppression/add' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const emails = String(f.emails || f.email || '').split(/[\s,;]+/).filter((e) => e.includes('@'));
+        if (!emails.length) return json(res, { error: 'Enter at least one email address.' }, 400);
+        for (const e of emails) suppress.suppress(acc, e, 'manual', { wholeDomain: !!f.wholeDomain });
+        db.logActivity(acc, { agent: 'SYSTEM', msg: `Blocked ${emails.length} address(es)` });
+        return json(res, { ok: true, added: emails.length });
+      }
+      if (p === '/api/suppression/remove' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        return json(res, { ok: suppress.unsuppress(acc, f.email) });
+      }
+      if (p === '/api/sendlog' && req.method === 'GET') {
+        return json(res, { sends: db.getSendLog(acc, 200) });
       }
 
       // ---- deliverability: SPF / DKIM / DMARC on the sending domain ----
