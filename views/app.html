@@ -19,6 +19,13 @@
   .lockbar b{color:#fff}.lockbar button{margin-left:auto}
   .trialbar{background:#fff7e6;border:1px solid #e8d3a8;color:#7a5310;border-radius:8px;padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;font-size:14px}
   .trialbar b{color:#5c3f0c}
+  .appt{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:center;border-top:1px dashed var(--line);padding:10px 0}
+  @media(max-width:640px){.appt{grid-template-columns:1fr;gap:4px}}
+  .appt.past{opacity:.55}
+  .apwhen{font-family:ui-monospace,monospace;font-size:13px;color:var(--red);font-weight:700}
+  .appt.past .apwhen{color:var(--ink2)}
+  .apwho{font-size:14px}
+  .apgroup{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink2);margin-top:10px}
   .tiergrid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
   @media(max-width:900px){.tiergrid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:520px){.tiergrid{grid-template-columns:1fr}}
@@ -367,6 +374,13 @@
   </div>
 
   <div class="card">
+    <h2><span class="agent">CALENDAR</span> Booked appointments <span class="muted" id="apCount"></span>
+      <button class="sm ghost" onclick="loadAppointments()" style="margin-left:auto">Refresh</button>
+    </h2>
+    <div class="body"><div id="apList"><div class="empty">No appointments yet.</div></div></div>
+  </div>
+
+  <div class="card">
     <h2><span class="agent">CALLS</span> Recent calls <button class="sm ghost" onclick="loadCalls()" style="margin-left:auto">Refresh</button></h2>
     <div class="body"><div id="vCalls"><div class="empty">No calls yet.</div></div></div>
   </div>
@@ -388,7 +402,7 @@ function showTab(t){curTab=t;
   $('tabDeskBtn').classList.toggle('active',t==='desk');
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();loadCalls();}
+  if(t==='voice'){renderVoice();loadCalls();loadAppointments();}
 }
 async function api(path,data){
   let r;
@@ -536,6 +550,38 @@ async function testCall(){
   try{const r=await api('/api/voice/testcall',{to});$('vCallMsg').textContent=`Call placed (${r.status}). Your phone should ring.`;setTimeout(loadCalls,8000);}
   catch(e){$('vCallMsg').textContent='';toast(e.message);}
   finally{b.disabled=false;b.textContent=o;}
+}
+async function loadAppointments(){
+  try{
+    const r=await fetch('/api/appointments');const d=await r.json();
+    const all=d.appointments||[];
+    const now=Date.now();
+    const upcoming=all.filter(a=>a.status!=='cancelled'&&(!a.startsAt||new Date(a.startsAt).getTime()>=now-3600000));
+    const past=all.filter(a=>!upcoming.includes(a));
+    $('apCount').textContent=upcoming.length?`· ${upcoming.length} upcoming`:'';
+    const card=(a,isPast)=>{
+      const dt=a.startsAt?new Date(a.startsAt):null;
+      const when=dt&&!isNaN(dt)?dt.toLocaleString(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})
+        :(a.whenText||'time not set');
+      return `<div class="appt ${isPast?'past':''}">
+        <div class="apwhen">${esc(when)}</div>
+        <div class="apwho"><b>${esc(a.name||'Caller')}</b>${a.company?' · '+esc(a.company):''}
+          <div class="muted">${esc(a.phone||'')}${a.email?' · '+esc(a.email):''} · ${esc(a.source||'')}</div>
+          <div class="muted">${esc(a.reason||'')}</div></div>
+        <div class="apact">${isPast?`<span class="pill sent">done</span>`
+          :`<button class="sm ghost" onclick="apStatus('${a.id}','done')">Mark done</button>
+            <button class="sm ghost" onclick="apStatus('${a.id}','cancelled')">Cancel</button>`}</div>
+      </div>`;
+    };
+    $('apList').innerHTML = (upcoming.length||past.length)
+      ? (upcoming.length?`<div class="apgroup">Upcoming</div>`+upcoming.map(a=>card(a,false)).join(''):'')
+        +(past.length?`<div class="apgroup">Past</div>`+past.slice(-10).reverse().map(a=>card(a,true)).join(''):'')
+      : '<div class="empty">No appointments yet. When the AI books a call it lands here.</div>';
+  }catch(e){$('apList').innerHTML=`<div class="muted">${esc(e.message)}</div>`;}
+}
+async function apStatus(id,status){
+  try{await api('/api/appointments/update',{id,status});toast('Updated');loadAppointments();}
+  catch(e){toast(e.message);}
 }
 async function loadCalls(){
   try{
