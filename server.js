@@ -915,6 +915,12 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      // ---- billing setup diagnostic (owner only; reports names, never values) ----
+      if (p === '/api/billing/diag' && req.method === 'GET') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        return json(res, stripe.configReport());
+      }
+
       // ---- suppression list ----
       if (p === '/api/suppression' && req.method === 'GET') {
         return json(res, { list: db.getSuppression(acc).slice(-500).reverse(), reasons: suppress.REASONS });
