@@ -100,6 +100,7 @@
 <div class="tabs">
   <button class="tab active" id="tabBusinessBtn" onclick="showTab('business')">🏢 Your Business <span class="dot hide" id="bizDot"></span></button>
   <button class="tab" id="tabDeskBtn" onclick="showTab('desk')">🎯 Sales Desk</button>
+  <button class="tab" id="tabVoiceBtn" onclick="showTab('voice')">📞 Voice SDR</button>
 </div>
 
 <div class="wrap">
@@ -312,6 +313,55 @@
   </div>
 </div>
 
+<div id="tab-voice" class="hide">
+  <div class="card">
+    <h2><span class="agent">SETUP</span> Point Twilio at Dawnpipe</h2>
+    <div class="body">
+      <div id="vStatus"></div>
+      <p class="muted" style="margin:10px 0 6px">In Twilio → Phone Numbers → your number → <b>Voice Configuration</b>, set <b>"A call comes in"</b> to <b>Webhook</b> with this exact URL and <b>HTTP POST</b>:</p>
+      <div class="dval" id="vHookIn">—</div>
+      <p class="muted" style="margin:10px 0 6px">And set <b>"Call status changes"</b> to:</p>
+      <div class="dval" id="vHookStatus">—</div>
+      <div class="warnbox" style="margin-top:10px">Trial Twilio accounts can only call <b>verified</b> numbers and play a trial notice first. Verify your own mobile under Phone Numbers → Verified Caller IDs to test.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="agent">AGENT</span> How your AI answers</h2>
+    <div class="body">
+      <div class="two">
+        <div class="field"><label>Agent name</label><div class="hint">It always says it's an AI — this is just the name.</div><input id="v_agentName" placeholder="Sarah"></div>
+        <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
+      </div>
+      <div class="field"><label>Greeting <span class="muted">(optional)</span></label><div class="hint">Leave blank for: "Hi, this is [name], an AI assistant for [business]. How can I help you today?"</div><input id="v_greeting" placeholder=""></div>
+      <div class="two">
+        <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
+        <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
+      </div>
+      <div class="field"><label>Approved answers / FAQ</label><div class="hint">The ONLY facts it may state. Anything not here, it says it doesn't know and offers a human. Never put prices here you don't want quoted.</div><textarea id="v_faq" placeholder="Q: Do you offer free assessments? A: Yes, the first walkthrough is free."></textarea></div>
+      <div class="field"><label>Voicemail message</label><div class="hint">Left when an answering machine picks up. It never holds a conversation with voicemail.</div><input id="v_voicemail" placeholder=""></div>
+      <div class="row"><button onclick="saveVoice()" id="vSaveBtn">Save agent</button><span class="muted" id="vMsg"></span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="agent">TEST</span> Place a real call</h2>
+    <div class="body">
+      <div class="warnbox">This dials a real phone and costs real Twilio + AI money. Test on your own number first.</div>
+      <div class="row">
+        <input id="v_testTo" placeholder="+13125550123" style="flex:1;min-width:180px;margin:0">
+        <button class="red" onclick="testCall()" id="vCallBtn">📞 Call me</button>
+      </div>
+      <span class="muted" id="vCallMsg"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="agent">CALLS</span> Recent calls <button class="sm ghost" onclick="loadCalls()" style="margin-left:auto">Refresh</button></h2>
+    <div class="body"><div id="vCalls"><div class="empty">No calls yet.</div></div></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <script>
 let STATE={profiles:[],leads:[],queue:[],activity:[]};let curTab='business';
@@ -320,7 +370,16 @@ function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');set
 function pid(){return $('profileSel').value;}
 function curProfile(){return STATE.profiles.find(p=>p.id===pid());}
 function isStarter(p){return !p||!p.offer||/edit me|describe what you sell/i.test(p.offer||'');}
-function showTab(t){curTab=t;$('tab-business').classList.toggle('hide',t!=='business');$('tab-desk').classList.toggle('hide',t!=='desk');$('tabBusinessBtn').classList.toggle('active',t==='business');$('tabDeskBtn').classList.toggle('active',t==='desk');if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}}
+function showTab(t){curTab=t;
+  $('tab-business').classList.toggle('hide',t!=='business');
+  $('tab-desk').classList.toggle('hide',t!=='desk');
+  $('tab-voice').classList.toggle('hide',t!=='voice');
+  $('tabBusinessBtn').classList.toggle('active',t==='business');
+  $('tabDeskBtn').classList.toggle('active',t==='desk');
+  $('tabVoiceBtn').classList.toggle('active',t==='voice');
+  if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
+  if(t==='voice'){renderVoice();loadCalls();}
+}
 async function api(path,data){
   let r;
   try{r=await fetch(path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});}
@@ -397,6 +456,57 @@ async function deleteProfile(){
   if(!confirm(`Delete "${p.name}" and its leads/drafts? This can't be undone.`))return;
   try{await api('/api/profile/delete',{id:p.id});toast('Business deleted');await load();}
   catch(e){toast(e.message);}
+}
+// ---- voice ----
+function renderVoice(){
+  const v=(STATE.voice)||{};
+  const base=v.webhookBase||'';
+  $('vHookIn').textContent=base?base+'/voice/incoming':'Set PUBLIC_URL in Render first';
+  $('vHookStatus').textContent=base?base+'/voice/status':'Set PUBLIC_URL in Render first';
+  $('vStatus').innerHTML = v.configured
+    ? `<div class="okbox">✓ Twilio keys detected on the server${v.envNumber?` · number ${esc(v.envNumber)}`:''}</div>`
+    : `<div class="warnbox bad">⚠ Twilio keys not found. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER in Render → Environment, then redeploy.</div>`;
+  $('v_agentName').value=v.agentName||'Sarah';
+  $('v_greeting').value=v.greeting||'';
+  $('v_transferTo').value=v.transferTo||'';
+  $('v_hours').value=v.hours||'';
+  $('v_faq').value=v.faq||'';
+  $('v_voicemail').value=v.voicemail||'';
+  const sel=$('v_profileId');
+  sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
+  if(v.profileId)sel.value=v.profileId;
+}
+async function saveVoice(){
+  const b=$('vSaveBtn');b.disabled=true;
+  try{
+    await api('/api/voice/save',{enabled:true,agentName:$('v_agentName').value,profileId:$('v_profileId').value,
+      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,
+      faq:$('v_faq').value,voicemail:$('v_voicemail').value,number:(STATE.voice||{}).envNumber||''});
+    $('vMsg').textContent='Saved ✓';toast('Voice agent saved');await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+async function testCall(){
+  const to=$('v_testTo').value.trim();
+  if(!to)return toast('Enter a number in +1... format');
+  if(!confirm(`Place a real call to ${to}? This costs Twilio + AI credits.`))return;
+  const b=$('vCallBtn');b.disabled=true;const o=b.textContent;b.textContent='Dialling…';
+  try{const r=await api('/api/voice/testcall',{to});$('vCallMsg').textContent=`Call placed (${r.status}). Your phone should ring.`;setTimeout(loadCalls,8000);}
+  catch(e){$('vCallMsg').textContent='';toast(e.message);}
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function loadCalls(){
+  try{
+    const r=await fetch('/api/voice/calls');const d=await r.json();
+    const cs=d.calls||[];
+    $('vCalls').innerHTML=cs.length?cs.map(c=>{
+      const t=(c.transcript||[]).map(x=>`<div><b>${x.who==='caller'?'Caller':'AI'}:</b> ${esc(x.text)}</div>`).join('');
+      return `<div class="qitem"><div class="row" style="justify-content:space-between">
+        <span class="to">${c.direction==='inbound'?'⬅ from '+esc(c.from||'?'):'➡ to '+esc(c.to||'?')} · ${new Date(c.at).toLocaleString()}</span>
+        <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome||c.status||'')}</span></div>
+        ${c.booking?`<div class="okbox" style="margin:8px 0">📅 ${esc(c.booking.name||'Caller')} · ${esc(c.booking.phone||'')} · ${esc(c.booking.when||'')} — ${esc(c.booking.reason||'')}</div>`:''}
+        ${t?`<div class="feed" style="max-height:180px;margin-top:8px">${t}</div>`:''}</div>`;
+    }).join(''):'<div class="empty">No calls yet. Point Twilio at the webhook above, then call your number.</div>';
+  }catch(e){$('vCalls').innerHTML=`<div class="muted">${esc(e.message)}</div>`;}
 }
 // ---- suppression list ----
 async function loadSuppression(){
@@ -597,6 +707,7 @@ function fillSettings(){
   const ed=STATE.emailData||{};
   renderWarmup();
   loadSuppression();
+  renderVoice();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
   $('hkMsg').textContent=ed.connected?'Connected ✓ — leads use verified emails.':(ed.fallback?'Using the site-wide data key.':'Not connected — unfound emails will be guesses.');
   const info=$('sendInfo');

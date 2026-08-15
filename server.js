@@ -14,6 +14,7 @@ const emailApi = require('./lib/emailapi');
 const dnsauth = require('./lib/dnsauth');
 const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
+const voice = require('./lib/voice');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
@@ -33,6 +34,10 @@ function html(res, body, code = 200, extraHeaders = {}) {
 function json(res, data, code = 200, extraHeaders = {}) {
   res.writeHead(code, { 'Content-Type': 'application/json', ...extraHeaders });
   res.end(JSON.stringify(data));
+}
+function xml(res, body) {
+  res.writeHead(200, { 'Content-Type': 'text/xml; charset=utf-8' });
+  res.end(body);
 }
 function redirect(res, location, cookie) {
   const h = { Location: location };
@@ -402,6 +407,141 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/favicon.ico') { res.writeHead(204); return res.end(); }
 
+    // ================= VOICE (Twilio webhooks) =================
+    // Public endpoints Twilio POSTs to. Every request is signature-verified so
+    // nobody can spoof a call, inject a transcript, or burn AI spend.
+    if (p.startsWith('/voice/')) {
+      const raw = await readBody(req);
+      const params = parseForm(raw);
+      const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+      const sig = req.headers['x-twilio-signature'];
+      if (!voice.configured()) return xml(res, voice.sayAndHangup('Voice is not configured yet. Goodbye.'));
+      if (!voice.verifySignature(base + p, params, sig)) {
+        db.logActivity('system', { agent: 'VOICE', msg: 'Rejected unsigned webhook on ' + p });
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        return res.end('bad signature');
+      }
+      const sid = params.CallSid || '';
+
+      // ---- inbound: someone rang the number ----
+      if (p === '/voice/incoming') {
+        const account = db.accountByVoiceNumber(params.To || '');
+        if (!account) return xml(res, voice.sayAndHangup('Thanks for calling. This line is not set up yet. Goodbye.'));
+        const vcfg = account.voice || {};
+        const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
+        if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
+        const agentName = vcfg.agentName || 'Sarah';
+        // Transparency is mandatory: the caller is told it is an AI up front.
+        const greeting = vcfg.greeting
+          || ('Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. How can I help you today?');
+        voice.startCall(sid, { accountId: account.id, account, profile, direction: 'inbound',
+          from: params.From || '', to: params.To || '' });
+        db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
+          profileId: profile.id, status: 'in-progress', transcript: [] });
+        db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown') });
+        return xml(res, voice.sayAndGather(greeting, base + '/voice/turn'));
+      }
+
+      // ---- outbound call answered ----
+      if (p === '/voice/answer') {
+        const call = voice.getCall(sid);
+        if (/machine|fax/i.test(params.AnsweredBy || '')) {
+          const vm = (call && call.account.voice && call.account.voice.voicemail)
+            || ('Hi, this is an AI assistant calling from ' + (call ? call.profile.name : 'our team')
+                + '. Sorry to miss you, we will try again another time.');
+          if (call) db.saveCall(call.accountId, { sid, status: 'voicemail', outcome: 'voicemail' });
+          return xml(res, voice.sayAndHangup(vm));
+        }
+        if (!call) return xml(res, voice.sayAndHangup('Sorry, there was a problem. Goodbye.'));
+        const agentName = (call.account.voice && call.account.voice.agentName) || 'Sarah';
+        const who = call.lead && call.lead.name ? ' Am I speaking with ' + call.lead.name + '?' : '';
+        const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
+          + call.profile.name + '.' + who + ' Did I catch you at an okay time?';
+        return xml(res, voice.sayAndGather(opener, base + '/voice/turn'));
+      }
+
+      // ---- one conversational turn ----
+      if (p === '/voice/turn') {
+        const call = voice.getCall(sid);
+        if (!call) return xml(res, voice.sayAndHangup('Sorry, this call timed out. Goodbye.'));
+        const heard = (params.SpeechResult || '').trim();
+
+        if (!heard) {
+          call.silence = (call.silence || 0) + 1;
+          if (call.silence >= 2) {
+            db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'no-response', transcript: call.turns });
+            return xml(res, voice.sayAndHangup('I could not hear anything, so I will let you go. Call back anytime. Goodbye.'));
+          }
+          return xml(res, voice.sayAndGather('Sorry, I did not catch that. Could you say it again?', base + '/voice/turn'));
+        }
+        call.silence = 0;
+        call.turns.push({ who: 'caller', text: heard });
+
+        if (call.turns.length > voice.MAX_TURNS) {
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'max-length', transcript: call.turns });
+          return xml(res, voice.sayAndHangup('I have taken enough of your time. Someone from the team will follow up. Goodbye.'));
+        }
+
+        let out;
+        try { out = await voice.think(call, heard); }
+        catch (e) {
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'AI error mid-call: ' + e.message });
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ai-error', transcript: call.turns });
+          return xml(res, voice.sayAndHangup('I am having a technical problem on my end. I will have someone call you back. Sorry about that, goodbye.'));
+        }
+        call.turns.push({ who: 'agent', text: out.say });
+        db.saveCall(call.accountId, { sid, transcript: call.turns });
+
+        if (out.action === 'dnc') {
+          const num = call.direction === 'inbound' ? params.From : call.to;
+          suppress.suppress(call.accountId, String(num || '').replace(/[^0-9+]/g, '') + '@phone.invalid',
+            'unsubscribe', { note: 'do-not-call, by phone' });
+          if (call.lead && call.lead.email) suppress.suppress(call.accountId, call.lead.email, 'unsubscribe', { note: 'do-not-call, by phone' });
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'do-not-call', transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'DO NOT CALL requested by ' + num + ' - suppressed' });
+          return xml(res, voice.sayAndHangup(out.say || 'Understood, I have removed you from our list. Goodbye.'));
+        }
+        if (out.action === 'transfer') {
+          const to = (call.account.voice && call.account.voice.transferTo) || '';
+          if (!to) return xml(res, voice.sayAndGather('I do not have anyone free to transfer you to right now, but I can take a message. What is the best number?', base + '/voice/turn'));
+          db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Transferring call to ' + to });
+          return xml(res, voice.sayAndDial(out.say || 'Connecting you now, one moment.', to));
+        }
+        if (out.action === 'book') {
+          const d = out.data || {};
+          const phone = d.phone || params.From || '';
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'booked', transcript: call.turns,
+            booking: { name: d.name, company: d.company, phone, reason: d.reason, when: d.when } });
+          db.addLeads(call.accountId, call.profile.id, [{
+            name: d.name || 'Caller', company: d.company || '', email: '',
+            emailConfidence: 'imported', emailSource: 'phone call',
+            notes: 'PHONE ' + call.direction + ' | ' + phone + ' | wants: ' + (d.reason || 'callback') + ' | when: ' + (d.when || 'unspecified'),
+          }]);
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Callback booked: ' + (d.name || 'caller') + ' (' + phone + ') - ' + (d.when || 'time TBC') });
+          return xml(res, voice.sayAndHangup(out.say || 'Perfect, I have that booked. Someone will be in touch. Goodbye.'));
+        }
+        if (out.action === 'end') {
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ended', transcript: call.turns });
+          return xml(res, voice.sayAndHangup(out.say));
+        }
+        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn'));
+      }
+
+      // ---- call finished ----
+      if (p === '/voice/status') {
+        const call = voice.getCall(sid);
+        if (call) {
+          db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
+            durationSec: Number(params.CallDuration || 0), transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
+          voice.endCall(sid);
+        }
+        res.writeHead(204); return res.end();
+      }
+      return xml(res, voice.sayAndHangup('Goodbye.'));
+    }
+
     // ---- PUBLIC one-click unsubscribe (no login; must never 404) ----
     // Gmail/Yahoo send an automated POST here (List-Unsubscribe-Post). Humans
     // arrive by GET from the footer link. Both suppress immediately.
@@ -591,6 +731,9 @@ const server = http.createServer(async (req, res) => {
           // key itself is never echoed back — connected flag only
           emailData: { connected: !!account.emailApiKey, fallback: !!process.env.HUNTER_API_KEY },
           warmup: sending.warmupStatus(account.warmup),
+          voice: { ...(account.voice || {}), configured: voice.configured(),
+            envNumber: process.env.TWILIO_PHONE_NUMBER || '',
+            webhookBase: (process.env.PUBLIC_URL || '').replace(/\/$/, '') },
           sendDomain: dnsauth.domainOfEmail((account.smtp || {}).fromEmail || (account.smtp || {}).user || ''),
           profiles: db.getProfiles(acc),
           leads: db.getLeads(acc),
@@ -677,6 +820,55 @@ const server = http.createServer(async (req, res) => {
         if (!t.ok) return json(res, { error: `That key didn't work: ${t.error}` }, 400);
         db.updateAccount(acc, { emailApiKey: key });
         return json(res, { ok: true, connected: true });
+      }
+
+      // ---- voice settings + calls ----
+      if (p === '/api/voice/save' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const cur = account.voice || {};
+        const v = {
+          ...cur,
+          enabled: f.enabled !== false,
+          number: (f.number || cur.number || process.env.TWILIO_PHONE_NUMBER || '').trim(),
+          profileId: f.profileId || cur.profileId || '',
+          agentName: (f.agentName ?? cur.agentName ?? 'Sarah').trim(),
+          greeting: (f.greeting ?? cur.greeting ?? '').trim(),
+          transferTo: (f.transferTo ?? cur.transferTo ?? '').trim(),
+          voicemail: (f.voicemail ?? cur.voicemail ?? '').trim(),
+          faq: (f.faq ?? cur.faq ?? '').trim(),
+          hours: (f.hours ?? cur.hours ?? '').trim(),
+        };
+        db.updateAccount(acc, { voice: v });
+        return json(res, { ok: true, voice: v });
+      }
+      if (p === '/api/voice/calls' && req.method === 'GET') {
+        return json(res, { calls: db.getCalls(acc, 50) });
+      }
+      // Place a real outbound call. Costs money, so it is metered and explicit.
+      if (p === '/api/voice/testcall' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
+        const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+        if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
+        const vcfg = account.voice || {};
+        const from = vcfg.number || process.env.TWILIO_PHONE_NUMBER || '';
+        const to = (f.to || '').trim();
+        if (!to) return json(res, { error: 'Enter the number to call (E.164 format, e.g. +13125550123).' }, 400);
+        if (!from) return json(res, { error: 'No Twilio number configured.' }, 400);
+        const profile = db.getProfile(acc, vcfg.profileId) || db.getProfiles(acc)[0];
+        if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
+        try {
+          const call = await voice.placeCall({ to, from,
+            answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
+          voice.startCall(call.sid, { accountId: acc, account, profile, direction: 'outbound', to, from,
+            lead: f.leadName ? { name: f.leadName, company: f.leadCompany || '' } : null });
+          db.saveCall(acc, { sid: call.sid, direction: 'outbound', to, from, profileId: profile.id,
+            status: call.status || 'queued', transcript: [] });
+          db.logActivity(acc, { agent: 'VOICE', msg: 'Outbound call placed to ' + to });
+          return json(res, { ok: true, sid: call.sid, status: call.status });
+        } catch (e) {
+          return json(res, { error: e.message }, 400);
+        }
       }
 
       // ---- suppression list ----
