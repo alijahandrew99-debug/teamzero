@@ -252,6 +252,18 @@ function startSendJob(account, profileId) {
       let count = sentToday;
       for (const it of items.slice(0, allowed)) {
         try {
+          // Hard block: never SMTP-send to a guessed/invalid address, even if it
+          // slipped into the queue before the no-guess guarantee. Each bounce
+          // damages the user's sender reputation.
+          const lead = it.leadId ? db.getLeads(account.id, profileId).find((l) => l.id === it.leadId) : null;
+          if (!db.isSendableLead(lead)) {
+            db.updateQueueItem(account.id, it.id, { status: 'rejected' });
+            if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'new' });
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Blocked send to ${it.to} — ${lead ? 'unverified address' : 'no lead record'} (bounce risk)` });
+            job.failed++; job.lastError = 'blocked: unverified address';
+            job.done++;
+            continue;
+          }
           await smtp.sendMail({ ...cfg, fromName: cfg.fromName || '' }, { to: it.to, subject: it.subject, body: it.body });
           db.updateQueueItem(account.id, it.id, { status: 'sent', sentAt: db.nowISO() });
           if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'sent' });
@@ -580,6 +592,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, connected: true });
       }
 
+      // ---- email data quota (answers "why am I getting guesses?") ----
+      if (p === '/api/settings/emailkey/status' && req.method === 'GET') {
+        const st = await emailApi.accountStatus(db.getAccount(acc));
+        if (!st) return json(res, { error: 'No email data key connected (or Hunter unreachable).' }, 400);
+        return json(res, st);
+      }
+
       // ---- sending mailbox settings ----
       if (p === '/api/settings/smtp' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
@@ -621,7 +640,11 @@ const server = http.createServer(async (req, res) => {
 
       if (p === '/api/leads/import' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const rows = f.rows || parseCSV(f.csv || '');
+        // Tag the user's own list as trusted so it is draftable and survives
+        // "Clear guesses" — they vouched for these addresses by importing them.
+        const rows = (f.rows || parseCSV(f.csv || '')).map((r) => ({
+          ...r, emailConfidence: r.emailConfidence || 'imported', emailSource: r.emailSource || 'your import',
+        }));
         const added = db.addLeads(acc, f.profileId, rows);
         db.logActivity(acc, { agent: 'SYSTEM', profileId: f.profileId, msg: `Imported ${added.length} lead(s)` });
         return json(res, { added: added.length });

@@ -170,6 +170,7 @@
           <input id="hk_key" type="password" placeholder="Hunter.io API key" style="flex:1;min-width:200px;margin:0">
           <button onclick="saveEmailKey()" id="hkBtn">Connect &amp; verify</button>
           <button class="sm ghost" onclick="removeEmailKey()">Remove</button>
+          <button class="sm ghost" onclick="checkEmailQuota()">Check quota</button>
         </div>
         <span class="muted" id="hkMsg"></span>
       </div>
@@ -252,7 +253,7 @@
         <div class="card">
           <h2><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span>
             <span style="margin-left:auto;display:flex;gap:6px">
-              <button class="sm ghost" onclick="clearLeads('guesses')" title="Delete unverified/guessed leads, keep verified ones">Clear guesses</button>
+              <button class="sm ghost" onclick="clearLeads('guesses')" title="Delete leads without a real email, keep the sendable ones">Clear guesses</button>
               <button class="sm red" onclick="clearLeads('all')" title="Delete every lead for this business">Reject all</button>
             </span>
           </h2>
@@ -320,7 +321,7 @@ function render(){
   $('leadcount').textContent=`· ${leads.length}`;
   $('leads').innerHTML=leads.length?leads.map(l=>{
     const c=l.emailConfidence||'';
-    const label={verified:'real email',role:'company inbox',site:'site email',pattern:'GUESS',invalid:'no valid email'}[c]||'';
+    const label={verified:'real email',role:'company inbox',site:'site email',imported:'your import',pattern:'GUESS',invalid:'no valid email'}[c]||'';
     return `<div class="lead"><div class="row" style="justify-content:space-between"><div><b>${esc(l.name||'(no name)')}</b> ${l.title?'· '+esc(l.title):''} ${l.company?'· '+esc(l.company):''}<div class="muted">${esc(l.email||'no email')} ${label?`<span class="pill ${c}" title="${esc(l.emailSource||'')}">${label}</span>`:''}</div></div><span class="pill ${l.status}">${l.status}</span></div></div>`;
   }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
   $('qcount').textContent=`· ${queue.length} pending`;
@@ -451,7 +452,7 @@ async function runScout(){
 async function clearLeads(mode){
   const all=mode==='all';
   const msg=all?'Delete ALL leads for this business? This clears the list and any drafts. Cannot be undone.'
-    :'Delete the unverified/guessed leads (keep verified ones)? Cannot be undone.';
+    :'Delete the leads without a real email (keeps verified, company-inbox, site and imported ones)? Cannot be undone.';
   if(!confirm(msg))return;
   try{const r=await api('/api/leads/clear',{profileId:pid(),mode});toast(`Removed ${r.removed} lead(s)`);await load();}
   catch(e){toast(e.message);}
@@ -480,6 +481,16 @@ async function saveEmailKey(){
   try{await api('/api/settings/emailkey',{key});$('hk_key').value='';$('hkMsg').textContent='Connected ✓ — new leads will use verified emails.';toast('Email data connected');await load();}
   catch(e){$('hkMsg').textContent='';toast(e.message);}
   finally{b.disabled=false;b.textContent=o;}
+}
+async function checkEmailQuota(){
+  try{
+    const r=await fetch('/api/settings/emailkey/status');const s=await r.json();
+    if(s.error)return toast(s.error);
+    const sLeft=Math.max(0,(s.searches.available||0)-(s.searches.used||0));
+    const vLeft=Math.max(0,(s.verifications.available||0)-(s.verifications.used||0));
+    $('hkMsg').textContent=`${s.plan} plan — ${sLeft} searches + ${vLeft} verifications left${s.resetDate?` (resets ${s.resetDate})`:''}.`
+      +(sLeft===0?' ⚠ OUT OF SEARCHES — this is why lookups fail. Upgrade Hunter or wait for reset.':'');
+  }catch(e){toast(e.message);}
 }
 async function removeEmailKey(){
   try{await api('/api/settings/emailkey',{key:''});$('hkMsg').textContent='Removed.';toast('Email data key removed');await load();}
