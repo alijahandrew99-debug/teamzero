@@ -1,0 +1,169 @@
+<!-- Auto-playing product demo. A real recording is better, but this needs no
+     camera, no hosting, no bandwidth, never goes stale when pricing changes,
+     works on mobile, and doubles as the storyboard for the real video. -->
+<div class="vd" id="vd">
+  <div class="vd-chrome">
+    <span class="vd-dot"></span><span class="vd-dot"></span><span class="vd-dot"></span>
+    <div class="vd-url">dawnpipe.com/app</div>
+    <button class="vd-replay" id="vdReplay" type="button">↻ Replay</button>
+  </div>
+
+  <div class="vd-stage">
+    <div class="vd-caption" id="vdCap">Step 1 — tell it about your business</div>
+
+    <!-- step 1: autofill -->
+    <div class="vd-step" id="vdS1">
+      <div class="vd-field">
+        <label>Your website</label>
+        <div class="vd-input"><span id="vdUrl"></span><span class="vd-caret">|</span></div>
+      </div>
+      <button class="vd-btn" id="vdFillBtn">✨ Fill with AI</button>
+      <div class="vd-fills">
+        <div class="vd-fill" data-k="What you sell">Utility-funded insulation for industrial plants</div>
+        <div class="vd-fill" data-k="Ideal customer">Plastics &amp; injection-molding plants, 50-500 staff</div>
+        <div class="vd-fill" data-k="Why they buy">Cuts energy cost with $0 upfront — the utility funds it</div>
+      </div>
+    </div>
+
+    <!-- step 2: prospecting -->
+    <div class="vd-step" id="vdS2">
+      <div class="vd-bar"><div class="vd-barfill" id="vdBar"></div></div>
+      <div class="vd-status" id="vdStatus">Searching the web for real companies…</div>
+      <div class="vd-leads" id="vdLeads"></div>
+    </div>
+
+    <!-- step 3: the email -->
+    <div class="vd-step" id="vdS3">
+      <div class="vd-mailhead">To: <b>alex.hoffer@hofferplastics.com</b> <span class="vd-pill">real email ✓</span></div>
+      <div class="vd-subj">Question about the molding lines in South Elgin</div>
+      <pre class="vd-mail" id="vdMail"></pre>
+      <div class="vd-actions" id="vdActions">
+        <button class="vd-btn ok" id="vdApprove" type="button">✓ Approve &amp; send</button>
+        <button class="vd-btn ghost" type="button">✗ Reject</button>
+      </div>
+      <div class="vd-sent" id="vdSent">✓ Sent from your own inbox</div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .vd{border:2px solid var(--ink);border-radius:12px;overflow:hidden;background:var(--paper2);box-shadow:0 14px 40px rgba(0,0,0,.10)}
+  .vd-chrome{background:var(--ink);padding:9px 14px;display:flex;align-items:center;gap:7px}
+  .vd-dot{width:10px;height:10px;border-radius:50%;background:#4a463f;display:inline-block}
+  .vd-url{margin-left:10px;color:#b9b3a9;font-family:ui-monospace,monospace;font-size:12px;background:#2a2622;padding:3px 12px;border-radius:20px}
+  .vd-replay{margin-left:auto;background:transparent;border:1px solid #4a463f;color:#b9b3a9;font-size:11px;padding:3px 10px;border-radius:5px;cursor:pointer;font-family:inherit}
+  .vd-replay:hover{color:#fff;border-color:#b9b3a9}
+  .vd-stage{padding:20px;min-height:330px;position:relative}
+  .vd-caption{font-family:ui-monospace,monospace;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--red);margin-bottom:14px}
+  .vd-step{display:none}.vd-step.on{display:block;animation:vdIn .4s ease}
+  @keyframes vdIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .vd-field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px}
+  .vd-input{background:#fff;border:1px solid var(--line);border-radius:6px;padding:9px 11px;font-family:ui-monospace,monospace;font-size:14px;min-height:38px}
+  .vd-caret{animation:vdBlink 1s steps(2) infinite;color:var(--red)}
+  @keyframes vdBlink{0%,50%{opacity:1}51%,100%{opacity:0}}
+  .vd-btn{background:var(--ink);color:var(--paper2);border:1px solid var(--ink);border-radius:6px;padding:8px 15px;font-size:13px;font-family:inherit;cursor:pointer;margin-top:10px}
+  .vd-btn.ok{background:#2f7d4f;border-color:#2f7d4f}
+  .vd-btn.ghost{background:transparent;color:var(--ink2)}
+  .vd-btn.hit{transform:scale(.95);opacity:.8}
+  .vd-fills{margin-top:14px}
+  .vd-fill{opacity:0;background:#fff;border:1px solid var(--line);border-left:3px solid var(--red);border-radius:5px;padding:8px 11px;margin-bottom:7px;font-size:13.5px;color:var(--ink2);transition:opacity .4s}
+  .vd-fill.on{opacity:1}
+  .vd-fill:before{content:attr(data-k);display:block;font-size:11px;color:var(--red);font-family:ui-monospace,monospace;margin-bottom:2px}
+  .vd-bar{height:7px;background:var(--line);border-radius:4px;overflow:hidden;margin-bottom:9px}
+  .vd-barfill{height:100%;width:0;background:var(--red);transition:width .5s ease}
+  .vd-status{font-size:13px;color:var(--ink2);margin-bottom:12px;font-family:ui-monospace,monospace}
+  .vd-lead{opacity:0;transform:translateX(-6px);background:#fff;border:1px solid var(--line);border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:13.5px;transition:.35s}
+  .vd-lead.on{opacity:1;transform:none}
+  .vd-lead b{font-size:14px}
+  .vd-lead .r{color:var(--ink2);font-size:12.5px}
+  .vd-pill{font-size:10.5px;background:#eaf5ee;color:#2f7d4f;border:1px solid #bcdcc8;border-radius:20px;padding:1px 8px;margin-left:5px;white-space:nowrap}
+  .vd-mailhead{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--ink2);margin-bottom:8px}
+  .vd-subj{font-weight:800;margin-bottom:8px}
+  .vd-mail{white-space:pre-wrap;font-family:inherit;font-size:13.5px;line-height:1.55;color:var(--ink2);background:#fff;border:1px solid var(--line);border-radius:6px;padding:12px;margin:0;min-height:120px}
+  .vd-actions{margin-top:10px;display:flex;gap:8px}
+  .vd-sent{display:none;margin-top:10px;background:#eaf5ee;border:1px solid #bcdcc8;color:#1f5c39;border-radius:6px;padding:9px 12px;font-size:13.5px}
+  .vd-sent.on{display:block;animation:vdIn .4s ease}
+</style>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var LEADS=[
+    ['Alex Hoffer','Chief Operating Officer · Hoffer Plastics · South Elgin, IL'],
+    ['Tom Kappus','President · Kappus Plastic · Chicago, IL'],
+    ['Bill White','Plant Manager · Midwest Molding · Rockford, IL']
+  ];
+  var MAIL="Alex,\n\nRunning 90-odd molding machines under one roof, the heat coming off those barrels is usually the biggest line item nobody's measuring.\n\nWe insulate them under a utility-funded program — one Illinois plant cut $203K a year in electricity with $0 upfront, plus a rebate cheque.\n\nWorth 15 minutes to see if your lines qualify?\n\n— Alijah";
+  var timers=[], running=false;
+  function at(ms,fn){timers.push(setTimeout(fn,ms))}
+  function reset(){
+    timers.forEach(clearTimeout); timers=[];
+    ['vdS1','vdS2','vdS3'].forEach(function(i){$(i).classList.remove('on')});
+    $('vdUrl').textContent=''; $('vdLeads').innerHTML=''; $('vdMail').textContent='';
+    $('vdBar').style.width='0'; $('vdSent').classList.remove('on');
+    $('vdActions').style.display='flex';
+    Array.prototype.forEach.call(document.querySelectorAll('.vd-fill'),function(f){f.classList.remove('on')});
+  }
+  function type(el,text,speed,done){
+    var i=0;
+    (function tick(){
+      if(i<=text.length){el.textContent=text.slice(0,i++); at(speed,tick);}
+      else if(done) done();
+    })();
+  }
+  function play(){
+    if(running) return; running=true; reset();
+    $('vdCap').textContent='Step 1 — tell it about your business';
+    $('vdS1').classList.add('on');
+    type($('vdUrl'),'apenergy.com',85,function(){
+      at(400,function(){
+        $('vdFillBtn').classList.add('hit');
+        at(220,function(){$('vdFillBtn').classList.remove('hit')});
+        var fills=document.querySelectorAll('.vd-fill');
+        Array.prototype.forEach.call(fills,function(f,i){at(500+i*420,function(){f.classList.add('on')})});
+        at(500+fills.length*420+900, step2);
+      });
+    });
+  }
+  function step2(){
+    $('vdS1').classList.remove('on');
+    $('vdCap').textContent='Step 2 — it finds real leads, with real emails';
+    $('vdS2').classList.add('on');
+    var msgs=['Searching the web for real companies…','Found Hoffer Plastics — checking the decision-maker…','Verifying email addresses…'];
+    msgs.forEach(function(m,i){at(i*1100,function(){$('vdStatus').textContent=m; $('vdBar').style.width=(28+i*30)+'%'})});
+    LEADS.forEach(function(l,i){
+      at(900+i*750,function(){
+        var d=document.createElement('div'); d.className='vd-lead';
+        d.innerHTML='<b>'+l[0]+'</b><span class="vd-pill">real email ✓</span><div class="r">'+l[1]+'</div>';
+        $('vdLeads').appendChild(d); at(30,function(){d.classList.add('on')});
+      });
+    });
+    at(3500,function(){$('vdBar').style.width='100%'; $('vdStatus').textContent='3 leads found · 3 emails written';});
+    at(4600, step3);
+  }
+  function step3(){
+    $('vdS2').classList.remove('on');
+    $('vdCap').textContent='Step 3 — you read it and approve. Nothing sends without you.';
+    $('vdS3').classList.add('on');
+    type($('vdMail'),MAIL,14,function(){
+      at(900,function(){
+        $('vdApprove').classList.add('hit');
+        at(260,function(){
+          $('vdApprove').classList.remove('hit');
+          $('vdActions').style.display='none';
+          $('vdSent').classList.add('on');
+          $('vdCap').textContent='That is the whole product.';
+          at(3800,function(){running=false; play();});   // loop
+        });
+      });
+    });
+  }
+  $('vdReplay').addEventListener('click',function(){running=false; play()});
+  // only start once it is actually on screen, and stop when it isn't
+  if('IntersectionObserver' in window){
+    new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting && !running) play(); });
+    },{threshold:.25}).observe($('vd'));
+  } else play();
+})();
+</script>
