@@ -846,6 +846,9 @@ const server = http.createServer(async (req, res) => {
           transferTo: voice.toE164((f.transferTo ?? cur.transferTo ?? '')),
           voicemail: (f.voicemail ?? cur.voicemail ?? '').trim(),
           faq: (f.faq ?? cur.faq ?? '').trim(),
+          objective: (f.objective ?? cur.objective ?? '').trim(),
+          qualifying: (f.qualifying ?? cur.qualifying ?? '').trim(),
+          objections: (f.objections ?? cur.objections ?? '').trim(),
           hours: (f.hours ?? cur.hours ?? '').trim(),
         };
         db.updateAccount(acc, { voice: v });

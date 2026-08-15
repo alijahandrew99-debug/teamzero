@@ -331,8 +331,9 @@
   </div>
 
   <div class="card">
-    <h2><span class="agent">AGENT</span> How your AI answers</h2>
+    <h2><span class="agent">AGENT</span> How your AI answers <span class="muted">— this is where you train it</span></h2>
     <div class="body">
+      <div id="vKnows" class="warnbox" style="background:#eef2f7;border-color:#c3d2e4;color:#3a5a8a"></div>
       <div class="two">
         <div class="field"><label>Agent name</label><div class="hint">It always says it's an AI — this is just the name.</div><input id="v_agentName" placeholder="Sarah"></div>
         <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
@@ -342,6 +343,9 @@
         <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
         <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
       </div>
+      <div class="field"><label>What counts as a win on this call?</label><div class="hint">The one outcome it drives toward. Be specific — vague goals make it wander and wander costs money.</div><input id="v_objective" placeholder="Book a 15-minute demo with Alijah."></div>
+      <div class="field"><label>Qualifying questions</label><div class="hint">The 2-3 things that tell you if they're worth your time. It weaves these in naturally rather than reading them out.</div><textarea id="v_qualifying" placeholder="How many people are doing outbound today?&#10;Are you already using a sales tool?&#10;Who signs off on something like this?"></textarea></div>
+      <div class="field"><label>Objections &amp; your answers</label><div class="hint">Write the pushback you actually hear and how you'd answer it. It uses your words instead of improvising.</div><textarea id="v_objections" placeholder="&quot;Too expensive&quot; -> One SDR costs 5 grand a month. This starts at 99.&#10;&quot;We already have someone&quot; -> This doesn't replace them, it fills their pipeline overnight.&#10;&quot;Send me info&quot; -> Happy to, what's your email? And can I grab 15 minutes Thursday?"></textarea></div>
       <div class="field"><label>Approved answers / FAQ</label><div class="hint">The ONLY facts it may state. Anything not here, it says it doesn't know and offers a human. Never put prices here you don't want quoted.</div><textarea id="v_faq" placeholder="Q: Do you offer free assessments? A: Yes, the first walkthrough is free."></textarea></div>
       <div class="field"><label>Voicemail message</label><div class="hint">Left when an answering machine picks up. It never holds a conversation with voicemail.</div><input id="v_voicemail" placeholder=""></div>
       <div class="row"><button onclick="saveVoice()" id="vSaveBtn">Save agent</button><span class="muted" id="vMsg"></span></div>
@@ -475,7 +479,17 @@ function renderVoice(){
   $('v_transferTo').value=v.transferTo||'';
   $('v_hours').value=v.hours||'';
   $('v_faq').value=v.faq||'';
+  $('v_objective').value=v.objective||'';
+  $('v_qualifying').value=v.qualifying||'';
+  $('v_objections').value=v.objections||'';
   $('v_voicemail').value=v.voicemail||'';
+  const prof=(STATE.profiles||[]).find(p=>p.id===v.profileId)||(STATE.profiles||[])[0]||{};
+  const miss=[];
+  if(!prof.website)miss.push('website');
+  if(!prof.pricing)miss.push('pricing');
+  if(!prof.offer)miss.push('what you sell');
+  $('vKnows').innerHTML = `It answers using <b>${esc(prof.name||'your business')}</b>'s profile — what you sell, who you serve, your proof, <b>website</b> and <b>pricing</b> — plus everything you write below.`
+    + (miss.length?` <b>Missing: ${miss.join(', ')}</b> — fill those in on the 🏢 Your Business tab or it will say it doesn't know.`:' All the key facts are filled in ✓');
   const sel=$('v_profileId');
   sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
   if(v.profileId)sel.value=v.profileId;
@@ -485,7 +499,8 @@ async function saveVoice(){
   try{
     await api('/api/voice/save',{enabled:true,agentName:$('v_agentName').value,profileId:$('v_profileId').value,
       greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,
-      faq:$('v_faq').value,voicemail:$('v_voicemail').value,number:(STATE.voice||{}).envNumber||''});
+      faq:$('v_faq').value,voicemail:$('v_voicemail').value,number:(STATE.voice||{}).envNumber||'',
+      objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value});
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
