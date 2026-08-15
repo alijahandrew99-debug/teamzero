@@ -275,7 +275,12 @@ function startSendJob(account, profileId) {
       // HARD GATE: an unauthenticated domain gets spam-foldered, and the damage
       // is slow and permanent. Refuse to send until SPF+DKIM+DMARC pass.
       const auth = await dnsauth.checkDomain(cfg.fromEmail || cfg.user).catch(() => null);
-      if (auth && auth.ok === false) {
+      // If DNS itself was unreachable we cannot conclude the domain is
+      // misconfigured — warn and let the send proceed rather than blocking a
+      // paying customer's campaign on our resolver having a bad minute.
+      if (auth && auth.lookupFailed) {
+        db.logActivity(account.id, { agent: 'SEND', profileId, msg: 'DNS check unavailable — sending anyway. Re-check Deliverability when you can.' });
+      } else if (auth && auth.ok === false) {
         const bad = Object.entries(auth.records || {}).filter(([, v]) => !v.ok).map(([k]) => k.toUpperCase()).join(', ');
         throw new Error(`Sending is blocked: ${bad} not set up for ${auth.domain}. Fix it on the Your Business tab (Deliverability), then re-check.`);
       }
@@ -294,10 +299,12 @@ function startSendJob(account, profileId) {
           // damages the user's sender reputation.
           const lead = it.leadId ? db.getLeads(account.id, profileId).find((l) => l.id === it.leadId) : null;
           if (!db.isSendableLead(lead)) {
-            db.updateQueueItem(account.id, it.id, { status: 'rejected' });
-            if (it.leadId) db.updateLead(account.id, it.leadId, { status: 'new' });
-            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Blocked send to ${it.to} — ${lead ? 'unverified address' : 'no lead record'} (bounce risk)` });
-            job.failed++; job.lastError = 'blocked: unverified address';
+            // 'held', not 'rejected' — the draft survives, so if the address is
+            // verified later it can still go. Counted separately from failures
+            // so "23 failed" doesn't mean "23 emails broke".
+            db.updateQueueItem(account.id, it.id, { status: 'held', heldReason: 'unverified address' });
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Held ${it.to} — ${lead ? 'address not verified' : 'no lead record'} (would bounce)` });
+            job.blocked = (job.blocked || 0) + 1;
             job.done++;
             continue;
           }
@@ -331,6 +338,10 @@ function startSendJob(account, profileId) {
           db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Sent to ${it.toName || it.to}` });
           job.sent++; count++;
           db.updateAccount(account.id, { sentToday: { date: todayStr, count } });
+          // Re-read rather than trusting the start-of-job snapshot: a second
+          // device, the scheduler, or a plan change can move the cap mid-run.
+          const fresh = db.getAccount(account.id);
+          if (fresh && fresh.sentToday && fresh.sentToday.date === todayStr) count = Math.max(count, fresh.sentToday.count);
         } catch (e) {
           job.failed++; job.lastError = e.message;
           // A hard bounce means the address is dead. Suppress it permanently —
@@ -344,10 +355,20 @@ function startSendJob(account, profileId) {
           }
         }
         job.done++;
-        // Randomised 3-8 min gap: a fixed interval is a machine fingerprint.
-        if (job.done < job.total) await new Promise((r) => setTimeout(r, sending.nextDelayMs()));
+        // Randomised gap around the user's own setting — a fixed interval is a
+        // machine fingerprint, but their configured value must still mean
+        // something. Floor of 60s keeps it out of obvious-bot territory.
+        const baseSec = Math.max(60, Number(account.sendDelaySec ?? 180));
+        if (job.done < job.total) await new Promise((r) => setTimeout(r, sending.nextDelayMs(baseSec, baseSec * 2.5)));
       }
       job.status = 'done';
+      // Never finish silently at "sent 0". If everything was held for business
+      // hours or blocked, say so — otherwise it looks like the product failed.
+      if (!job.sent) {
+        if (job.deferred) job.note = `Nothing sent yet — ${job.deferred} held until their local business hours. Run again during 8am-5pm their time and they'll go.`;
+        else if (job.blocked) job.note = `Nothing sent — ${job.blocked} draft(s) held because the address isn't verified. Use "Clear guesses" or re-run Find leads.`;
+        else if (job.total === 0) job.note = 'Nothing to send — approve some drafts first.';
+      }
     } catch (e) {
       job.status = 'error'; job.error = e.message;
     }
@@ -367,7 +388,8 @@ function sendJobView(j) {
     etaMs = j.done > 0 ? Math.round((elapsed / j.done) * (j.total - j.done)) : j.total * 330000;
   }
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
-    skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0, warmupCap: j.warmupCap ?? null,
+    skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0,
+    blocked: j.blocked || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
     etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
 }
 
@@ -593,6 +615,17 @@ const server = http.createServer(async (req, res) => {
       // ---- call finished ----
       if (p === '/voice/status') {
         const call = voice.getCall(sid);
+        // A deploy mid-call wipes the in-memory record; bill from the persisted
+        // one so those minutes still count against the plan.
+        if (!call && sid) {
+          const owner2 = db.accountByCallSid(sid);
+          if (owner2) {
+            const dur0 = Number(params.CallDuration || 0);
+            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0 });
+            plans.consumeVoiceMinutes(owner2, Math.ceil(dur0 / 60), stripe.isOwner(owner2));
+          }
+          res.writeHead(204); return res.end();
+        }
         if (call) {
           const dur = Number(params.CallDuration || 0);
           // Bill the plan's minute allowance (rounded up, like a carrier).
@@ -766,9 +799,22 @@ const server = http.createServer(async (req, res) => {
     }
 
     // start checkout
+    // Existing subscribers manage/switch here instead of buying a second plan.
+    if (req.method === 'GET' && p === '/billing') {
+      if (!account) return redirect(res, '/login');
+      if (!account.stripeCustomerId) return redirect(res, '/checkout?tier=starter');
+      try { return redirect(res, await stripe.createPortal(account)); }
+      catch (e) { return html(res, `<p style="font-family:system-ui;padding:40px">Couldn't open billing: ${e.message} <a href="/app">Back</a></p>`); }
+    }
+
     if (req.method === 'GET' && p === '/checkout') {
       if (!stripe.configured()) return html(res, `<p style="font-family:system-ui;padding:40px">Billing isn't configured yet. Set STRIPE_* in .env, or use DEV_UNLOCK=1 for testing. <a href="/app">Back</a></p>`);
       const tier = url.searchParams.get('tier') || 'starter';
+      // Already subscribed? Change the existing plan rather than starting a
+      // second one that bills alongside it.
+      if (account.stripeCustomerId && stripe.isPaid(account)) {
+        try { return redirect(res, await stripe.createPortal(account)); } catch {}
+      }
       const link = await stripe.createCheckout(account, tier);
       return redirect(res, link);
     }
@@ -1086,12 +1132,19 @@ const server = http.createServer(async (req, res) => {
         const f = parseJSON(await readBody(req));
         // Tag the user's own list as trusted so it is draftable and survives
         // "Clear guesses" — they vouched for these addresses by importing them.
-        const rows = (f.rows || parseCSV(f.csv || '')).map((r) => ({
+        let rows = (f.rows || parseCSV(f.csv || '')).map((r) => ({
           ...r, emailConfidence: r.emailConfidence || 'imported', emailSource: r.emailSource || 'your import',
         }));
+        // Imported leads still cost AI money the moment they're drafted, so the
+        // plan bounds them too. Hard ceiling as a backstop against a huge paste.
+        const impUsage = plans.usage(account, stripe.isOwner(account));
+        const impCap = impUsage.unlimited ? 5000 : Math.min(5000, impUsage.remaining);
+        let impTrimmed = 0;
+        if (rows.length > impCap) { impTrimmed = rows.length - impCap; rows = rows.slice(0, impCap); }
         const added = db.addLeads(acc, f.profileId, rows);
         db.logActivity(acc, { agent: 'SYSTEM', profileId: f.profileId, msg: `Imported ${added.length} lead(s)` });
-        return json(res, { added: added.length });
+        return json(res, { added: added.length, trimmed: impTrimmed,
+          note: impTrimmed ? `${impTrimmed} row(s) skipped — that's over what's left on your plan this month.` : '' });
       }
       if (p === '/api/leads/clear' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
