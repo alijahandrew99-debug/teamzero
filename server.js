@@ -757,7 +757,8 @@ const server = http.createServer(async (req, res) => {
 
       if (p === '/api/profile/save' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const fields = ['name', 'senderName', 'offer', 'icp', 'valueProp', 'proof', 'tone', 'cta', 'notes'];
+        const fields = ['name', 'senderName', 'offer', 'icp', 'valueProp', 'proof', 'tone', 'cta', 'notes',
+          'mailingAddress', 'website', 'pricing'];
         const data = {}; fields.forEach((k) => { if (f[k] !== undefined) data[k] = f[k]; });
         const saved = f.id ? db.updateProfile(acc, f.id, data) : db.createProfile(acc, data);
         return json(res, { profile: saved });

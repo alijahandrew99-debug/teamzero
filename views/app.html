@@ -153,6 +153,10 @@
           <div class="field"><label>Tone &amp; voice</label><div class="hint">How the emails should sound.</div><textarea id="f_tone" placeholder="e.g. Direct, warm, concrete. No fluff, no hype."></textarea></div>
         </div>
         <div class="two">
+          <div class="two">
+            <div class="field"><label>Website</label><div class="hint">So the AI can tell callers where to sign up, and cite it in emails.</div><input id="f_website" placeholder="dawnpipe.com"></div>
+            <div class="field"><label>Current pricing <span class="muted">(spoken aloud on calls)</span></label><div class="hint">The ONLY prices the AI may quote. Leave blank and it will say it doesn't have pricing and offer a callback. Keep this current — it is read verbatim.</div><input id="f_pricing" placeholder="Starter $99/mo (200 leads), Growth $299/mo (750), Scale $699/mo (2,000)"></div>
+          </div>
           <div class="field"><label>Business mailing address <span style="color:var(--red)">*required to send</span></label><div class="hint">The law (CAN-SPAM) requires a real physical postal address in every commercial email. A street address, PO box, or registered agent address all work. This appears in your footer.</div><input id="f_mailingAddress" placeholder="e.g. 123 W Main St, Suite 4, Elgin, IL 60120"></div>
           <div class="field"><label>Call to action</label><div class="hint">What you want the reader to do.</div><input id="f_cta" placeholder="e.g. A 15-minute call, or a short reply."></div>
           <div class="field"><label>Extra notes (optional)</label><div class="hint">Anything else the team should know.</div><input id="f_notes" placeholder="e.g. Email only — no cold calls."></div>
@@ -447,7 +451,7 @@ function qcard(q){
   return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress'];
+const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress','website','pricing'];
 function fillForm(){const p=curProfile()||{};FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});window._editId=(p&&p.id)||'';}
 function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');showTab('business');toast('Fill in the new business, then Save');}
 async function deleteProfile(){
