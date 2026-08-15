@@ -495,6 +495,24 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // ---------- health ----------
+    // Static favicon (search results and link previews can't run the animated
+    // JS one). Same night scene, one frame.
+    if (req.method === 'GET' && p === '/favicon.svg') {
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
+      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="13" fill="#151228"/><circle cx="46" cy="17" r="10" fill="#f0c860"/><circle cx="41.5" cy="14" r="9.5" fill="#151228"/><rect x="6" y="42" width="52" height="17" rx="5" fill="#2a2547"/><rect x="9" y="40" width="15" height="10" rx="4" fill="#f4f1ea"/><circle cx="21" cy="44" r="6.2" fill="#e8b48f"/><rect x="26" y="43" width="31" height="13" rx="5" fill="#6b5ea8"/><g transform="rotate(12 45 34)"><rect x="37.5" y="28.5" width="15" height="11" rx="3.5" fill="#c02a1b"/><rect x="39.5" y="30.5" width="11" height="7" rx="2" fill="#ffe9a8"/></g></svg>`);
+    }
+    if (req.method === 'GET' && p === '/robots.txt') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end('User-agent: *\nAllow: /\nDisallow: /app\nDisallow: /api/\nDisallow: /u/\nDisallow: /voice/\nSitemap: https://dawnpipe.com/sitemap.xml\n');
+    }
+    if (req.method === 'GET' && p === '/sitemap.xml') {
+      const site = 'https://dawnpipe.com';
+      res.writeHead(200, { 'Content-Type': 'application/xml' });
+      return res.end('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + ['/', '/signup', '/terms', '/privacy'].map((u) => `<url><loc>${site}${u}</loc></url>`).join('')
+        + '</urlset>');
+    }
+
     // animated tab icon (drawn client-side on canvas)
     if (req.method === 'GET' && p === '/favicon.js') {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
@@ -508,7 +526,13 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/voice/')) {
       const raw = await readBody(req);
       const params = parseForm(raw);
-      const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+      // Twilio signs the URL it actually POSTed to. Reconstructing it from the
+      // request (proxy headers) instead of PUBLIC_URL means webhooks keep
+      // verifying through a domain migration — with PUBLIC_URL, flipping the
+      // domain before updating the Twilio console would reject every call.
+      const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+      const base = host ? `${proto}://${host}` : (process.env.PUBLIC_URL || '').replace(/\/$/, '');
       const sig = req.headers['x-twilio-signature'];
       if (!voice.configured()) return xml(res, voice.sayAndHangup("Sorry, this line isn't set up yet. Bye for now."));
       if (!voice.verifySignature(base + p, params, sig)) {
