@@ -36,8 +36,18 @@
   .step .n{font-family:ui-monospace,monospace;color:var(--red);font-size:14px}
   .step h3{font-size:18px;margin:6px 0}
   .step p{color:var(--ink2);font-size:15px}
-  .tiers3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start}
-  @media(max-width:820px){.tiers3{grid-template-columns:1fr;max-width:420px;margin:0 auto}}
+  .tiers4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start}
+  @media(max-width:900px){.tiers4{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.tiers4{grid-template-columns:1fr;max-width:400px;margin:0 auto}}
+  .complete{margin-top:22px;background:#151228;color:#f4f1ea;border-radius:14px;padding:30px 28px;position:relative;box-shadow:0 16px 44px rgba(21,18,40,.22)}
+  .cbadge{position:absolute;top:-12px;left:28px;background:var(--red);color:#fff;font-size:12px;font-weight:700;padding:4px 14px;border-radius:20px;letter-spacing:.5px}
+  .cgrid{display:grid;grid-template-columns:1fr 1.5fr;gap:28px;align-items:start}
+  @media(max-width:760px){.cgrid{grid-template-columns:1fr;gap:18px}}
+  .camt{font-size:46px;font-weight:800;letter-spacing:-1px;line-height:1}.camt span{font-size:17px;color:#b9b3c9;font-weight:400}
+  .cnote{color:#b9b3c9;font-size:15px;margin-top:8px}
+  .cfeat{display:grid;gap:12px}
+  .cf b{display:block;font-size:16px;color:#fff}
+  .cf span{display:block;font-size:14px;color:#b9b3c9;line-height:1.5;margin-top:2px}
   .tier{border:1px solid var(--line);border-radius:12px;background:var(--paper2);padding:26px 22px;position:relative}
   .tier.featured{border:2px solid var(--red);box-shadow:0 10px 30px rgba(192,42,27,.10)}
   .tbadge{position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--red);color:#fff;font-size:12px;font-weight:700;padding:3px 12px;border-radius:20px;white-space:nowrap}
@@ -104,7 +114,7 @@
     <div class="agent"><b>PROSPECTOR</b><h3>Finds the leads</h3><p>Sources real companies + decision-makers that match your ICP, by live web research.</p></div>
     <div class="agent"><b>OUTBOUND</b><h3>Writes the emails</h3><p>A personalized cold email for every lead, in your voice — into your approval queue.</p></div>
     <div class="agent"><b>SCOUT</b><h3>Reads the market</h3><p>A weekly intel brief: who to hit this week, what to say, what to avoid.</p></div>
-    <div class="agent off"><b>VOICE</b><h3>Calls (soon)</h3><p>Tiered AI calling — gated behind compliance review. Off by default.</p></div>
+    <div class="agent"><b>VOICE</b><h3>Answers &amp; calls</h3><p>Picks up every call, books the meeting, and works your list by phone. It says it's an AI, and it takes no for an answer.</p></div>
   </div>
 </div>
 
@@ -118,33 +128,44 @@
 </div></section>
 
 <section><div class="wrap">
-  <h2>Pricing that replaces an SDR.</h2>
-  <p style="color:var(--ink2);margin-bottom:26px">A human sales rep costs $5,000/mo. Dawnpipe does the prospecting and writing for a fraction — pick the volume you need.</p>
-  <div class="tiers3">
+  <h2>Pricing that replaces a sales hire.</h2>
+  <p style="color:var(--ink2);margin-bottom:26px">A sales rep costs about $5,000 a month and still misses the phone. Start at $49 to see it work, or hand the whole job over.</p>
+  <div class="tiers4">
+    <div class="tier">
+      <div class="tname">Tester</div>
+      <div class="tamt">$49<span>/mo</span></div>
+      <div class="tlead">50 leads / month</div>
+      <ul>
+        <li>Real verified emails</li>
+        <li>Written for each company</li>
+        <li>Approval queue</li>
+        <li>See if it works for you</li>
+      </ul>
+      <a class="btn" href="/signup" style="display:block">Try it →</a>
+    </div>
     <div class="tier">
       <div class="tname">Starter</div>
       <div class="tamt">$99<span>/mo</span></div>
       <div class="tlead">200 leads / month</div>
       <ul>
-        <li>Found &amp; written for you</li>
+        <li>Everything in Tester</li>
         <li>Overnight auto-runs</li>
         <li>Unlimited businesses</li>
-        <li>Approval queue</li>
+        <li>One person doing outbound</li>
       </ul>
-      <a class="btn red" href="/signup" style="display:block">Get started →</a>
+      <a class="btn" href="/signup" style="display:block">Get started →</a>
     </div>
-    <div class="tier featured">
-      <div class="tbadge">Most popular</div>
+    <div class="tier">
       <div class="tname">Growth</div>
       <div class="tamt">$299<span>/mo</span></div>
       <div class="tlead">750 leads / month</div>
       <ul>
         <li>Everything in Starter</li>
-        <li>~25 leads a day, on autopilot</li>
+        <li>~25 leads a day</li>
         <li>For teams scaling outbound</li>
         <li>Priority support</li>
       </ul>
-      <a class="btn red" href="/signup" style="display:block">Get started →</a>
+      <a class="btn" href="/signup" style="display:block">Get started →</a>
     </div>
     <div class="tier">
       <div class="tname">Scale</div>
@@ -153,13 +174,32 @@
       <ul>
         <li>Everything in Growth</li>
         <li>Agency-level volume</li>
-        <li>Run pipeline for many clients</li>
+        <li>Run many clients</li>
         <li>Priority support</li>
       </ul>
-      <a class="btn red" href="/signup" style="display:block">Get started →</a>
+      <a class="btn" href="/signup" style="display:block">Get started →</a>
     </div>
   </div>
-  <div class="big-cta" style="margin-top:24px;color:var(--ink2);font-size:15px;text-align:center">Every email you got from us? Drafted by Dawnpipe. That’s the pitch.</div>
+
+  <div class="complete">
+    <div class="cbadge">The whole sales team</div>
+    <div class="cgrid">
+      <div>
+        <div class="tname" style="color:#f0c860">Complete</div>
+        <div class="camt">$1,499<span>/mo</span></div>
+        <div class="cnote">Everything above, plus the phone.</div>
+        <a class="btn red" href="/signup" style="margin-top:16px">Get the full team →</a>
+      </div>
+      <div class="cfeat">
+        <div class="cf"><b>2,000 leads a month</b><span>found, verified and written — same as Scale</span></div>
+        <div class="cf"><b>It answers your phone</b><span>every call picked up, day or night. It knows your business, answers questions, and books the callback instead of letting it ring out.</span></div>
+        <div class="cf"><b>It makes the calls too</b><span>works your lead list by phone, qualifies them, and hands the hot ones straight to you.</span></div>
+        <div class="cf"><b>1,000 talk-minutes</b><span>shared across answering and calling. It transfers to you the moment someone's ready to buy.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="big-cta" style="margin-top:24px;color:var(--ink2);font-size:15px;text-align:center">Every email you got from us? Drafted by Dawnpipe. The voice that answered? Also Dawnpipe. That's the pitch.</div>
 </div></section>
 
 <section id="demo"><div class="wrap">

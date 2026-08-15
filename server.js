@@ -430,6 +430,11 @@ const server = http.createServer(async (req, res) => {
         const vcfg = account.voice || {};
         const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
+        const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
+        if (!vAllow.ok) {
+          db.logActivity(account.id, { agent: 'VOICE', msg: `Inbound call refused - ${vAllow.reason}` });
+          return xml(res, voice.sayAndHangup("Thanks for calling. Nobody's available to take your call right now - please try again later."));
+        }
         const agentName = vcfg.agentName || 'Sarah';
         // Transparency is mandatory: the caller is told it is an AI up front.
         const greeting = vcfg.greeting
@@ -543,6 +548,9 @@ const server = http.createServer(async (req, res) => {
         const call = voice.getCall(sid);
         if (call) {
           const dur = Number(params.CallDuration || 0);
+          // Bill the plan's minute allowance (rounded up, like a carrier).
+          const acctForBill = db.getAccount(call.accountId);
+          if (acctForBill) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: call.turns.length,
@@ -891,6 +899,8 @@ const server = http.createServer(async (req, res) => {
         if (!from) return json(res, { error: 'No Twilio number configured.' }, 400);
         const profile = db.getProfile(acc, vcfg.profileId) || db.getProfiles(acc)[0];
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
+        if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         try {
           const call = await voice.placeCall({ to, from,
             answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
