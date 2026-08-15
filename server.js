@@ -592,7 +592,19 @@ const server = http.createServer(async (req, res) => {
       const demo = process.env.DEMO_VIDEO_URL
         ? `<div style="position:relative;padding-top:56.25%;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#000"><iframe src="${process.env.DEMO_VIDEO_URL}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen loading="lazy"></iframe></div>`
         : `<div style="border:2px dashed var(--line);border-radius:12px;padding:60px 20px;text-align:center;color:var(--ink2);background:var(--paper2)">▶ Demo video coming shortly — <a href="/signup">get started</a> and see it live in your own account.</div>`;
-      return html(res, view('landing.html').replace('__DEMO_VIDEO__', demo));
+      // The live phone demo IS the product demo — nobody has to trust a video.
+      const rawNum = process.env.TWILIO_PHONE_NUMBER || '';
+      const tel = voice.toE164(rawNum);
+      const pretty = tel.length === 12 && tel.startsWith('+1')
+        ? `(${tel.slice(2, 5)}) ${tel.slice(5, 8)}-${tel.slice(8)}` : (rawNum || tel);
+      let page = view('landing.html').replace('__DEMO_VIDEO__', demo);
+      if (tel) {
+        page = page.split('__DEMO_TEL__').join(tel).split('__DEMO_NUM__').join(pretty);
+      } else {
+        // No number configured — drop the call panel rather than show a dead link.
+        page = page.replace(/<div class="calldemo">[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/, '');
+      }
+      return html(res, page);
     }
     // Legal pages — public, and required before Stripe will approve billing.
     if (req.method === 'GET' && (p === '/terms' || p === '/privacy')) {

@@ -54,6 +54,34 @@
   .price li:before{content:"→ ";color:var(--red)}
   footer{padding:40px 0;border-top:2px solid var(--ink);color:var(--ink2);font-size:14px;text-align:center}
   .big-cta{text-align:center;padding:20px 0 10px}
+  .calldemo{display:grid;grid-template-columns:1.2fr 1fr;gap:0;border:2px solid var(--ink);border-radius:14px;overflow:hidden;background:var(--paper2)}
+  @media(max-width:720px){.calldemo{grid-template-columns:1fr}}
+  .cd-left{padding:30px 28px;background:#151228;color:#f4f1ea}
+  .cd-label{font-family:ui-monospace,monospace;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#f0c860;margin-bottom:10px}
+  .cd-num{display:block;font-size:clamp(26px,4.4vw,40px);font-weight:800;letter-spacing:-1px;color:#fff;text-decoration:none;line-height:1.1}
+  .cd-num:hover{color:#f0c860}
+  .cd-sub{margin-top:10px;font-size:14px;color:#b9b3c9}
+  .cd-right{padding:26px 28px}
+  .cd-try{font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--ink2);font-family:ui-monospace,monospace;margin-bottom:10px}
+  .cd-right ul{list-style:none;margin:0 0 12px;padding:0}
+  .cd-right li{padding:5px 0;border-top:1px dashed var(--line);font-size:15px}
+  .cd-right li:first-child{border-top:0}
+  .cd-note{font-size:13px;color:var(--ink2);font-style:italic}
+  .demo2{display:grid;grid-template-columns:1fr 1.15fr;gap:16px}
+  @media(max-width:720px){.demo2{grid-template-columns:1fr}}
+  .dcard{border:1px solid var(--line);border-radius:10px;background:var(--paper2);overflow:hidden}
+  .dhead{background:var(--ink);color:var(--paper2);font-size:12px;letter-spacing:1px;padding:8px 14px;font-family:ui-monospace,monospace}
+  .dbody{padding:16px}
+  .dname{font-size:18px;font-weight:800}
+  .dpill{font-size:11px;background:#eaf5ee;color:#2f7d4f;border:1px solid #bcdcc8;border-radius:20px;padding:2px 8px;vertical-align:middle;font-weight:400}
+  .drole{color:var(--ink2);font-size:14px;margin:2px 0 8px}
+  .dmeta{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--ink2);background:#fff;border:1px solid var(--line);border-radius:5px;padding:8px;margin-bottom:10px}
+  .dwhy{font-size:13.5px;color:var(--ink2);line-height:1.5}
+  .dsubj{font-weight:800;margin-bottom:8px}
+  .dmail{white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.55;color:var(--ink2);background:#fff;border:1px solid var(--line);border-radius:6px;padding:12px;margin:0 0 10px}
+  .dactions{display:flex;gap:8px}
+  .dbtn{background:#2f7d4f;color:#fff;border-radius:5px;padding:6px 14px;font-size:13px}
+  .dbtn.ghost{background:transparent;color:var(--ink2);border:1px solid var(--line)}
 </style>
 <script src="/favicon.js" defer></script>
 </head>
@@ -68,7 +96,7 @@
     <span class="kicker">Your overnight sales team</span>
     <h1>A sales team that <span class="r">finds its own leads</span> while you sleep.</h1>
     <p>Dawnpipe prospects real companies, writes personalized outreach, and lines it up for your one-tap approval. You review. It does the grind. No lists to buy, no SDR to hire, nothing to set up.</p>
-    <a class="btn red" href="/signup" style="font-size:17px;padding:13px 26px">Get started →</a> <a class="btn ghost" href="#demo" style="font-size:17px;padding:13px 26px">▶ Watch the demo</a>
+    <a class="btn red" href="/signup" style="font-size:17px;padding:13px 26px">Get started →</a> <a class="btn ghost" href="#demo" style="font-size:17px;padding:13px 26px">📞 Talk to the AI</a>
     <div style="margin-top:12px;font-size:14px;color:var(--ink2)">Plans from $99/mo · cancel anytime.</div>
   </div>
 
@@ -135,8 +163,60 @@
 </div></section>
 
 <section id="demo"><div class="wrap">
-  <h2>See it work.</h2>
-  <p style="color:var(--ink2);margin-bottom:22px">Two minutes: paste your website, hit Find leads, and watch verified prospects and written emails land in the approval queue.</p>
+  <h2>Don't take our word for it. Talk to it.</h2>
+  <p style="color:var(--ink2);margin-bottom:24px;font-size:17px">Most software asks you to watch a video. Ours picks up the phone. Call the number below and you'll be talking to the same AI that finds leads and writes the emails — ask it anything, including what it costs and whether it actually works.</p>
+
+  <div class="calldemo">
+    <div class="cd-left">
+      <div class="cd-label">Call the AI right now</div>
+      <a class="cd-num" href="tel:__DEMO_TEL__">__DEMO_NUM__</a>
+      <div class="cd-sub">Answers instantly, 24/7. Ask it what it does, what it costs, or to sign you up.</div>
+      <a class="btn red" href="tel:__DEMO_TEL__" style="margin-top:14px">📞 Call now</a>
+    </div>
+    <div class="cd-right">
+      <div class="cd-try">Try asking it:</div>
+      <ul>
+        <li>&ldquo;What do you actually do?&rdquo;</li>
+        <li>&ldquo;How much is it?&rdquo;</li>
+        <li>&ldquo;Are you a real person?&rdquo;</li>
+        <li>&ldquo;Where do I sign up?&rdquo;</li>
+      </ul>
+      <div class="cd-note">Yes, it will tell you it's an AI. That's the demo.</div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:48px">This is what lands in your queue every morning.</h2>
+  <p style="color:var(--ink2);margin-bottom:20px">A real lead, found by live web research, with a verified email address — and the email written for it. You read it, hit approve, and it sends from your own inbox.</p>
+
+  <div class="demo2">
+    <div class="dcard">
+      <div class="dhead">🎯 PROSPECTOR found</div>
+      <div class="dbody">
+        <div class="dname">Alex Hoffer <span class="dpill">real email ✓</span></div>
+        <div class="drole">Chief Operating Officer · Hoffer Plastics</div>
+        <div class="dmeta">alex.hoffer@hofferplastics.com<br>South Elgin, IL · 350 employees</div>
+        <div class="dwhy"><b>Why now:</b> 365,000 sq ft injection-molding plant running 90+ machines — heat loss on that many lines is exactly the profile utility programs fund.</div>
+      </div>
+    </div>
+    <div class="dcard">
+      <div class="dhead">✉ OUTBOUND wrote</div>
+      <div class="dbody">
+        <div class="dsubj">Question about the molding lines in South Elgin</div>
+        <pre class="dmail">Alex,
+
+Running 90-odd molding machines under one roof, the heat coming off those barrels is usually the biggest line item nobody's measuring.
+
+We insulate them under a utility-funded program — one Illinois plant cut $203K a year in electricity with $0 upfront, plus a rebate cheque.
+
+Worth 15 minutes to see if your lines qualify?
+
+— Alijah</pre>
+        <div class="dactions"><span class="dbtn">✓ Approve</span><span class="dbtn ghost">✗ Reject</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="big-cta" style="margin-top:8px;color:var(--ink2);font-size:14px;text-align:center">Illustrative example. Your leads are found live for your business, not from a stock list.</div>
+
   __DEMO_VIDEO__
 </div></section>
 
