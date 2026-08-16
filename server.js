@@ -528,6 +528,25 @@ function demoTel() {
     ? `(${tel.slice(2, 5)}) ${tel.slice(5, 8)}-${tel.slice(8)}` : (raw || tel);
   return { tel, pretty };
 }
+/**
+ * Does this account have a subscription the Stripe portal can actually manage?
+ *
+ * Deliberately does NOT consult account.stripeSubscriptionId. That field only
+ * started being written yesterday and nothing backfills it, so every customer
+ * who subscribed before then has it undefined — and requiring it sent exactly
+ * the people we were protecting (a live subscriber whose card had bounced)
+ * back through Checkout to start a SECOND subscription alongside the one
+ * Stripe was still retrying. Status is the thing that is always populated.
+ *
+ * Terminal states fall through to Checkout on purpose: the portal cannot
+ * create a subscription, so routing a churned customer there leaves them on an
+ * invoice-history page with no way to buy.
+ */
+function canManageBilling(account) {
+  if (!account || !account.stripeCustomerId) return false;
+  return stripe.isPaid(account) || stripe.DUNNING.includes(account.subStatus);
+}
+
 function withDemoTel(page) {
   const { tel, pretty } = demoTel();
   // No line provisioned (or mid-swap): point the phone CTAs at signup instead
@@ -1059,6 +1078,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/billing') {
       if (!account) return redirect(res, '/login');
       if (!account.stripeCustomerId) return redirect(res, '/checkout?tier=starter');
+      // Same rule as /checkout. Kept in one helper because these two routes
+      // drifted apart once already: the portal fix landed on /checkout only,
+      // leaving /billing dead-ending churned customers it could not sell to.
+      if (!canManageBilling(account)) return redirect(res, '/checkout?tier=' + (account.tier || 'starter'));
       try { return redirect(res, await stripe.createPortal(account)); }
       catch (e) { return html(res, `<p style="font-family:system-ui;padding:40px">Couldn't open billing: ${e.message} <a href="/app">Back</a></p>`); }
     }
@@ -1066,21 +1089,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/checkout') {
       if (!stripe.configured()) return html(res, `<p style="font-family:system-ui;padding:40px">Billing isn't configured yet. Set STRIPE_* in .env, or use DEV_UNLOCK=1 for testing. <a href="/app">Back</a></p>`);
       const tier = url.searchParams.get('tier') || 'starter';
-      // Already subscribed? Change the existing plan rather than starting a
-      // second one that bills alongside it.
-      // ANY existing Stripe customer goes to the portal, not just an active
-      // one. Gating this on isPaid() sent past_due customers back through
-      // Checkout, which is exactly the population most likely to click it —
-      // they were locked out and told to pick a plan — and it started a second
-      // subscription billing alongside the one Stripe was still retrying.
-      // Portal only when there is a LIVE subscription for it to manage. The
-      // portal cannot create one, so sending a churned customer there dead-ends
-      // them on an invoice-history page with nothing to buy — they physically
-      // could not give us money. Terminal states fall through to Checkout,
-      // which reuses their existing customer id, so no duplicate customer and
-      // no second live subscription.
-      const manageable = stripe.isPaid(account) || stripe.DUNNING.includes(account.subStatus);
-      if (account.stripeCustomerId && account.stripeSubscriptionId && manageable) {
+      // Anyone with a subscription worth managing goes to the portal; anyone
+      // genuinely finished falls through to Checkout so they can buy again.
+      if (account.stripeCustomerId && canManageBilling(account)) {
         try { return redirect(res, await stripe.createPortal(account)); }
         catch (e) {
           // Do NOT fall through to Checkout. A transient portal failure would
@@ -1329,11 +1340,15 @@ const server = http.createServer(async (req, res) => {
         const from = vcfg.number || (stripe.isOwner(account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
         const to = (f.to || '').trim();
         if (!to) return json(res, { error: 'Enter the number to call (E.164 format, e.g. +13125550123).' }, 400);
+        // Plan BEFORE number. A tier without phone calls can never have a
+        // number, so checking the number first told them to "get your phone
+        // number" — sending them to buy a line their plan cannot use, instead
+        // of saying their plan doesn't include calling.
+        const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
+        if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
         const profile = db.getProfile(acc, vcfg.profileId) || db.getProfiles(acc)[0];
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
-        const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
-        if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         // DO NOT CALL is absolute and legally binding. Checked at the dial
         // boundary so no route can place a call to someone who opted out.
         const dnc = suppress.isPhoneSuppressed(acc, to);

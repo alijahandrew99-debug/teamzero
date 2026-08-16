@@ -569,28 +569,36 @@ async function load(){
   $('ownerBadge').style.display=STATE.isOwner?'':'none';
   // trial meter — show what's left so the upgrade ask lands after real value
   const u=STATE.usage||{};
-  if(!STATE.locked && !u.unlimited && u.plan==='trial'){
+  // A customer in dunning is NOT on a free trial. plans.usage() doesn't know
+  // about grace, so it reports them as trial with 0 of 0 leads — telling
+  // someone whose card just bounced that they are on a free trial with no card
+  // needed, directly above a bar asking them to update their card.
+  if(!STATE.dunning && !STATE.locked && !u.unlimited && u.plan==='trial'){
     $('trialbar').style.display='';
     $('trialmsg').innerHTML=`✨ <b>Free trial</b> — ${u.remaining} of ${u.limit} free leads left. No card needed.`;
-  } else if(!STATE.locked && !u.unlimited && u.isPro && u.remaining<=50){
+  } else if(!STATE.dunning && !STATE.locked && !u.unlimited && u.isPro && u.remaining<=50){
     $('trialbar').style.display='';
     $('trialmsg').innerHTML=`<b>${u.tierName}</b> — ${u.remaining} of ${u.limit} leads left this month.`;
   } else $('trialbar').style.display='none';
-  if(STATE.locked&&u.isPro)$('lockmsg').innerHTML=`⚑ <b>${u.tierName}: you've used all ${u.limit} leads this month.</b> Resets next month, or upgrade for more.`;
-  // A declined card is not a pricing decision. Telling these customers to
-  // "choose a plan" sent them back through Checkout and billed them a second
-  // time alongside the subscription Stripe was still retrying.
+
+  // The lockbar is assigned in FULL every time — message, button label and
+  // handler together. Rewriting only the button inside the dunning branch left
+  // it saying "Update your card" forever, so a customer who fixed their card
+  // and later ran out of leads was sent to billing instead of to a plan.
+  const bar=$('lockbar'), btn=bar?bar.querySelector('button'):null;
+  let lockHtml='⚑ <b>Set up your business below — that part is free.</b> Pick a plan when you are ready to hit "Find leads."';
+  let btnLabel='Choose a plan →', btnGo=()=>showUpgrade();
   if(STATE.dunning){
-    const bar=$('lockbar');
-    if(bar){
-      bar.style.display='';
-      $('lockmsg').innerHTML=STATE.dunning.inGrace
-        ? `⚑ <b>Your card was declined.</b> Everything keeps running while you sort it — update your card and nothing is interrupted.`
-        : `⚑ <b>Your card is still declining.</b> Update it to switch your team back on.`;
-      const btn=bar.querySelector('button');
-      if(btn){btn.textContent='Update your card →';btn.onclick=()=>{location.href='/billing';};}
-    }
+    bar.style.display='';
+    lockHtml=STATE.dunning.inGrace
+      ? `⚑ <b>Your card was declined.</b> Everything keeps running while you sort it — update your card and nothing is interrupted.`
+      : `⚑ <b>Your card is still declining.</b> Update it to switch your team back on.`;
+    btnLabel='Update your card →'; btnGo=()=>{location.href='/billing';};
+  } else if(STATE.locked&&u.isPro){
+    lockHtml=`⚑ <b>${u.tierName}: you've used all ${u.limit} leads this month.</b> Resets next month, or upgrade for more.`;
   }
+  $('lockmsg').innerHTML=lockHtml;
+  if(btn){btn.textContent=btnLabel;btn.onclick=btnGo;}
   $('aimode').textContent='AI: '+STATE.aiMode;
   const sel=$('profileSel');
   // On a fresh page load sel.value is empty, so fall back to the business you
@@ -625,12 +633,19 @@ function renderHealth(){
 
   // Only claim the phone is answering when the plan includes it AND it is on.
   if(u.voice&&u.voice.included){
-    // A line they do not have cannot be answering. Before per-customer numbers
-    // this was true by accident (everyone shared the server's number); now it
-    // has to be checked, or the bar reports green while nothing rings.
-    if(v.enabled&&v.configured&&v.number)chip('ok','Phone answering');
-    else if(!v.number)chip('bad','No phone number yet',"showTab('voice')");
-    else chip('unknown','Phone not switched on',"showTab('voice')");
+    // Green here has to mean "a real caller right now gets the agent". Three
+    // separate things can each break that while the other two look fine: no
+    // number, not switched on, or minutes exhausted — the last one degrades
+    // the line to an answering machine silently, which is the worst version
+    // because nothing on screen changes.
+    const mins=(typeof u.voice.remaining==='number')?u.voice.remaining:null;
+    if(!v.number)chip('bad','No phone number yet',"showTab('voice')");
+    else if(!(v.enabled&&v.configured))chip('unknown','Phone not switched on',"showTab('voice')");
+    else if(mins!==null&&mins<=0)chip('bad','Out of phone minutes — taking messages only','showUpgrade()');
+    else{
+      chip('ok','Phone answering');
+      if(mins!==null&&u.voice.limit)chip(mins<=u.voice.limit*0.15?'bad':'ok',`${mins} of ${u.voice.limit} phone min left`,mins<=u.voice.limit*0.15?'showUpgrade()':'');
+    }
   }
 
   const pend=(STATE.queue||[]).filter(q=>q.status!=='rejected'&&q.status!=='sent'&&q.status!=='approved').length;
@@ -755,11 +770,20 @@ function renderVoice(){
   // Status is about THEIR line now, not our server plumbing. Whether our
   // Twilio keys are set is our problem, so it only surfaces as a plain
   // "phone isn't available" rather than a list of env vars to go and add.
+  // "Your AI is answering X" has to be earned by entitlement, not by the
+  // presence of a number string. A plan without calls, a declined card or an
+  // exhausted minute balance each leave that sentence a lie.
+  const vu=(STATE.usage&&STATE.usage.voice)||{};
+  const vmins=(typeof vu.remaining==='number')?vu.remaining:null;
   $('vStatus').innerHTML = !v.configured
     ? `<div class="warnbox bad">⚠ Phone service is temporarily unavailable. Nothing you need to do — we're on it.</div>`
-    : (v.number
-        ? `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b></div>`
-        : `<div class="warnbox">Pick your number below and your AI starts answering it right away.</div>`);
+    : !vu.included
+      ? `<div class="warnbox">Your plan doesn't include the phone agent. <a href="#" onclick="showUpgrade();return false">See plans with calling →</a></div>`
+      : !v.number
+        ? `<div class="warnbox">Pick your number below and your AI starts answering it right away.</div>`
+        : (vmins!==null&&vmins<=0)
+          ? `<div class="warnbox bad">⚠ Out of phone minutes this month — <b>${esc(v.number)}</b> is taking messages instead of handling calls. <a href="#" onclick="showUpgrade();return false">Add minutes →</a></div>`
+          : `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b></div>`;
   if(_dirty)return;                             // don't clobber unsaved edits
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
