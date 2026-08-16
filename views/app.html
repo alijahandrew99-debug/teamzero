@@ -19,6 +19,18 @@
   .lockbar b{color:#fff}.lockbar button{margin-left:auto}
   .trialbar{background:#fff7e6;border:1px solid #e8d3a8;color:#7a5310;border-radius:8px;padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;font-size:14px}
   .trialbar b{color:#5c3f0c}
+  .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .calhead{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink2);text-align:center;padding:4px 0}
+  .calday{min-height:86px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:5px 6px;cursor:pointer;font-size:12px;position:relative}
+  .calday:hover{border-color:var(--ink)}
+  .calday.dim{opacity:.38;background:var(--paper2)}
+  .calday.today{border:2px solid var(--red)}
+  .calday.sel{outline:2px solid var(--ink)}
+  .calday .dn{font-weight:700;font-size:12px;color:var(--ink2)}
+  .calday.today .dn{color:var(--red)}
+  .calchip{margin-top:3px;background:#eaf5ee;border:1px solid #bcdcc8;color:#1f5c39;border-radius:4px;padding:1px 5px;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .calchip.tbc{background:#fff4e0;border-color:#e8d3a8;color:#7a5310}
+  .calmore{font-size:10px;color:var(--ink2);margin-top:2px}
   .pipe{display:flex;gap:0;border-bottom:1px solid var(--line);background:#fff}
   .pcell{flex:1;text-align:center;padding:9px 4px;border-right:1px solid var(--line)}
   .pcell:last-child{border-right:0}
@@ -117,6 +129,7 @@
   <button class="tab active" id="tabBusinessBtn" onclick="showTab('business')">🏢 Your Business <span class="dot hide" id="bizDot"></span></button>
   <button class="tab" id="tabDeskBtn" onclick="showTab('desk')">🎯 Sales Desk</button>
   <button class="tab" id="tabVoiceBtn" onclick="showTab('voice')">📞 Voice SDR</button>
+  <button class="tab" id="tabCalBtn" onclick="showTab('calendar')">📅 Calendar</button>
 </div>
 
 <div class="wrap">
@@ -250,6 +263,12 @@
           <div class="field"><label>SMTP server</label><input id="sm_host" placeholder="smtp.gmail.com" value="smtp.gmail.com"></div>
           <div class="field"><label>Minimum gap between sends (seconds)</label><div class="hint">Spacing protects your reputation. 25–60 is sensible.</div><input id="sm_delay" type="number" min="0" value="25"></div>
           <div class="field"><label>Max sends per day</label><div class="hint">Keep low on a new mailbox and ramp up.</div><input id="sm_cap" type="number" min="1" value="50"></div>
+        </div>
+        <div class="field"><label>When to send</label>
+          <select id="sm_window" style="max-width:340px">
+            <option value="business">Their business hours (weekdays 8am-5pm their time) — best reply rates</option>
+            <option value="anytime">Any time — send the moment I hit the button</option>
+          </select>
         </div>
         <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><button class="sm ghost" onclick="testSmtp()" id="smTestBtn">Test connection</button><span class="muted" id="smMsg"></span></div>
       </div>
@@ -401,6 +420,23 @@
   </div>
 </div>
 
+<div id="tab-calendar" class="hide">
+  <div class="card">
+    <h2><span class="agent">CALENDAR</span> <span id="calTitle"></span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="sm ghost" onclick="calShift(-1)">← Prev</button>
+        <button class="sm ghost" onclick="calToday()">Today</button>
+        <button class="sm ghost" onclick="calShift(1)">Next →</button>
+      </span>
+    </h2>
+    <div class="body">
+      <div class="calgrid" id="calHead"></div>
+      <div class="calgrid" id="calDays"></div>
+      <div id="calDetail" style="margin-top:14px"></div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <script>
 let STATE={profiles:[],leads:[],queue:[],activity:[]};let curTab='business';
@@ -413,11 +449,14 @@ function showTab(t){curTab=t;
   $('tab-business').classList.toggle('hide',t!=='business');
   $('tab-desk').classList.toggle('hide',t!=='desk');
   $('tab-voice').classList.toggle('hide',t!=='voice');
+  $('tab-calendar').classList.toggle('hide',t!=='calendar');
   $('tabBusinessBtn').classList.toggle('active',t==='business');
   $('tabDeskBtn').classList.toggle('active',t==='desk');
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
+  $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
   if(t==='voice'){renderVoice();loadCalls();loadAppointments();}
+  if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
   let r;
@@ -528,7 +567,7 @@ const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_hours','v_faq',
 // profile form: type your email, tab to the password box, and 20s later the
 // email field snapped back to the saved value — so Connect verified the new
 // password against the OLD address and Gmail refused it.
-const SETTINGS_FIELDS=['sm_user','sm_fromName','sm_host','sm_delay','sm_cap','sm_pass','sch_time','sch_count','sch_hints','hk_key','v_testTo'];
+const SETTINGS_FIELDS=['sm_user','sm_fromName','sm_host','sm_delay','sm_cap','sm_pass','sm_window','sch_time','sch_count','sch_hints','hk_key','v_testTo'];
 function markDirty(){_dirty=true;}
 function clearDirty(){_dirty=false;}
 window.addEventListener('DOMContentLoaded',()=>{
@@ -602,6 +641,65 @@ async function testCall(){
   try{const r=await api('/api/voice/testcall',{to});$('vCallMsg').textContent=`Call placed (${r.status}). Your phone should ring.`;setTimeout(loadCalls,8000);}
   catch(e){$('vCallMsg').textContent='';toast(e.message);}
   finally{b.disabled=false;b.textContent=o;}
+}
+let _calBase=new Date(), _calAppts=[], _calSel=null;
+function calShift(n){_calBase=new Date(_calBase.getFullYear(),_calBase.getMonth()+n,1);renderCalendar();}
+function calToday(){_calBase=new Date();_calSel=null;renderCalendar();}
+async function renderCalendar(){
+  try{const r=await fetch('/api/appointments');const d=await r.json();_calAppts=d.appointments||[];}catch(e){_calAppts=[];}
+  const y=_calBase.getFullYear(),m=_calBase.getMonth();
+  $('calTitle').textContent=_calBase.toLocaleString(undefined,{month:'long',year:'numeric'});
+  $('calHead').innerHTML=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>'<div class="calhead">'+d+'</div>').join('');
+  const first=new Date(y,m,1), start=new Date(y,m,1-first.getDay());
+  const todayKey=new Date().toDateString();
+  const byDay={};
+  for(const ap of _calAppts){
+    if(ap.status==='cancelled')continue;
+    const dt=ap.startsAt?new Date(ap.startsAt):null;
+    const key=dt&&!isNaN(dt)?dt.toDateString():'TBC';
+    (byDay[key]=byDay[key]||[]).push(ap);
+  }
+  let cells='';
+  for(let i=0;i<42;i++){
+    const day=new Date(start.getFullYear(),start.getMonth(),start.getDate()+i);
+    const key=day.toDateString();
+    const aps=(byDay[key]||[]).sort((a,b)=>String(a.startsAt).localeCompare(String(b.startsAt)));
+    const chips=aps.slice(0,2).map(ap=>{
+      const t=ap.startsAt?new Date(ap.startsAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}):'';
+      return '<div class="calchip">'+esc(t)+' '+esc(ap.name||'Caller')+'</div>';
+    }).join('')+(aps.length>2?'<div class="calmore">+'+(aps.length-2)+' more</div>':'');
+    cells+='<div class="calday'+(day.getMonth()!==m?' dim':'')+(key===todayKey?' today':'')+(key===_calSel?' sel':'')+'" onclick="calSelect(\''+key+'\')"><div class="dn">'+day.getDate()+'</div>'+chips+'</div>';
+  }
+  $('calDays').innerHTML=cells;
+  // unscheduled bookings (no firm time yet)
+  const tbc=byDay['TBC']||[];
+  let detail='';
+  if(_calSel&&byDay[_calSel]){
+    detail+='<h3 style="margin:0 0 8px">'+esc(new Date(_calSel).toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'}))+'</h3>';
+    detail+=byDay[_calSel].map(ap=>calCard(ap)).join('');
+  }
+  if(tbc.length){
+    detail+='<h3 style="margin:14px 0 8px">Needs a time pinned down</h3>'+tbc.map(ap=>calCard(ap)).join('');
+  }
+  $('calDetail').innerHTML=detail||'<div class="empty">Click a day to see its appointments. Bookings from calls land here automatically.</div>';
+}
+function calSelect(key){_calSel=key;renderCalendar();}
+function calCard(ap){
+  const dt=ap.startsAt?new Date(ap.startsAt):null;
+  const when=dt&&!isNaN(dt)?dt.toLocaleString(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):(ap.whenText||'time TBC');
+  const gcal='https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent((ap.name||'Caller')+' — '+(ap.reason||'callback'))
+    +(dt?'&dates='+dt.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'')+'/'+new Date(dt.getTime()+1800000).toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,''):'')
+    +'&details='+encodeURIComponent('Booked by Dawnpipe. Phone: '+(ap.phone||''));
+  return '<div class="qitem"><div class="row" style="justify-content:space-between">'
+    +'<div><b>'+esc(when)+'</b> — '+esc(ap.name||'Caller')+(ap.company?' · '+esc(ap.company):'')
+    +'<div class="muted">'+esc(ap.phone||'')+(ap.email?' · '+esc(ap.email):'')+' · '+esc(ap.reason||'')+'</div></div>'
+    +'<span class="pill '+(ap.status==='done'?'sent':'approved')+'">'+esc(ap.status||'booked')+'</span></div>'
+    +'<div class="row" style="margin-top:7px">'
+    +(ap.startsAt?'<a href="/api/appointments/ics?id='+ap.id+'"><button class="sm ghost">📥 Outlook / Apple (.ics)</button></a>'
+    +'<a href="'+gcal+'" target="_blank" rel="noopener"><button class="sm ghost">Google Calendar</button></a>':'')
+    +(ap.status!=='done'?'<button class="sm ghost" onclick="apStatus(\''+ap.id+'\',\'done\');renderCalendar()">Mark done</button>'
+    +'<button class="sm ghost" onclick="apStatus(\''+ap.id+'\',\'cancelled\');renderCalendar()">Cancel</button>':'')
+    +'</div></div>';
 }
 async function loadDeskAppointments(){
   try{
@@ -890,7 +988,7 @@ function fillSettings(){
   $('schMsg').textContent=s.enabled?`On — nightly at ${s.time||'02:00'}`:'';
   const m=STATE.smtp||{};
   set('sm_user',m.user||'');set('sm_fromName',m.fromName||'');set('sm_host',m.host||'smtp.gmail.com');
-  set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);
+  set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);set('sm_window',STATE.sendWindow||'business');
   $('smMsg').textContent=m.connected?`Connected as ${m.user} ✓`:'Not connected — you will send by hand';
   const ed=STATE.emailData||{};
   renderWarmup();
@@ -947,7 +1045,7 @@ async function saveSmtp(){
   const b=$('smBtn');b.disabled=true;const o=b.textContent;b.textContent='Verifying…';
   try{
     await api('/api/settings/smtp',{user:$('sm_user').value,pass:$('sm_pass').value,fromName:$('sm_fromName').value,
-      host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,verify:!!$('sm_pass').value});
+      host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,sendWindow:$('sm_window').value,verify:!!$('sm_pass').value});
     const hadPass=!!$('sm_pass').value;$('sm_pass').value='';
     $('smMsg').textContent=hadPass?'Mailbox connected ✓':'Settings updated ✓';
     toast(hadPass?'Mailbox connected':'Settings updated');clearDirty();await load();

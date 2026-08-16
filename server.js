@@ -354,7 +354,8 @@ function startSendJob(account, profileId) {
             continue;
           }
           // Land in their inbox while they're at their desk, in THEIR timezone.
-          const bh = sending.withinBusinessHours(lead, {});
+          // The user can turn the hold off — their call, spelled out in the UI.
+          const bh = account.sendWindow === 'anytime' ? { ok: true } : sending.withinBusinessHours(lead, {});
           if (!bh.ok) {
             db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Holding ${it.to} — ${bh.reason}` });
             job.deferred++; job.done++;
@@ -414,7 +415,7 @@ function startSendJob(account, profileId) {
       // Never finish silently at "sent 0". If everything was held for business
       // hours or blocked, say so — otherwise it looks like the product failed.
       if (!job.sent) {
-        if (job.deferred) job.note = `Nothing sent yet — ${job.deferred} held until their local business hours. Run again during 8am-5pm their time and they'll go.`;
+        if (job.deferred) job.note = `Nothing sent yet — ${job.deferred} held for their local business hours (weekdays 8am-5pm their time; replies are ~3x higher then). Want them out now anyway? Flip "When to send" to "Any time" in the SENDING settings and hit send again.`;
         else if (job.blocked) job.note = `Nothing sent — ${job.blocked} draft(s) held because the address isn't verified. Use "Clear guesses" or re-run Find leads.`;
         else if (job.total === 0) job.note = 'Nothing to send — approve some drafts first.';
       }
@@ -1009,6 +1010,7 @@ const server = http.createServer(async (req, res) => {
           smtp: account.smtp ? { host: account.smtp.host, port: account.smtp.port, user: account.smtp.user,
             fromName: account.smtp.fromName, fromEmail: account.smtp.fromEmail, connected: !!account.smtp.pass } : { connected: false },
           sendDelaySec: account.sendDelaySec ?? 25,
+          sendWindow: account.sendWindow || 'business',
           dailyCap: account.dailyCap ?? 50,
           sentToday: (account.sentToday && account.sentToday.date === db.today()) ? account.sentToday.count : 0,
           // key itself is never echoed back — connected flag only
@@ -1118,6 +1120,22 @@ const server = http.createServer(async (req, res) => {
         if (f.notes !== undefined) patch.notes = f.notes;
         const a = db.updateAppointment(acc, f.id, patch);
         return json(res, { ok: !!a, appointment: a });
+      }
+
+      // Download one appointment as a calendar file — opens straight into
+      // Outlook, Google Calendar, or Apple Calendar. Integration without OAuth.
+      if (p === '/api/appointments/ics' && req.method === 'GET') {
+        const appt = db.getAppointments(acc).find((x) => x.id === url.searchParams.get('id'));
+        if (!appt || !appt.startsAt) return json(res, { error: 'No appointment (or no time set).' }, 404);
+        const ics = notify.buildICS({
+          title: `${appt.name || 'Caller'}${appt.company ? ` (${appt.company})` : ''} — ${appt.reason || 'callback'}`,
+          description: `Booked by your Dawnpipe AI.\nPhone: ${appt.phone || '-'}\n${appt.email ? 'Email: ' + appt.email + '\n' : ''}Their words: ${appt.whenText || '-'}`,
+          startsAt: appt.startsAt, minutes: 30, organiserEmail: account.email, uid: appt.id,
+        });
+        if (!ics) return json(res, { error: 'Could not build the invite.' }, 400);
+        res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8',
+          'Content-Disposition': `attachment; filename="dawnpipe-${appt.id}.ics"` });
+        return res.end(ics);
       }
 
       // ---- voice settings + calls ----
@@ -1273,6 +1291,7 @@ const server = http.createServer(async (req, res) => {
           ? prev
           : sending.startWarmup(newDomain, prev.ceiling);
         db.updateAccount(acc, { smtp: cfg, warmup,
+          sendWindow: f.sendWindow === 'anytime' ? 'anytime' : 'business',
           sendDelaySec: Math.max(0, Number(f.sendDelaySec ?? account.sendDelaySec ?? 25)),
           dailyCap: Math.max(1, Number(f.dailyCap ?? account.dailyCap ?? 50)) });
         return json(res, { ok: true, warmup: sending.warmupStatus(warmup) });
