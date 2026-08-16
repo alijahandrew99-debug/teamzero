@@ -7,7 +7,9 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import simpleSplit
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dawnpipe-Cold-Call-Script.pdf')
+VERSION = 'v2'
+STAMP = 'v2  ·  16 Aug 2026'
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), f'Dawnpipe-Cold-Call-Script-{VERSION}.pdf')
 
 PAPER = (0.957, 0.945, 0.918)
 INK   = (0.102, 0.094, 0.082)
@@ -229,6 +231,9 @@ c.drawString(M, 35, 'dawnpipe.com')
 c.setFont(SERIF, 9.6)
 c.setFillColorRGB(*INK2)
 c.drawRightString(W - M, 35, 'Demo line, always on  ·  (213) 682-2616')
+c.setFont(SERIF, 7.5)
+c.setFillColorRGB(0.62, 0.60, 0.56)
+c.drawString(M, 23, STAMP)
 
 c.showPage()
 c.save()

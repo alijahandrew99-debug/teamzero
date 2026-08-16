@@ -6,7 +6,12 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import simpleSplit
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dawnpipe-One-Pager.pdf')
+# Version is stamped into the filename AND printed on the page. Two revisions
+# went out under one filename and there was no way to tell them apart on
+# screen, so the reader could not know which one they had open.
+VERSION = 'v2'
+STAMP = 'v2  ·  16 Aug 2026'
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), f'Dawnpipe-One-Pager-{VERSION}.pdf')
 
 PAPER = (0.957, 0.945, 0.918)   # #f4f1ea
 INK   = (0.102, 0.094, 0.082)   # #1a1815
@@ -208,6 +213,9 @@ c.drawString(M, 36, 'dawnpipe.com')
 c.setFont(SERIF, 10)
 c.setFillColorRGB(*INK2)
 c.drawRightString(W - M, 36, 'Built for the trades  ·  plumbing, HVAC, roofing, electrical and anyone who books work')
+c.setFont(SERIF, 7.5)
+c.setFillColorRGB(0.62, 0.60, 0.56)
+c.drawString(M, 24, STAMP)
 
 c.showPage()
 c.save()
