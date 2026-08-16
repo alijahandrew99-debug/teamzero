@@ -15,6 +15,7 @@ const dnsauth = require('./lib/dnsauth');
 const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
 const voice = require('./lib/voice');
+const numbers = require('./lib/numbers');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -1252,7 +1253,12 @@ const server = http.createServer(async (req, res) => {
         const v = {
           ...cur,
           enabled: f.enabled !== false,
-          number: (f.number || cur.number || process.env.TWILIO_PHONE_NUMBER || '').trim(),
+          // The number is NOT client-settable. It used to default to the shared
+          // TWILIO_PHONE_NUMBER, so every account that opened this tab stamped
+          // the same number on itself and inbound calls became a race over who
+          // signed up first. It is now only ever written by provisioning.
+          number: (cur.number || '').trim(),
+          numberSid: cur.numberSid || '',
           profileId: f.profileId || cur.profileId || '',
           agentName: (f.agentName ?? cur.agentName ?? 'Sarah').trim(),
           greeting: (f.greeting ?? cur.greeting ?? '').trim(),
@@ -1278,10 +1284,13 @@ const server = http.createServer(async (req, res) => {
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
         const vcfg = account.voice || {};
-        const from = vcfg.number || process.env.TWILIO_PHONE_NUMBER || '';
+        // Only the owner account may fall back to the shared server number.
+        // For a customer, dialling out from a line they do not own means any
+        // callback rings a different company — so they use their own or none.
+        const from = vcfg.number || (stripe.isOwner(account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
         const to = (f.to || '').trim();
         if (!to) return json(res, { error: 'Enter the number to call (E.164 format, e.g. +13125550123).' }, 400);
-        if (!from) return json(res, { error: 'No Twilio number configured.' }, 400);
+        if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
         const profile = db.getProfile(acc, vcfg.profileId) || db.getProfiles(acc)[0];
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
         const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
@@ -1304,6 +1313,54 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      // ---- PHONE NUMBER PROVISIONING: one line per customer ----
+      // Numbers are rented on OUR Twilio account, so buying is gated on a plan
+      // that actually includes voice — otherwise a $49 account could rent a
+      // number every month at our expense.
+      if (p === '/api/voice/numbers/search' && req.method === 'GET') {
+        if (!voice.configured()) return json(res, { error: 'Twilio is not configured on the server yet.' }, 400);
+        const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
+        if (!vAllow.ok) return json(res, { error: vAllow.reason, needUpgrade: true }, 402);
+        try {
+          return json(res, { numbers: await numbers.search({ areaCode: url.searchParams.get('areaCode') || '' }) });
+        } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      if (p === '/api/voice/numbers/buy' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!voice.configured()) return json(res, { error: 'Twilio is not configured on the server yet.' }, 400);
+        const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
+        if (!vAllow.ok) return json(res, { error: vAllow.reason, needUpgrade: true }, 402);
+        const vcfg = account.voice || {};
+        // Renting a second number for an account that already has one is money
+        // burnt every month for a line nobody answers.
+        if (vcfg.numberSid) return json(res, { error: 'This business already has a number. Release it first if you want a different one.' }, 400);
+        const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+        try {
+          const got = await numbers.buy({ phoneNumber: f.phoneNumber, base,
+            friendlyName: `Dawnpipe — ${account.email}` });
+          // Claimed by another account = a double-buy race. Hand it straight
+          // back rather than leave two accounts fighting over one line.
+          const clash = db.accountByVoiceNumber(got.phoneNumber);
+          if (clash && clash.id !== acc) {
+            await numbers.release(got.sid).catch(() => {});
+            return json(res, { error: 'That number was just taken. Try another.' }, 409);
+          }
+          db.updateAccount(acc, { voice: { ...vcfg, number: got.phoneNumber, numberSid: got.sid, enabled: true } });
+          db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${got.phoneNumber} provisioned and pointed at Dawnpipe` });
+          return json(res, { ok: true, number: got.phoneNumber });
+        } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      if (p === '/api/voice/numbers/release' && req.method === 'POST') {
+        const vcfg = account.voice || {};
+        if (!vcfg.numberSid) return json(res, { error: 'No number to release.' }, 400);
+        try {
+          await numbers.release(vcfg.numberSid);
+          db.updateAccount(acc, { voice: { ...vcfg, number: '', numberSid: '', enabled: false } });
+          db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${vcfg.number} released` });
+          return json(res, { ok: true });
+        } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+
       // ---- COLD CALL RUN: work the list, one call at a time ----
       // The email side has had a "find and send" button since day one; the phone
       // side only ever had a single manual test call, so the outbound voice agent
@@ -1314,8 +1371,11 @@ const server = http.createServer(async (req, res) => {
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
         const vcfg = account.voice || {};
-        const from = vcfg.number || process.env.TWILIO_PHONE_NUMBER || '';
-        if (!from) return json(res, { error: 'No Twilio number configured.' }, 400);
+        // Only the owner account may fall back to the shared server number.
+        // For a customer, dialling out from a line they do not own means any
+        // callback rings a different company — so they use their own or none.
+        const from = vcfg.number || (stripe.isOwner(account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
+        if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
         const profileId = f.profileId || vcfg.profileId || '';
         const profile = db.getProfile(acc, profileId) || db.getProfiles(acc)[0];
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);

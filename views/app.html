@@ -395,14 +395,30 @@
 
 <div id="tab-voice" class="hide">
   <div class="card">
-    <h2><span class="agent">SETUP</span> Point Twilio at Dawnpipe</h2>
+    <h2><span class="agent">YOUR NUMBER</span> The line your AI answers</h2>
     <div class="body">
       <div id="vStatus"></div>
-      <p class="muted" style="margin:10px 0 6px">In Twilio → Phone Numbers → your number → <b>Voice Configuration</b>, set <b>"A call comes in"</b> to <b>Webhook</b> with this exact URL and <b>HTTP POST</b>:</p>
-      <div class="dval" id="vHookIn">—</div>
-      <p class="muted" style="margin:10px 0 6px">And set <b>"Call status changes"</b> to:</p>
-      <div class="dval" id="vHookStatus">—</div>
-      <div class="warnbox" style="margin-top:10px">Trial Twilio accounts can only call <b>verified</b> numbers and play a trial notice first. Verify your own mobile under Phone Numbers → Verified Caller IDs to test.</div>
+      <!-- This card used to be Twilio setup instructions. Nobody buying an AI
+           receptionist should be told to open a telephony console and paste
+           webhook URLs into a Voice Configuration screen — we buy the number
+           and wire it up in one request. -->
+      <div id="numHave" class="hide">
+        <p class="muted" style="margin:0 0 6px">This is your business line. Calls to it are answered by your AI, and calls it makes show this number.</p>
+        <div class="dval" id="numMine" style="font-size:20px;font-weight:700">—</div>
+        <div class="row" style="margin-top:10px">
+          <button class="sm ghost" onclick="releaseNumber()" id="numRelBtn">Give this number up</button>
+          <span class="muted">Forwarding your existing business number to this one keeps the number your customers already know.</span>
+        </div>
+      </div>
+      <div id="numGet">
+        <p class="muted" style="margin:0 0 10px">Pick a number and your AI starts answering it immediately — nothing to configure.</p>
+        <div class="row">
+          <label class="muted" for="numArea">Area code (optional)</label>
+          <input id="numArea" placeholder="312" maxlength="3" style="width:90px;margin:0">
+          <button onclick="findNumbers()" id="numFindBtn">Show me numbers</button>
+        </div>
+        <div id="numList" style="margin-top:12px"></div>
+      </div>
     </div>
   </div>
 
@@ -511,7 +527,7 @@ function showTab(t){curTab=t;saveUI();
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();renderCallable();loadCalls();loadAppointments();}
+  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadCalls();loadAppointments();}
   if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
@@ -705,12 +721,14 @@ async function deleteProfile(){
 // ---- voice ----
 function renderVoice(){
   const v=(STATE.voice)||{};
-  const base=v.webhookBase||'';
-  $('vHookIn').textContent=base?base+'/voice/incoming':'Set PUBLIC_URL in Render first';
-  $('vHookStatus').textContent=base?base+'/voice/status':'Set PUBLIC_URL in Render first';
-  $('vStatus').innerHTML = v.configured
-    ? `<div class="okbox">✓ Twilio keys detected on the server${v.envNumber?` · number ${esc(v.envNumber)}`:''}</div>`
-    : `<div class="warnbox bad">⚠ Twilio keys not found. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER in Render → Environment, then redeploy.</div>`;
+  // Status is about THEIR line now, not our server plumbing. Whether our
+  // Twilio keys are set is our problem, so it only surfaces as a plain
+  // "phone isn't available" rather than a list of env vars to go and add.
+  $('vStatus').innerHTML = !v.configured
+    ? `<div class="warnbox bad">⚠ Phone service is temporarily unavailable. Nothing you need to do — we're on it.</div>`
+    : (v.number
+        ? `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b></div>`
+        : `<div class="warnbox">Pick your number below and your AI starts answering it right away.</div>`);
   if(_dirty)return;                             // don't clobber unsaved edits
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
@@ -740,11 +758,49 @@ async function saveVoice(){
   try{
     await api('/api/voice/save',{enabled:true,agentName:$('v_agentName').value,profileId:$('v_profileId').value,
       greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,
-      faq:$('v_faq').value,voicemail:$('v_voicemail').value,number:(STATE.voice||{}).envNumber||'',
+      faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
       ttsVoice:$('v_ttsVoice').value});
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+// ---- your own phone line ----
+function renderNumber(){
+  const v=STATE.voice||{};
+  const have=!!v.number;
+  if($('numHave'))$('numHave').classList.toggle('hide',!have);
+  if($('numGet'))$('numGet').classList.toggle('hide',have);
+  if(have&&$('numMine'))$('numMine').textContent=v.number;
+}
+async function findNumbers(){
+  const b=$('numFindBtn');b.disabled=true;const o=b.textContent;b.textContent='Looking…';
+  try{
+    const area=($('numArea').value||'').replace(/[^0-9]/g,'');
+    const r=await api('/api/voice/numbers/search?areaCode='+encodeURIComponent(area));
+    const list=r.numbers||[];
+    if(!list.length){$('numList').innerHTML='<div class="muted">No numbers free in that area code — try another, or leave it blank.</div>';return;}
+    $('numList').innerHTML=list.map(n=>{
+      const where=[n.locality,n.region].filter(Boolean).join(', ');
+      return `<div class="lead"><b>${esc(n.friendly||n.phoneNumber)}</b>${where?` <span class="muted">${esc(where)}</span>`:''}
+        <button class="sm red" style="margin-left:auto" onclick="buyNumber('${esc(n.phoneNumber)}')">Use this one</button></div>`;
+    }).join('');
+  }catch(e){toast(e.message);$('numList').innerHTML='<div class="muted">'+esc(e.message)+'</div>';}
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function buyNumber(phoneNumber){
+  if(!confirm(`Make ${phoneNumber} your business line?\n\nYour AI answers it from the moment you confirm.`))return;
+  try{
+    const r=await api('/api/voice/numbers/buy',{phoneNumber});
+    toast('Your number is live: '+r.number);
+    await load();renderVoice();renderNumber();
+  }catch(e){toast(e.message);}
+}
+async function releaseNumber(){
+  if(!confirm('Give up this number?\n\nCalls to it will stop reaching you, and you cannot get the same one back.'))return;
+  const b=$('numRelBtn');b.disabled=true;
+  try{await api('/api/voice/numbers/release',{});toast('Number released');await load();renderVoice();renderNumber();}
+  catch(e){toast(e.message);}
+  finally{b.disabled=false;}
 }
 // How many leads could actually be dialled right now. Shown up front so the
 // button never looks broken when the real answer is "none of them have a
