@@ -1073,7 +1073,14 @@ const server = http.createServer(async (req, res) => {
       // Checkout, which is exactly the population most likely to click it —
       // they were locked out and told to pick a plan — and it started a second
       // subscription billing alongside the one Stripe was still retrying.
-      if (account.stripeCustomerId) {
+      // Portal only when there is a LIVE subscription for it to manage. The
+      // portal cannot create one, so sending a churned customer there dead-ends
+      // them on an invoice-history page with nothing to buy — they physically
+      // could not give us money. Terminal states fall through to Checkout,
+      // which reuses their existing customer id, so no duplicate customer and
+      // no second live subscription.
+      const manageable = stripe.isPaid(account) || stripe.DUNNING.includes(account.subStatus);
+      if (account.stripeCustomerId && account.stripeSubscriptionId && manageable) {
         try { return redirect(res, await stripe.createPortal(account)); }
         catch (e) {
           // Do NOT fall through to Checkout. A transient portal failure would

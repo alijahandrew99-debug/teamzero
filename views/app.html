@@ -625,7 +625,11 @@ function renderHealth(){
 
   // Only claim the phone is answering when the plan includes it AND it is on.
   if(u.voice&&u.voice.included){
-    if(v.enabled&&v.configured)chip('ok','Phone answering');
+    // A line they do not have cannot be answering. Before per-customer numbers
+    // this was true by accident (everyone shared the server's number); now it
+    // has to be checked, or the bar reports green while nothing rings.
+    if(v.enabled&&v.configured&&v.number)chip('ok','Phone answering');
+    else if(!v.number)chip('bad','No phone number yet',"showTab('voice')");
     else chip('unknown','Phone not switched on',"showTab('voice')");
   }
 
