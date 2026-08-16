@@ -405,9 +405,33 @@
       <div id="numHave" class="hide">
         <p class="muted" style="margin:0 0 6px">This is your business line. Calls to it are answered by your AI, and calls it makes show this number.</p>
         <div class="dval" id="numMine" style="font-size:20px;font-weight:700">—</div>
-        <div class="row" style="margin-top:10px">
+
+        <div class="row" style="margin-top:14px;align-items:center">
+          <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer">
+            <input type="checkbox" id="v_enabled" onchange="toggleAnswering()" style="width:auto;margin:0">
+            <b id="v_enabledLabel">Answering is ON</b>
+          </label>
+          <span class="muted" id="v_enabledHint">Turn it off and callers get your voicemail instead.</span>
+        </div>
+
+        <!-- The number people already have on their truck and their website is
+             the one they must keep. Forwarding on no-answer is the whole
+             product in one setting: they get first crack at every call, and
+             the AI catches what would otherwise have gone to voicemail. -->
+        <div style="margin-top:16px;border-top:1px dashed var(--line);padding-top:14px">
+          <b>Keep the number you already have</b>
+          <p class="muted" style="margin:6px 0 10px">You don't have to tell anyone a new number. Point your existing business line at this one <b>only when you don't pick up</b> — you still answer everything you can, and the AI catches the rest instead of voicemail.</p>
+          <div class="row" style="gap:8px">
+            <button class="sm" onclick="showFwd('att')">AT&amp;T / T-Mobile</button>
+            <button class="sm" onclick="showFwd('vz')">Verizon</button>
+            <button class="sm" onclick="showFwd('voip')">Office / VoIP line</button>
+            <button class="sm ghost" onclick="showFwd('off')">Turn forwarding off</button>
+          </div>
+          <div id="fwdHow" class="muted" style="margin-top:10px"></div>
+        </div>
+
+        <div class="row" style="margin-top:16px">
           <button class="sm ghost" onclick="releaseNumber()" id="numRelBtn">Give this number up</button>
-          <span class="muted">Forwarding your existing business number to this one keeps the number your customers already know.</span>
         </div>
       </div>
       <div id="numNoPlan" class="hide">
@@ -850,6 +874,57 @@ function renderNumber(){
   if($('numHave'))$('numHave').classList.toggle('hide',!have);
   if($('numGet'))$('numGet').classList.toggle('hide',have||!included);
   if(have&&$('numMine'))$('numMine').textContent=v.number;
+  const on=v.enabled!==false;
+  if($('v_enabled'))$('v_enabled').checked=on;
+  if($('v_enabledLabel'))$('v_enabledLabel').textContent=on?'Answering is ON':'Answering is OFF';
+  if($('v_enabledHint'))$('v_enabledHint').textContent=on
+    ? 'Turn it off and callers get your voicemail instead.'
+    : 'Callers are going to voicemail right now.';
+}
+// Carrier codes vary and change, so these are shown as "dial this, then confirm
+// with your carrier" rather than promised — a wrong code silently sends every
+// call to the wrong place, which is worse than a short phone call to support.
+const FWD={
+  att:{t:'AT&T / T-Mobile (and most GSM carriers)',
+    s:['On the phone with your business line, dial:',
+       'NOANSWER — forward after it rings',
+       'BUSY — forward when you are already on a call',
+       'Press call after each. You will hear a short confirmation tone.']},
+  vz:{t:'Verizon',
+    s:['On the phone with your business line, dial:',
+       'VZ — forwards when busy or unanswered',
+       'Press call. Verizon calls this "Call Forward Busy/No Answer".']},
+  voip:{t:'Office line, VoIP or a landline',
+    s:['These are set in your provider\'s portal, not by dialling a code.',
+       'Look for Call Forwarding, then pick the conditional option — usually "forward on no answer" or "forward when unanswered" — and enter your Dawnpipe number.',
+       'Ring time is worth setting to about 20 seconds: long enough for you to reach it, short enough that the caller does not give up.']},
+  off:{t:'Turning forwarding off',
+    s:['To cancel forwarding on most carriers, dial ##002# and press call.',
+       'On Verizon, dial *73 and press call.',
+       'Your calls then go back to your own voicemail exactly as before.']},
+};
+function showFwd(k){
+  const f=FWD[k]; if(!f)return;
+  const mine=((STATE.voice||{}).number)||'your Dawnpipe number';
+  const code=s=>`<code style="background:#fff;border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-size:13px">${esc(s)}</code>`;
+  const body=f.s.map(line=>{
+    if(line.startsWith('NOANSWER'))return '&bull; '+code('*61*'+mine+'#')+' — forward after it rings out';
+    if(line.startsWith('BUSY'))return '&bull; '+code('*67*'+mine+'#')+' — forward when you are already on a call';
+    if(line.startsWith('VZ'))return '&bull; '+code('*71'+mine)+' — forwards when busy or unanswered';
+    return '&bull; '+esc(line);
+  }).join('<br>');
+  $('fwdHow').innerHTML=`<b style="color:var(--ink)">${esc(f.t)}</b><br>${body}`
+    +`<br><span style="font-size:12px">Codes differ between carriers and plans. If the tone does not confirm, ask your carrier for <b>conditional call forwarding on no answer</b> to ${esc(mine)} — that is the exact phrase they need.</span>`;
+}
+async function toggleAnswering(){
+  const on=$('v_enabled').checked;
+  if(!on&&!confirm('Turn answering off?\n\nCallers will get your voicemail instead of the AI until you switch it back on.'))
+    { $('v_enabled').checked=true; return; }
+  try{
+    await api('/api/voice/save',{enabled:on,profileId:(STATE.voice||{}).profileId||''});
+    toast(on?'Answering is on':'Answering is off — callers get voicemail');
+    await load();renderVoice();renderNumber();
+  }catch(e){toast(e.message);$('v_enabled').checked=!on;}
 }
 async function findNumbers(){
   const b=$('numFindBtn');b.disabled=true;const o=b.textContent;b.textContent='Looking…';

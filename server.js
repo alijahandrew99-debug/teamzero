@@ -642,6 +642,16 @@ const server = http.createServer(async (req, res) => {
         const account = db.accountByVoiceNumber(params.To || '');
         if (!account) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
         const vcfg = account.voice || {};
+        // Switched off means switched off. Nothing was reading this flag, so
+        // the owner could turn answering "off" and the AI would keep picking
+        // up regardless. Rejecting the call here lets it fall through to the
+        // caller's normal path — their carrier voicemail — which is exactly
+        // what someone who flips this switch is asking for.
+        if (vcfg.enabled === false) {
+          db.logActivity(account.id, { agent: 'VOICE', msg: `Call from ${params.From || 'unknown'} not answered - answering is switched off` });
+          res.writeHead(486, { 'Content-Type': 'text/plain' });   // Busy Here
+          return res.end('answering disabled');
+        }
         const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
         const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
@@ -1314,6 +1324,12 @@ const server = http.createServer(async (req, res) => {
         const v = {
           ...cur,
           enabled: f.enabled !== false,
+          // Play-along mode for a line whose callers are prospects testing it.
+          // Defaults ON for the owner's line — that IS the demo number on the
+          // website and in the sales script — and off for real customers,
+          // whose callers are genuinely customers.
+          demoMode: (f.demoMode !== undefined) ? !!f.demoMode
+            : (cur.demoMode !== undefined ? cur.demoMode : stripe.isOwner(account)),
           // The number is NOT client-settable. It used to default to the shared
           // TWILIO_PHONE_NUMBER, so every account that opened this tab stamped
           // the same number on itself and inbound calls became a race over who
