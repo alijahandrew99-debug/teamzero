@@ -466,8 +466,10 @@
         <label class="muted" for="vc_count">How many to call now</label>
         <input id="vc_count" type="number" min="1" max="25" value="5" style="width:90px;margin:0">
         <button class="red" onclick="startCallRun()" id="vcBtn">📞 Start calling</button>
+        <button class="sm ghost" onclick="findPhones()" id="vfBtn">Find phone numbers</button>
       </div>
       <div id="vcProgress" class="muted" style="margin-top:10px"></div>
+      <div id="vfProgress" class="muted" style="margin-top:6px"></div>
     </div>
   </div>
 
@@ -812,6 +814,25 @@ function renderCallable(){
   const ready=leads.filter(l=>l.phone&&!l.calledAt).length;
   const called=leads.filter(l=>l.calledAt).length;
   el.textContent=ready?`· ${ready} ready to call`:(called?`· all ${called} called`:'· no phone numbers yet');
+}
+async function findPhones(){
+  const b=$('vfBtn');b.disabled=true;const o=b.textContent;b.textContent='Looking…';
+  try{
+    await api('/api/voice/findphones',{profileId:pid(),limit:25});
+    const poll=async()=>{
+      const s=await api('/api/voice/findphones/status');
+      if(s.status==='idle')return;
+      if(s.status==='running'){
+        $('vfProgress').textContent=`Looking up numbers — ${s.done||0} of ${s.total||0} checked, ${s.found||0} found so far…`;
+        setTimeout(poll,3000);return;
+      }
+      $('vfProgress').textContent=s.note||'Done.';
+      toast(s.note||'Finished');
+      await load();renderCallable();
+      b.disabled=false;b.textContent=o;
+    };
+    poll();
+  }catch(e){toast(e.message);$('vfProgress').textContent=e.message;b.disabled=false;b.textContent=o;}
 }
 async function startCallRun(){
   const n=Number($('vc_count').value)||5;

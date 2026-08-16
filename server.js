@@ -286,6 +286,7 @@ const sendJobs = new Map();
 // One cold-calling run per account at a time — the AI can only hold one
 // conversation, and two overlapping runs would dial the same lead twice.
 const callJobs = new Map();
+const phoneJobs = new Map();
 const activeSends = new Map();
 function startSendJob(account, profileId) {
   const running = activeSends.get(account.id);
@@ -1359,6 +1360,30 @@ const server = http.createServer(async (req, res) => {
           db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${vcfg.number} released` });
           return json(res, { ok: true });
         } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+
+      // ---- backfill phone numbers for leads that predate phone capture ----
+      if (p === '/api/voice/findphones' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!stripe.canSpend(account)) return json(res, { error: 'Your plan is out of room this month.', needUpgrade: true }, 402);
+        const profileId = f.profileId || '';
+        if (phoneJobs.get(acc) && phoneJobs.get(acc).status === 'running') {
+          return json(res, { error: 'Already looking up numbers — give it a minute.' }, 409);
+        }
+        const job = { status: 'running', done: 0, total: 0, found: 0 };
+        phoneJobs.set(acc, job);
+        (async () => {
+          const r = await agents.findPhones(acc, profileId, { limit: Number(f.limit) || 25,
+            onProgress: ({ done, total, found }) => { job.done = done; job.total = total; job.found = found; } });
+          job.status = 'done';
+          job.note = r.found
+            ? `Found ${r.found} number(s) out of ${r.checked} checked.`
+            : `Checked ${r.checked} — no published numbers found. Some businesses simply don't list one.`;
+        })().catch((e) => { job.status = 'error'; job.note = e.message; });
+        return json(res, { ok: true });
+      }
+      if (p === '/api/voice/findphones/status' && req.method === 'GET') {
+        return json(res, phoneJobs.get(acc) || { status: 'idle' });
       }
 
       // ---- COLD CALL RUN: work the list, one call at a time ----
