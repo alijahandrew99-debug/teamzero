@@ -580,11 +580,13 @@ function checkoutReturn(){
   if(CHECKOUT_RESULT==='pending'){
     // Stripe did not confirm a live subscription for this session. Do not
     // claim the payment landed; we genuinely do not know that it did.
-    const bar=$('lockbar');
-    if(bar){
-      bar.style.display='';
-      $('lockmsg').innerHTML='⚑ <b>We could not confirm that payment yet.</b> If your card was charged, nothing is lost — reload in a minute, or email <a href="mailto:support@dawnpipe.com" style="color:inherit;text-decoration:underline">support@dawnpipe.com</a> and we will sort it out by hand.';
-    }
+    // This is a STICKY flag, not a one-off write: load() runs every 20s and
+    // reassigns the lockbar declaratively, so writing the message here alone
+    // meant it vanished within seconds and left the customer on a generic
+    // "pick a plan" screen right after paying.
+    _checkoutPending=true;
+    if($('lockbar'))$('lockbar').style.display='';
+    applyLockbar();
     toast('Checkout finished, but we could not confirm it yet.');
     return;
   }
@@ -598,11 +600,11 @@ function checkoutReturn(){
     // been charged for nothing — so say what happened and how to get it fixed.
     if(++_coTries>20){
       clearInterval(t);
-      const bar=$('lockbar');
-      if(bar){
-        bar.style.display='';
-        $('lockmsg').innerHTML='⚑ <b>Your payment went through, but switching your account on is taking longer than usual.</b> Reload this page in a minute — if it is still locked, email <a href="mailto:support@dawnpipe.com" style="color:inherit;text-decoration:underline">support@dawnpipe.com</a> and we will turn it on by hand.';
-      }
+      // Sticky for the same reason as the pending branch — a plain write here
+      // is erased by the next poll.
+      _checkoutPending=true;
+      if($('lockbar'))$('lockbar').style.display='';
+      applyLockbar();
       toast('Payment received — activation is running slow. Reload in a minute.');
     }
   },2000);
@@ -629,13 +631,27 @@ async function load(){
   // handler together. Rewriting only the button inside the dunning branch left
   // it saying "Update your card" forever, so a customer who fixed their card
   // and later ran out of leads was sent to billing instead of to a plan.
+  applyLockbar();
+}
+// One place decides what the lockbar says, so the 20s poll can re-run it
+// without erasing a state set elsewhere.
+let _checkoutPending=false;
+function applyLockbar(){
+  const u=STATE.usage||{};
   const bar=$('lockbar'), btn=bar?bar.querySelector('button'):null;
   let lockHtml='⚑ <b>Set up your business below — that part is free.</b> Pick a plan when you are ready to hit "Find leads."';
   let btnLabel='Choose a plan →', btnGo=()=>showUpgrade();
-  if(STATE.dunning){
+  if(_checkoutPending&&!(u.isPro)){
+    lockHtml='⚑ <b>We could not confirm that payment yet.</b> If your card was charged, nothing is lost — reload in a minute, or email <a href="mailto:support@dawnpipe.com" style="color:inherit;text-decoration:underline">support@dawnpipe.com</a> and we will switch it on by hand.';
+    btnLabel='Reload'; btnGo=()=>location.reload();
+  } else if(STATE.dunning){
     bar.style.display='';
+    // Be exact about what "grace" actually covers. The phone keeps answering
+    // and drafted email still sends, but finding NEW leads is blocked while
+    // the card is declining — promising nothing is interrupted was the same
+    // silent-degradation problem we fixed on the phone side.
     lockHtml=STATE.dunning.inGrace
-      ? `⚑ <b>Your card was declined.</b> Everything keeps running while you sort it — update your card and nothing is interrupted.`
+      ? `⚑ <b>Your card was declined.</b> Your phone is still answered and anything already drafted can still go out — but finding new leads is paused until the card goes through.`
       : `⚑ <b>Your card is still declining.</b> Update it to switch your team back on.`;
     btnLabel='Update your card →'; btnGo=()=>{location.href='/billing';};
   } else if(STATE.locked&&u.isPro){
@@ -684,7 +700,8 @@ function renderHealth(){
     // because nothing on screen changes.
     const mins=(typeof u.voice.remaining==='number')?u.voice.remaining:null;
     if(!v.number)chip('bad','No phone number yet',"showTab('voice')");
-    else if(!(v.enabled&&v.configured))chip('unknown','Phone not switched on',"showTab('voice')");
+    else if(v.enabled===false)chip('bad','Answering is OFF',"showTab('voice')");
+    else if(!v.configured)chip('unknown','Phone not switched on',"showTab('voice')");
     else if(mins!==null&&mins<=0)chip('bad','Out of phone minutes — taking messages only','showUpgrade()');
     else{
       chip('ok','Phone answering');
@@ -825,9 +842,11 @@ function renderVoice(){
       ? `<div class="warnbox">Your plan doesn't include the phone agent. <a href="#" onclick="showUpgrade();return false">See plans with calling →</a></div>`
       : !v.number
         ? `<div class="warnbox">Pick your number below and your AI starts answering it right away.</div>`
-        : (vmins!==null&&vmins<=0)
-          ? `<div class="warnbox bad">⚠ Out of phone minutes this month — <b>${esc(v.number)}</b> is taking messages instead of handling calls. <a href="#" onclick="showUpgrade();return false">Add minutes →</a></div>`
-          : `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b></div>`;
+        : v.enabled===false
+          ? `<div class="warnbox bad">⚠ Answering is switched OFF — calls to <b>${esc(v.number)}</b> are going to voicemail. Switch it back on below.</div>`
+          : (vmins!==null&&vmins<=0)
+            ? `<div class="warnbox bad">⚠ Out of phone minutes this month — <b>${esc(v.number)}</b> is taking messages instead of handling calls. <a href="#" onclick="showUpgrade();return false">Add minutes →</a></div>`
+            : `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b></div>`;
   if(_dirty)return;                             // don't clobber unsaved edits
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
@@ -855,7 +874,11 @@ function renderVoice(){
 async function saveVoice(){
   const b=$('vSaveBtn');b.disabled=true;
   try{
-    await api('/api/voice/save',{enabled:true,agentName:$('v_agentName').value,profileId:$('v_profileId').value,
+    // Editing the script must NOT switch the line back on. Sending
+    // enabled:true from here meant an owner who turned answering off for a
+    // shutdown, then fixed a typo in the greeting, silently had the AI start
+    // taking live calls again — and the toggle still read OFF.
+    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:$('v_profileId').value,
       greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,

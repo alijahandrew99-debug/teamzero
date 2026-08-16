@@ -118,7 +118,10 @@ setInterval(() => {
 // ---- legal copy ----
 // Plain-English and honest about what the product does. Edit the contact email
 // and company details before you take real payments.
-const LEGAL_UPDATED = 'Last updated: 23 July 2026';
+// Bump this whenever the terms or privacy text changes. Leaving it stale after
+// removing a binding refund commitment left customers who signed up under the
+// old terms with no way to see that anything had changed.
+const LEGAL_UPDATED = 'Last updated: 16 August 2026';
 const LEGAL_TERMS = `
 <h1>Terms of Service</h1><div class="updated">${LEGAL_UPDATED}</div>
 <p>These terms govern your use of Dawnpipe ("the Service"). By creating an account you agree to them.</p>
@@ -176,7 +179,7 @@ const LEGAL_PRIVACY = `
 <h2>How we use it</h2>
 <p>Solely to operate the Service: researching leads, drafting emails, sending messages you approve, and billing. We do not sell your data or share it for advertising.</p>
 <h2>Processors</h2>
-<p>We use Anthropic (AI drafting and research), Stripe (payments), and our hosting provider. Your business profile and lead context are sent to the AI provider to generate drafts.</p>
+<p>We use Anthropic (AI drafting, research and the wording of phone calls), Twilio (phone numbers, calls, call recordings/transcription and SMS), Stripe (payments), Hunter.io and Apollo (business email lookup, where enabled), and our hosting provider. Your business profile and lead context are sent to the AI provider to generate drafts and to conduct calls. Phone numbers, call audio and call transcripts are processed by Twilio and by the AI provider. Where you connect your own mailbox, messages are sent through your email provider using credentials you supply.</p>
 <h2>Information about third parties</h2>
 <p>Leads consist of business contact details from public sources. If you are a contact in someone's list and want your details removed, email us and we will remove them.</p>
 <h2>Retention and your rights</h2>
@@ -517,6 +520,37 @@ function checkSchedules() {
 }
 setInterval(checkSchedules, 60 * 1000);
 
+/**
+ * Hand back phone numbers rented for accounts that have cancelled.
+ *
+ * Nothing did this, so every churned voice customer left a DID renting on our
+ * Twilio bill forever — a cost that only grows, never appears in Stripe, and
+ * could only be stopped by finding it by hand in the Twilio console.
+ *
+ * Runs as a sweep rather than inside the webhook because releasing is an async
+ * network call and webhook handling is fire-and-forget. A grace period means a
+ * customer who resubscribes the same week keeps their number.
+ */
+const RECLAIM_AFTER_DAYS = 21;
+async function reclaimCancelledNumbers() {
+  for (const a of db.allAccounts()) {
+    const v = a.voice || {};
+    if (!v.numberSid) continue;
+    if (a.subStatus !== 'canceled' && a.subStatus !== 'incomplete_expired') continue;
+    const since = Date.parse(a.canceledAt || '') || 0;
+    if (!since) { db.updateAccount(a.id, { canceledAt: new Date().toISOString() }); continue; }
+    if (Date.now() - since < RECLAIM_AFTER_DAYS * 24 * 60 * 60 * 1000) continue;
+    try {
+      await numbers.release(v.numberSid);
+      db.updateAccount(a.id, { voice: { ...v, number: '', numberSid: '', enabled: false } });
+      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Phone number ${v.number} released after ${RECLAIM_AFTER_DAYS} days cancelled` });
+    } catch (e) {
+      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Could not release ${v.number}: ${e.message}` });
+    }
+  }
+}
+setInterval(() => { reclaimCancelledNumbers().catch(() => {}); }, 6 * 60 * 60 * 1000);
+
 // The public demo number, injected into every page that offers it. One source
 // of truth on purpose: the number used to be hardcoded into the meta tags and
 // the signup page, so changing the Twilio line left the site advertising a
@@ -649,11 +683,26 @@ const server = http.createServer(async (req, res) => {
         // what someone who flips this switch is asking for.
         if (vcfg.enabled === false) {
           db.logActivity(account.id, { agent: 'VOICE', msg: `Call from ${params.From || 'unknown'} not answered - answering is switched off` });
-          res.writeHead(486, { 'Content-Type': 'text/plain' });   // Busy Here
-          return res.end('answering disabled');
+          // A non-TwiML status makes Twilio play its own "application error"
+          // recording, which is exactly what the owner does NOT want a real
+          // customer to hear. <Reject reason="busy"> hands the call back
+          // unanswered so it follows the caller's normal path — their carrier
+          // voicemail when the line was conditionally forwarded, which is what
+          // "turn answering off" is asking for.
+          res.writeHead(200, { 'Content-Type': 'text/xml' });
+          return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>');
         }
         const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
+        // A cancelled account is not the same as one over its limit. Taking a
+        // message for a company that is no longer a customer promises a
+        // callback nobody will ever make, which is worse for the caller than a
+        // straight answer.
+        if (account.subStatus === 'canceled' || account.subStatus === 'incomplete_expired') {
+          db.logActivity(account.id, { agent: 'VOICE', msg: `Call from ${params.From || 'unknown'} - account cancelled, not answering` });
+          res.writeHead(200, { 'Content-Type': 'text/xml' });
+          return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>');
+        }
         const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!vAllow.ok) {
           // NEVER hang up on the customer's customer over OUR billing state.
@@ -938,6 +987,17 @@ const server = http.createServer(async (req, res) => {
       if (!parsed) return done('Link not recognised', 'This unsubscribe link is invalid or expired. If you keep receiving mail, reply to the message and ask to be removed.');
       if (req.method === 'POST' || req.method === 'GET') {
         suppress.suppress(parsed.accountId, parsed.email, 'unsubscribe', { note: req.method === 'POST' ? 'one-click' : 'footer link' });
+        // "Never contacted again" has to mean every channel. Unsubscribing by
+        // email while the dialler keeps their number is the single worst way
+        // to break that promise, because the person already told us to stop.
+        try {
+          const match = db.getLeads(parsed.accountId).find((l) => (l.email || '').toLowerCase() === parsed.email.toLowerCase());
+          if (match && match.phone) {
+            suppress.suppressPhone(parsed.accountId, match.phone, 'unsubscribe', { note: 'unsubscribed by email' });
+          }
+        } catch (e) {
+          db.logActivity(parsed.accountId, { agent: 'SEND', msg: `Could not extend unsubscribe to phone: ${e.message}` });
+        }
         db.logActivity(parsed.accountId, { agent: 'SEND', msg: `Unsubscribed: ${parsed.email}` });
         if (req.method === 'POST') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('OK'); }
         return done('You’re unsubscribed', `We’ve removed <b>${parsed.email}</b>. You won’t receive any more messages from this sender.`);
@@ -1154,7 +1214,11 @@ const server = http.createServer(async (req, res) => {
       // can build their whole profile (sunk effort converts); only finding
       // leads, drafting and sending cost money.
       const READ_ONLY = ['/api/state', '/api/prospect/status', '/api/send/status',
-        '/api/profile/save', '/api/profile/delete', '/api/pipeline'];
+        '/api/profile/save', '/api/profile/delete', '/api/pipeline',
+        // Handing a rented number BACK must never be paywalled. It was, so a
+        // cancelled customer had no way to release it and we kept paying the
+        // monthly rental on a line nobody could switch off.
+        '/api/voice/numbers/release'];
       // A locked account gets 2 free website-autofills so the in-person demo
       // ("watch it read YOUR site") works before any card.
       const freeAutofill = p === '/api/profile/autofill' && !stripe.hasAccess(account)
@@ -1496,11 +1560,22 @@ const server = http.createServer(async (req, res) => {
         const all = db.getLeads(acc, profile.id);
         let noPhone = 0, alreadyCalled = 0, onDnc = 0;
         const queue = [];
+        // One opt-out covers both channels. The site promises "anyone who opts
+        // out is never contacted again — by email or phone", so an unsubscribe
+        // or a "do not contact" stage has to block the dialler too, not just
+        // the mailer. Also dedupe by number: two contacts at one company share
+        // a switchboard, and calling it twice in a run is the complaint.
+        const seenNums = new Set();
         for (const l of all) {
           const to = voice.toE164(l.phone || '');
           if (!to) { noPhone++; continue; }
           if (l.calledAt) { alreadyCalled++; continue; }
-          if (suppress.isPhoneSuppressed(acc, to).blocked) { onDnc++; continue; }
+          if (l.stage === 'dnc'
+              || suppress.isPhoneSuppressed(acc, to).blocked
+              || (l.email && suppress.isSuppressed(acc, l.email).blocked)) { onDnc++; continue; }
+          const key = suppress.phoneKey(to);
+          if (seenNums.has(key)) { alreadyCalled++; continue; }
+          seenNums.add(key);
           queue.push({ lead: l, to });
         }
         const want = Math.max(1, Math.min(Number(f.count) || 10, 25));
@@ -1524,6 +1599,16 @@ const server = http.createServer(async (req, res) => {
             const fresh = db.getAccount(acc);
             const ok = plans.voiceAllowed(fresh, stripe.isOwner(fresh));
             if (!ok.ok) { job.note = `Stopped early — ${ok.reason}`; break; }
+            // Opt-outs land DURING a run: someone earlier in the batch says
+            // "take us off your list", the AI records it, and the queue built
+            // 20 seconds ago still has that number in it. Re-check at the dial
+            // boundary, which is the only place that can be authoritative.
+            if (suppress.isPhoneSuppressed(acc, item.to).blocked) {
+              job.skipped.onDnc++;
+              db.logActivity(acc, { agent: 'VOICE', msg: `Skipped ${item.lead.company || item.to} - asked not to be contacted` });
+              job.done++;
+              continue;
+            }
             try {
               const call = await voice.placeCall({ to: item.to, from,
                 answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
@@ -1610,11 +1695,18 @@ const server = http.createServer(async (req, res) => {
       }
       if (p === '/api/suppression/add' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const emails = String(f.emails || f.email || '').split(/[\s,;]+/).filter((e) => e.includes('@'));
-        if (!emails.length) return json(res, { error: 'Enter at least one email address.' }, 400);
+        // Phone numbers were unaddable: anything without an "@" was rejected,
+        // so the ONLY way a number ever reached the do-not-call list was a
+        // caller saying "stop" mid-call. An owner told "take us off your list"
+        // by email or in person had nowhere to put it.
+        const parts = String(f.emails || f.email || '').split(/[\s,;\n]+/).map((s) => s.trim()).filter(Boolean);
+        const emails = parts.filter((e) => e.includes('@'));
+        const phones = parts.filter((e) => !e.includes('@') && (e.replace(/[^0-9]/g, '').length >= 10));
+        if (!emails.length && !phones.length) return json(res, { error: 'Enter an email address or a phone number.' }, 400);
         for (const e of emails) suppress.suppress(acc, e, 'manual', { wholeDomain: !!f.wholeDomain });
-        db.logActivity(acc, { agent: 'SYSTEM', msg: `Blocked ${emails.length} address(es)` });
-        return json(res, { ok: true, added: emails.length });
+        for (const ph of phones) suppress.suppressPhone(acc, ph, 'manual', { note: 'added by hand' });
+        db.logActivity(acc, { agent: 'SYSTEM', msg: `Blocked ${emails.length} address(es) and ${phones.length} number(s)` });
+        return json(res, { ok: true, added: emails.length + phones.length });
       }
       if (p === '/api/suppression/remove' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
@@ -1783,7 +1875,13 @@ const server = http.createServer(async (req, res) => {
         const kind = f.stage === 'customer' ? 'note' : (f.replied ? 'email-replied' : 'note');
         memory.remember(acc, lead, { kind, summary: f.note || `marked ${memory.STAGES[stage].label}`, stage,
           facts: f.note ? [f.note] : [] });
-        if (stage === 'dnc') suppress.suppress(acc, lead.email, 'manual', { note: 'marked do-not-contact' });
+        if (stage === 'dnc') {
+          // "Do not contact" is an instruction about a person, not about an
+          // inbox. Suppressing only the email left the owner's own explicit
+          // instruction silently overridden by the dialler.
+          if (lead.email) suppress.suppress(acc, lead.email, 'manual', { note: 'marked do-not-contact' });
+          if (lead.phone) suppress.suppressPhone(acc, lead.phone, 'manual', { note: 'marked do-not-contact' });
+        }
         db.logActivity(acc, { agent: 'OPERATOR', msg: `${lead.name || lead.email} → ${memory.STAGES[stage].label}` });
         return json(res, { ok: true });
       }
