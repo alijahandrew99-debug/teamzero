@@ -440,13 +440,21 @@
 
 <div class="toast" id="toast"></div>
 <script>
-let STATE={profiles:[],leads:[],queue:[],activity:[]};let curTab='business';
+let STATE={profiles:[],leads:[],queue:[],activity:[]};
+// Remember which tab and which business you were on. Without this, every
+// refresh dumped you back on the Business tab of whichever profile happened
+// to sort first — losing your place mid-task, twenty times a day.
+const UI_KEY='dawnpipe.ui';
+function readUI(){try{return JSON.parse(localStorage.getItem(UI_KEY))||{};}catch(e){return {};}}
+function saveUI(){try{localStorage.setItem(UI_KEY,JSON.stringify({tab:curTab,profileId:$('profileSel')?$('profileSel').value:''}));}catch(e){}}
+const TABS=['business','desk','voice','calendar'];
+let curTab=(TABS.indexOf(readUI().tab)>=0?readUI().tab:'business');
 const $=(id)=>document.getElementById(id);
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
 function pid(){return $('profileSel').value;}
 function curProfile(){return STATE.profiles.find(p=>p.id===pid());}
 function isStarter(p){return !p||!p.offer||/edit me|describe what you sell/i.test(p.offer||'');}
-function showTab(t){curTab=t;
+function showTab(t){curTab=t;saveUI();
   $('tab-business').classList.toggle('hide',t!=='business');
   $('tab-desk').classList.toggle('hide',t!=='desk');
   $('tab-voice').classList.toggle('hide',t!=='voice');
@@ -494,7 +502,10 @@ async function load(){
   } else $('trialbar').style.display='none';
   if(STATE.locked&&u.isPro)$('lockmsg').innerHTML=`⚑ <b>${u.tierName}: you've used all ${u.limit} leads this month.</b> Resets next month, or upgrade for more.`;
   $('aimode').textContent='AI: '+STATE.aiMode;
-  const sel=$('profileSel');const cur=sel.value;
+  const sel=$('profileSel');
+  // On a fresh page load sel.value is empty, so fall back to the business you
+  // were last on rather than silently snapping to whichever sorts first.
+  const cur=sel.value||readUI().profileId||'';
   sel.innerHTML=STATE.profiles.map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
   if(cur&&STATE.profiles.some(p=>p.id===cur))sel.value=cur;
   // nudge new users to fill in their business
@@ -1089,8 +1100,12 @@ async function approveAndSendAll(){
 async function approve(id){try{await api('/api/queue/approve',{id});await load();}catch(e){toast(e.message);}}
 async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'reject'),{id});toast(kind==='sent'?'Logged as sent':'Rejected');await load();}catch(e){toast(e.message);}}
 function copyBody(id){const q=STATE.queue.find(x=>x.id===id);if(!q)return;navigator.clipboard.writeText(`Subject: ${q.subject}\n\n${q.body}`);toast('Copied');}
-$('profileSel').addEventListener('change',()=>{clearDirty();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
-load().then(()=>{ if(isStarter(curProfile()))showTab('business'); });
+$('profileSel').addEventListener('change',()=>{clearDirty();saveUI();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
+load().then(()=>{
+  // A half-finished business profile still wins — there is nothing useful to
+  // do on the other tabs until it is filled in. Otherwise honour where you were.
+  if(isStarter(curProfile()))showTab('business'); else showTab(curTab);
+});
 checkoutReturn();
 setInterval(()=>{load().catch(()=>{});},20000); // background poll: stay quiet on blips
 </script>
