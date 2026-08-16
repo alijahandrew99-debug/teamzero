@@ -11,20 +11,26 @@
   var x = c.getContext('2d');
   if (!x) return;
 
-  // Drop every static icon link before adding ours. Two earlier attempts
-  // failed here: reusing the SVG link left type="image/svg+xml" declared
-  // against PNG bytes, and merely appending a PNG link let Chrome keep
-  // preferring the static SVG (it ranks SVG highest when several are
-  // declared). Exactly one icon link, PNG-typed, leaves nothing to prefer.
-  // The markup keeps the static <link>s for crawlers and no-JS contexts;
-  // they only come out once this script is actually running.
-  var stale = document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon']");
-  for (var i = 0; i < stale.length; i++) stale[i].parentNode.removeChild(stale[i]);
-
-  var link = document.createElement('link');
-  link.rel = 'icon';
-  link.type = 'image/png';
-  document.head.appendChild(link);
+  // Swap the tab icon by REPLACING the link element, never by mutating .href
+  // on a surviving one. Both matter and both were learned the hard way:
+  //   - leaving the static /favicon.svg link in place lets Chrome keep
+  //     preferring it (it ranks SVG highest when several are declared), so the
+  //     tab shows a still image no matter what we draw;
+  //   - mutating .href on an existing link is frequently ignored outright, so
+  //     the frames advance in the DOM while the painted icon never changes.
+  // Clearing every icon link and appending a fresh one each frame leaves
+  // nothing to prefer and forces the repaint. The markup keeps its static
+  // <link>s for crawlers and no-JS contexts; they only come out once this
+  // script is actually running.
+  function setIcon(href) {
+    var stale = document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon']");
+    for (var i = 0; i < stale.length; i++) stale[i].parentNode.removeChild(stale[i]);
+    var l = document.createElement('link');
+    l.rel = 'icon';
+    l.type = 'image/png';
+    l.href = href;
+    document.head.appendChild(l);
+  }
 
   var INK = '#151228', PAPER = '#f4f1ea', RED = '#c02a1b', GOLD = '#f0c860';
   var t = 0, timer = null;
@@ -108,7 +114,7 @@
       }
     }
 
-    try { link.href = c.toDataURL('image/png'); } catch (e) { stop(); }
+    try { setIcon(c.toDataURL('image/png')); } catch (e) { stop(); }
     t++;
   }
 
