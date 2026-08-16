@@ -1543,6 +1543,45 @@ const server = http.createServer(async (req, res) => {
         return json(res, callJobs.get(acc) || { status: 'idle' });
       }
 
+      // ---- quota reconciliation after the double-billing bug (owner only) ----
+      // Until server.js:215 was fixed, prospected leads were charged twice: once
+      // as they landed and again when OUTBOUND drafted them, because a typo meant
+      // no lead was ever stamped `metered`. Everyone silently got half the leads
+      // they paid for, and their counters are still inflated.
+      //
+      // The truth is recountable: one charge per lead created in the current
+      // billing period. DRY RUN BY DEFAULT — it reports what it would change and
+      // touches nothing unless explicitly told to apply.
+      if (p === '/api/admin/reconcile-usage' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const f = parseJSON(await readBody(req));
+        const apply = f.apply === true;
+        const period = plans.periodKey();
+        const rows = [];
+        for (const a of db.allAccounts()) {
+          if (stripe.isOwner(a)) continue;
+          const counted = Number(a.leadsUsed || 0);
+          if (!counted) continue;
+          // Only this period's counter is meaningful; a stale one resets anyway.
+          if (a.usagePeriod !== period) continue;
+          const leads = db.getLeads(a.id) || [];
+          const truth = leads.filter((l) => String(l.createdAt || '').slice(0, 7) === period).length;
+          if (truth >= counted) continue;                 // nothing to give back
+          rows.push({ accountId: a.id, email: a.email, was: counted, shouldBe: truth, refund: counted - truth });
+          if (apply) {
+            db.updateAccount(a.id, { leadsUsed: truth, usagePeriod: period });
+            db.logActivity(a.id, { agent: 'SYSTEM', msg: `Lead quota corrected after double-billing bug: ${counted} -> ${truth}` });
+          }
+        }
+        return json(res, {
+          ok: true, applied: apply, period,
+          accounts: rows.length,
+          leadsReturned: rows.reduce((n, r) => n + r.refund, 0),
+          detail: rows,
+          note: apply ? 'Counters corrected.' : 'DRY RUN — nothing changed. POST {"apply":true} to write these.',
+        });
+      }
+
       // ---- billing setup diagnostic (owner only; reports names, never values) ----
       if (p === '/api/billing/diag' && req.method === 'GET') {
         if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
