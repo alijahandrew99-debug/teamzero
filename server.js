@@ -524,7 +524,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/favicon.svg') {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
-      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="13" fill="#151228"/><circle cx="46" cy="17" r="10" fill="#f0c860"/><circle cx="41.5" cy="14" r="9.5" fill="#151228"/><rect x="6" y="42" width="52" height="17" rx="5" fill="#2a2547"/><rect x="9" y="40" width="15" height="10" rx="4" fill="#f4f1ea"/><circle cx="21" cy="44" r="6.2" fill="#e8b48f"/><rect x="26" y="43" width="31" height="13" rx="5" fill="#6b5ea8"/><g transform="rotate(12 45 34)"><rect x="37.5" y="28.5" width="15" height="11" rx="3.5" fill="#c02a1b"/><rect x="39.5" y="30.5" width="11" height="7" rx="2" fill="#ffe9a8"/></g></svg>`);
+      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#12121c"/><stop offset="1" stop-color="#1a1a28"/></linearGradient></defs><rect width="64" height="64" rx="10" fill="url(#g)"/><rect x="4.5" y="4.5" width="55" height="55" rx="7" fill="none" stroke="#c9a962" stroke-width="1.6"/><text x="32" y="43" font-family="Georgia, 'Times New Roman', serif" font-size="34" fill="#c9a962" text-anchor="middle">D</text></svg>`);
     }
     if (req.method === 'GET' && (p === '/og.png' || p === '/apple-touch-icon.png')) {
       try {
