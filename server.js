@@ -524,7 +524,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/favicon.svg') {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
-      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="10" fill="#c02a1b"/><rect x="4.5" y="4.5" width="55" height="55" rx="7" fill="none" stroke="#f4f1ea" stroke-width="2" opacity=".85"/><text x="32" y="44" font-family="Georgia, 'Times New Roman', serif" font-size="36" font-weight="700" fill="#f4f1ea" text-anchor="middle">D</text></svg>`);
+      // Static fallback of the sunrise/signal mark used across the brand (og.png,
+      // apple-touch-icon) for contexts that can't run favicon.js.
+      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><radialGradient id="s" cx="60%" cy="60%" r="45%"><stop offset="0%" stop-color="#fff3e6"/><stop offset="45%" stop-color="#e8823a"/><stop offset="100%" stop-color="#c02a1b"/></radialGradient><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#100d0b"/><stop offset="100%" stop-color="#1a1815"/></linearGradient></defs><rect width="64" height="64" rx="10" fill="url(#bg)"/><circle cx="38" cy="38" r="19" fill="url(#s)"/></svg>`);
     }
     if (req.method === 'GET' && (p === '/og.png' || p === '/apple-touch-icon.png')) {
       try {
