@@ -11,8 +11,15 @@
   var x = c.getContext('2d');
   if (!x) return;
 
-  var link = document.querySelector("link[rel~='icon']");
-  if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+  // A dedicated link node, kept separate from the static /favicon.svg
+  // fallback link (type="image/svg+xml"). Reusing that element and only
+  // swapping .href left a stale svg+xml type declared against PNG data
+  // URI bytes, which browsers silently reject -- the tab kept showing the
+  // static SVG and never animated.
+  var link = document.createElement('link');
+  link.rel = 'icon';
+  link.type = 'image/png';
+  document.head.appendChild(link);
 
   var INK = '#151228', PAPER = '#f4f1ea', RED = '#c02a1b', GOLD = '#f0c860';
   var t = 0, timer = null;
