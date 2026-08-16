@@ -16,6 +16,12 @@
   .tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:6px;vertical-align:middle}
   .wrap{max-width:1120px;margin:0 auto;padding:20px 24px 80px}
   .lockbar{background:#2a1512;color:#fbeae7;border-radius:8px;padding:14px 18px;margin-bottom:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .healthbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 4px;font-size:13px}
+  .healthbar:empty{display:none}
+  .hb{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--paper2);border-radius:20px;padding:4px 11px;white-space:nowrap}
+  .hb.ok{border-color:#bcdcc8;background:#eaf5ee;color:#1f5c39}
+  .hb.bad{border-color:#e6b0a8;background:#fbe9e7;color:#a02617;cursor:pointer;font-weight:700}
+  .hb.unknown{color:var(--ink2)}
   .lockbar b{color:#fff}.lockbar button{margin-left:auto}
   .trialbar{background:#fff7e6;border:1px solid #e8d3a8;color:#7a5310;border-radius:8px;padding:11px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;font-size:14px}
   .trialbar b{color:#5c3f0c}
@@ -134,6 +140,12 @@
 </div>
 
 <div class="wrap">
+  <!-- The price of folding the plumbing away. Setup can only disappear if the
+       owner can still see, at a glance and without asking, whether the machine
+       is actually running. Three states only: green when something real was
+       verified, red when it is broken, grey when we genuinely have not checked
+       -- never green on an assumption. -->
+  <div id="healthbar" class="healthbar"></div>
   <div class="lockbar" id="lockbar" style="display:none">
     <span id="lockmsg">⚑ <b>Set up your business below — that part is free.</b> Pick a plan when you are ready to hit "Find leads."</span>
     <button class="red" onclick="showUpgrade()">Choose a plan →</button>
@@ -535,7 +547,38 @@ async function load(){
   fillSettings();
   render();
 }
+// One honest line: is the machine actually running? Red chips are clickable and
+// jump to the thing that is broken, so hiding the setup cards never turns into
+// hiding a problem.
+function renderHealth(){
+  const el=$('healthbar'); if(!el)return;
+  const u=STATE.usage||{}, m=STATE.smtp||{}, v=STATE.voice||{};
+  const chips=[];
+  const chip=(state,label,go)=>chips.push(
+    `<span class="hb ${state}"${go?` onclick="${go}"`:''}>${state==='ok'?'✓':state==='bad'?'⚑':'·'} ${label}</span>`);
+
+  if(m.connected)chip('ok','Email connected');
+  else chip('bad','Email not connected',"showTab('business')");
+
+  // Leads left is the number that decides whether anything can run tonight.
+  if(u.isPro&&typeof u.remaining==='number'){
+    if(u.remaining>0)chip('ok',`${u.remaining} of ${u.limit} leads left`);
+    else chip('bad','Out of leads this month','showUpgrade()');
+  } else if(!u.isPro)chip('bad','No plan yet','showUpgrade()');
+
+  // Only claim the phone is answering when the plan includes it AND it is on.
+  if(u.voice&&u.voice.included){
+    if(v.enabled&&v.configured)chip('ok','Phone answering');
+    else chip('unknown','Phone not switched on',"showTab('voice')");
+  }
+
+  const pend=(STATE.queue||[]).filter(q=>q.status!=='rejected'&&q.status!=='sent'&&q.status!=='approved').length;
+  if(pend)chip('unknown',`${pend} waiting for your OK`,"showTab('desk')");
+
+  el.innerHTML=chips.join('');
+}
 function render(){
+  renderHealth();
   const P=pid();const p=curProfile();
   if(curTab==='desk')$('deskProfileName').textContent=p?p.name:'—';
   const leads=STATE.leads.filter(l=>l.profileId===P);
