@@ -171,7 +171,12 @@
           </div>
           <span class="muted" id="autoMsg"></span>
         </div>
-        <p class="muted" style="margin:0 0 16px">Or fill it in yourself. The more specific you are, the sharper your team's leads and emails. Hit <b>Save</b>, then head to the Sales Desk.</p>
+        <!-- Thirteen empty boxes is what makes this look like work. The AI can
+             fill every one of them from a website, so that is the path we put
+             first; the form opens by itself once there is something to review,
+             or the moment someone chooses to type it in. -->
+        <details id="manualFields">
+        <summary class="muted" style="cursor:pointer;margin:0 0 16px">Or fill it in yourself — the more specific you are, the sharper your team's leads and emails.</summary>
         <div class="two">
           <div class="field"><label>Business name</label><div class="hint">What this profile is called.</div><input id="f_name" placeholder="e.g. Skinner Insulation, Dawnpipe, Glass Tables"></div>
           <div class="field"><label>Your name (signs the emails)</label><div class="hint">Who the outreach comes from.</div><input id="f_senderName" placeholder="e.g. Alijah Skinner"></div>
@@ -192,6 +197,7 @@
           <div class="field"><label>Call to action</label><div class="hint">What you want the reader to do.</div><input id="f_cta" placeholder="e.g. A 15-minute call, or a short reply."></div>
           <div class="field"><label>Extra notes (optional)</label><div class="hint">Anything else the team should know.</div><input id="f_notes" placeholder="e.g. Email only — no cold calls."></div>
         </div>
+        </details>
         <div class="row"><button onclick="saveProfile()" id="saveBtn">Save business →</button><span class="muted" id="saveMsg"></span></div>
       </div>
     </div>
@@ -212,6 +218,11 @@
       </div>
     </div>
 
+    <!-- Diagnostics, not setup. The suppression list fills itself and the DNS
+         check is something we run — neither is a question for the owner, so
+         they sit folded away until someone goes looking. -->
+    <details>
+    <summary class="muted" style="cursor:pointer;padding:10px 0">Deliverability &amp; do-not-email list — handled automatically</summary>
     <div class="card">
       <h2><span class="agent">DELIVERABILITY</span> Your sending domain <span class="muted" id="delivDomain"></span>
         <button class="sm ghost" onclick="checkDomain()" id="delivBtn" style="margin-left:auto">Re-check DNS</button>
@@ -236,8 +247,9 @@
         <div id="supList" style="margin-top:10px"></div>
       </div>
     </div>
+    </details>
 
-    <div class="card">
+    <div class="card" id="cardEmailData">
       <h2><span class="agent">EMAIL DATA</span> Get real, verified email addresses</h2>
       <div class="body">
         <p class="muted" style="margin:0 0 6px">Without this, addresses the team can't find on a company's website are <b>guesses</b> and often bounce. Connect a free <a href="https://hunter.io/api-keys" target="_blank" rel="noopener">Hunter.io</a> key and leads come back with <b>database-verified</b> emails instead — your key, your quota.</p>
@@ -261,16 +273,25 @@
           <div class="field"><label>Your email address</label><input id="sm_user" placeholder="you@gmail.com"></div>
           <div class="field"><label>App password</label><input id="sm_pass" type="password" placeholder="16-character app password"></div>
           <div class="field"><label>Name emails come from</label><input id="sm_fromName" placeholder="Alijah Skinner"></div>
-          <div class="field"><label>SMTP server</label><input id="sm_host" placeholder="smtp.gmail.com" value="smtp.gmail.com"></div>
-          <div class="field"><label>Minimum gap between sends (seconds)</label><div class="hint">Spacing protects your reputation. 25–60 is sensible.</div><input id="sm_delay" type="number" min="0" value="25"></div>
-          <div class="field"><label>Max sends per day</label><div class="hint">Keep low on a new mailbox and ramp up.</div><input id="sm_cap" type="number" min="1" value="50"></div>
         </div>
-        <div class="field"><label>When to send</label>
-          <select id="sm_window" style="max-width:340px">
-            <option value="business">Their business hours (weekdays 8am-5pm their time) — best reply rates</option>
-            <option value="anytime">Any time — send the moment I hit the button</option>
-          </select>
-        </div>
+        <!-- The rest are safe defaults we pick. They stay in the DOM (the save
+             handler and the poll-wipe guard both reference them) but an owner
+             should never have to know what an SMTP server is, and the pacing
+             numbers are ours to get right, not theirs to guess at. -->
+        <details style="margin-top:10px">
+          <summary class="muted" style="cursor:pointer">Advanced sending settings — we've already set these for you</summary>
+          <div class="two" style="margin-top:10px">
+            <div class="field"><label>SMTP server</label><div class="hint">Filled in automatically from your email address.</div><input id="sm_host" placeholder="smtp.gmail.com" value="smtp.gmail.com"></div>
+            <div class="field"><label>Minimum gap between sends (seconds)</label><div class="hint">Spacing protects your reputation. 25–60 is sensible.</div><input id="sm_delay" type="number" min="0" value="25"></div>
+            <div class="field"><label>Max sends per day</label><div class="hint">Keep low on a new mailbox and ramp up.</div><input id="sm_cap" type="number" min="1" value="50"></div>
+          </div>
+          <div class="field"><label>When to send</label>
+            <select id="sm_window" style="max-width:340px">
+              <option value="business">Their business hours (weekdays 8am-5pm their time) — best reply rates</option>
+              <option value="anytime">Any time — send the moment I hit the button</option>
+            </select>
+          </div>
+        </details>
         <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><button class="sm ghost" onclick="testSmtp()" id="smTestBtn">Test connection</button><span class="muted" id="smMsg"></span></div>
       </div>
     </div>
@@ -586,12 +607,35 @@ window.addEventListener('DOMContentLoaded',()=>{
   FIELDS.forEach(k=>{const el=$('f_'+k); if(el)el.addEventListener('input',markDirty);});
   VOICE_FIELDS.forEach(id=>{const el=$(id); if(el){el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);}});
   SETTINGS_FIELDS.forEach(id=>{const el=$(id); if(el){el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);}});
+  // Work the mail server out from the address instead of asking. Nobody buying
+  // an AI receptionist knows what smtp.office365.com is, and getting it wrong
+  // is the difference between "connected" and a silent failure to send.
+  const SMTP_HOSTS={'gmail.com':'smtp.gmail.com','googlemail.com':'smtp.gmail.com',
+    'outlook.com':'smtp.office365.com','hotmail.com':'smtp.office365.com','live.com':'smtp.office365.com',
+    'office365.com':'smtp.office365.com','yahoo.com':'smtp.mail.yahoo.com','aol.com':'smtp.aol.com',
+    'icloud.com':'smtp.mail.me.com','me.com':'smtp.mail.me.com','zoho.com':'smtp.zoho.com',
+    'protonmail.com':'smtp.protonmail.ch','proton.me':'smtp.protonmail.ch','fastmail.com':'smtp.fastmail.com'};
+  const smUser=$('sm_user');
+  if(smUser)smUser.addEventListener('change',()=>{
+    const dom=(smUser.value.split('@')[1]||'').trim().toLowerCase();
+    const host=$('sm_host');
+    if(!dom||!host)return;
+    // Google Workspace and Microsoft 365 on a custom domain are the common case
+    // for a real business, so guess those rather than leaving it on gmail.
+    const guess=SMTP_HOSTS[dom]||'smtp.'+dom;
+    if(host.value!==guess){host.value=guess;markDirty();}
+  });
 });
 function fillForm(force){
   if(_dirty&&!force)return;                      // never clobber unsaved edits
   const p=curProfile()||{};
   FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});
   window._editId=(p&&p.id)||'';
+  // Only a brand-new, still-empty business gets the collapsed view. Once there
+  // is real content it stays open, so nobody has to hunt for their own details
+  // behind a disclosure triangle.
+  const mf=$('manualFields');
+  if(mf&&!mf.open&&!isStarter(p))mf.open=true;
 }
 function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');markDirty();showTab('business');toast('Fill in the new business, then Save');}
 async function deleteProfile(){
@@ -907,6 +951,7 @@ async function autofill(){
     const r=await api('/api/profile/autofill',{url});
     const f=r.fields||{};
     ['name','senderName','offer','icp','valueProp','proof','tone','cta'].forEach(k=>{ if(f[k])$('f_'+k).value=f[k]; });
+    if($('manualFields'))$('manualFields').open=true;   // reveal the drafted fields to review
     markDirty();   // AI-filled values are unsaved edits — the poll must not wipe them
     $('autoMsg').textContent='Filled from your site — review the fields and hit Save.';
     toast('Profile drafted from your website — review & save');
@@ -1009,6 +1054,13 @@ function fillSettings(){
   loadDeskAppointments();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
   $('hkMsg').textContent=ed.connected?'Connected ✓ — leads use verified emails.':(ed.fallback?'Using the site-wide data key.':'Not connected — unfound emails will be guesses.');
+  // If the platform already supplies a data key, this is our plumbing, not the
+  // customer's homework — they are paying us precisely so they never have to
+  // go and register for a Hunter.io account. Only show it when it is genuinely
+  // the difference between verified emails and guesses (no platform key), or
+  // when they have deliberately connected their own.
+  const edCard=$('cardEmailData');
+  if(edCard)edCard.classList.toggle('hide',!!ed.fallback&&!ed.connected);
   const info=$('sendInfo');
   if(info)info.textContent=m.connected?`via ${m.user} · ${STATE.sentToday||0}/${STATE.dailyCap??50} sent today`:'connect a mailbox to send automatically';
 }
