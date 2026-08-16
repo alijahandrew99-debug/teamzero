@@ -502,6 +502,25 @@ function checkSchedules() {
 }
 setInterval(checkSchedules, 60 * 1000);
 
+// The public demo number, injected into every page that offers it. One source
+// of truth on purpose: the number used to be hardcoded into the meta tags and
+// the signup page, so changing the Twilio line left the site advertising a
+// dead number in exactly the places nobody thinks to check.
+function demoTel() {
+  const raw = process.env.TWILIO_PHONE_NUMBER || '';
+  const tel = voice.toE164(raw);
+  const pretty = tel.length === 12 && tel.startsWith('+1')
+    ? `(${tel.slice(2, 5)}) ${tel.slice(5, 8)}-${tel.slice(8)}` : (raw || tel);
+  return { tel, pretty };
+}
+function withDemoTel(page) {
+  const { tel, pretty } = demoTel();
+  // No line provisioned (or mid-swap): point the phone CTAs at signup instead
+  // of leaving `href="tel:"` dead links behind.
+  if (!tel) return page.split('tel:__DEMO_TEL__').join('/signup').split('__DEMO_NUM__').join('');
+  return page.split('__DEMO_TEL__').join(tel).split('__DEMO_NUM__').join(pretty);
+}
+
 // ---- server ----
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -827,17 +846,16 @@ const server = http.createServer(async (req, res) => {
         ? `<div style="position:relative;padding-top:56.25%;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#000"><iframe src="${process.env.DEMO_VIDEO_URL}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen loading="lazy"></iframe></div>`
         : view('demo.html');
       // The live phone demo IS the product demo — nobody has to trust a video.
-      const rawNum = process.env.TWILIO_PHONE_NUMBER || '';
-      const tel = voice.toE164(rawNum);
-      const pretty = tel.length === 12 && tel.startsWith('+1')
-        ? `(${tel.slice(2, 5)}) ${tel.slice(5, 8)}-${tel.slice(8)}` : (rawNum || tel);
+      const { tel } = demoTel();
       let page = view('landing.html').replace('__DEMO_VIDEO__', demo);
-      if (tel) {
-        page = page.split('__DEMO_TEL__').join(tel).split('__DEMO_NUM__').join(pretty);
-      } else {
+      if (!tel) {
         // No number configured — drop the call panel rather than show a dead link.
         page = page.replace(/<div class="calldemo">[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/, '');
       }
+      // Substitute either way: the meta tags and the remaining CTAs carry
+      // placeholders too, and a raw __DEMO_NUM__ leaking into a share preview
+      // is worse than an empty one.
+      page = withDemoTel(page);
       return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
     }
     // Legal pages — public, and required before Stripe will approve billing.
@@ -849,7 +867,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/signup') {
       const t = (url.searchParams.get('tier') || '').toLowerCase();
-      return html(res, view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : ''));
+      return html(res, withDemoTel(view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : '')));
     }
     if (req.method === 'GET' && p === '/login') return html(res, view('login.html'));
 
@@ -897,13 +915,13 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && p === '/signup') {
       if (rateLimited(req, 'signup', 20, 60 * 60 * 1000)) {
-        return html(res, view('signup.html').replace('<!--ERR-->', 'Too many accounts created from here. Try again later.'), 429);
+        return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Too many accounts created from here. Try again later.')), 429);
       }
       const f = parseForm(await readBody(req));
       const email = (f.email || '').trim().toLowerCase();
       const pw = f.password || '';
-      if (!email || pw.length < 6) return html(res, view('signup.html').replace('<!--ERR-->', 'Enter a valid email and a password of 6+ characters.'), 400);
-      if (db.getAccountByEmail(email)) return html(res, view('signup.html').replace('<!--ERR-->', 'That email already has an account. Try logging in.'), 400);
+      if (!email || pw.length < 6) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Enter a valid email and a password of 6+ characters.')), 400);
+      if (db.getAccountByEmail(email)) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'That email already has an account. Try logging in.')), 400);
       const { salt, passHash } = auth.hashPassword(pw);
       const acc = db.createAccount({ email, passHash, salt });
       seedStarterProfile(acc.id, email);

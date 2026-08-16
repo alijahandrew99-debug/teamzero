@@ -11,11 +11,16 @@
   var x = c.getContext('2d');
   if (!x) return;
 
-  // A dedicated link node, kept separate from the static /favicon.svg
-  // fallback link (type="image/svg+xml"). Reusing that element and only
-  // swapping .href left a stale svg+xml type declared against PNG data
-  // URI bytes, which browsers silently reject -- the tab kept showing the
-  // static SVG and never animated.
+  // Drop every static icon link before adding ours. Two earlier attempts
+  // failed here: reusing the SVG link left type="image/svg+xml" declared
+  // against PNG bytes, and merely appending a PNG link let Chrome keep
+  // preferring the static SVG (it ranks SVG highest when several are
+  // declared). Exactly one icon link, PNG-typed, leaves nothing to prefer.
+  // The markup keeps the static <link>s for crawlers and no-JS contexts;
+  // they only come out once this script is actually running.
+  var stale = document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon']");
+  for (var i = 0; i < stale.length; i++) stale[i].parentNode.removeChild(stale[i]);
+
   var link = document.createElement('link');
   link.rel = 'icon';
   link.type = 'image/png';
