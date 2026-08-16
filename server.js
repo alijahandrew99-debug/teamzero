@@ -550,7 +550,13 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
       return res.end(view('favicon.js'));
     }
-    if (req.method === 'GET' && p === '/favicon.ico') { res.writeHead(204); return res.end(); }
+    if (req.method === 'GET' && p === '/favicon.ico') {
+      try {
+        const ico = fs.readFileSync(path.join(VIEWS, 'favicon.ico'));
+        res.writeHead(200, { 'Content-Type': 'image/x-icon', 'Cache-Control': 'public, max-age=86400' });
+        return res.end(ico);
+      } catch { res.writeHead(204); return res.end(); }
+    }
 
     // ================= VOICE (Twilio webhooks) =================
     // Public endpoints Twilio POSTs to. Every request is signature-verified so
