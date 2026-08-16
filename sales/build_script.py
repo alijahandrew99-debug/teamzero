@@ -171,7 +171,8 @@ qa('I answer my own phone.',
    'ones that come in while you are under a sink with the water off.')
 qa('Too expensive.',
    'Answer with their own number from question two. It is less than one job. If it books you one job a '
-   'month it has paid for itself twice over — and if it does not, cancel it, the first month is guaranteed.')
+   'month it has paid for itself twice over — and there is no contract, so if it does not, you cancel and '
+   'that is the end of it.')
 qa('What if it says the wrong price?',
    'It can only say prices you typed in. If you have not given it a number it says it does not have pricing '
    'and offers a callback. It physically cannot invent one.')
@@ -181,9 +182,11 @@ qa('Send me some information.',
 
 state['y'] -= 4
 heading('5.', 'Close on a small, specific next step.')
-say('Let us just switch it on for two weeks. You keep your number, it answers what you miss, and you '
-    'look at what it booked. If it books you nothing, you cancel and you have lost nothing.')
-note('Never close on "think it over". Close on a date and a time you will call back.')
+say('Let us just switch it on for a month. You keep your own number, it answers what you miss, and at the '
+    'end you look at what it booked. If it booked you nothing, cancel it — there is no contract to get out of.')
+note('Never close on "think it over". Close on a date and a time you will call back. And do not promise a '
+     'refund or a free trial — we do not offer one. What we offer is no contract and no lock-in, which is '
+     'a real answer to the risk objection without you writing a check you cannot cash.')
 
 state['y'] -= 2
 heading('6.', 'Voicemail — keep it under fifteen seconds.')

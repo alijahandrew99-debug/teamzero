@@ -194,7 +194,8 @@ for label, price, hero in rows:
 
 y -= 2
 y = text(M, y, 'No payroll tax, no workers comp, no holiday cover, no notice period. It does not call in sick '
-                'and it does not quit. Cancel any time  —  the first month is guaranteed.',
+                'and it does not quit. Month to month, no contract, cancel in one click  —  it runs to the end '
+                'of the month you have paid for, then stops.',
          size=10.5, leading=14, width=W - 2 * M)
 
 # ---------- footer ----------

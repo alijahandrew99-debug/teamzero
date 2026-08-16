@@ -146,7 +146,7 @@ const LEGAL_TERMS = `
 <h2>Subscription and billing</h2>
 <ul>
 <li>Paid plans are billed monthly in advance via Stripe.</li>
-<li><b>First-month guarantee:</b> if the Service does not perform as described within 30 days of your first payment, email us and we will refund that month in full.</li>
+<li><b>No long-term commitment:</b> the Service is month to month with no contract, no setup fee and no minimum term. You are never locked in.</li>
 <li>Plan allowances (leads and phone minutes) are hard caps: when used up, the Service pauses until the monthly reset. There are no overage charges and allowances do not roll over.</li>
 <li>Plans include a monthly usage allowance. We may apply fair-use limits to protect the Service.</li>
 <li>You can cancel at any time; access continues to the end of the paid period. We do not provide pro-rata refunds for partial months except where required by law.</li>
