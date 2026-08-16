@@ -1238,9 +1238,20 @@ const server = http.createServer(async (req, res) => {
       // ---- sending mailbox settings ----
       if (p === '/api/settings/smtp' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
+        // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
+        // after a successful connect (so it's never displayed), which meant any
+        // later save — tweaking the delay, or just clicking Connect again —
+        // posted pass:'' and silently WIPED the working password. The UI kept
+        // saying "connected" while the server could no longer send.
+        const existing = (account.smtp || {});
+        const pass = f.pass ? String(f.pass) : (existing.pass || '');
         const cfg = { host: f.host || 'smtp.gmail.com', port: Number(f.port) || 465,
-          user: f.user || '', pass: f.pass || '', fromEmail: f.fromEmail || f.user || '', fromName: f.fromName || '' };
-        if (f.verify) {
+          user: f.user || existing.user || '', pass,
+          fromEmail: f.fromEmail || f.user || existing.fromEmail || '', fromName: f.fromName ?? existing.fromName ?? '' };
+        // Verify whenever we have credentials that haven't been proven in this
+        // exact combination — i.e. a new password, or a changed user/host.
+        const needsVerify = !!f.pass || (pass && (cfg.user !== existing.user || cfg.host !== existing.host));
+        if (needsVerify) {
           const v = await smtp.verify(cfg);
           if (!v.ok) return json(res, { error: `Could not sign in to that mailbox: ${v.error}` }, 400);
         }

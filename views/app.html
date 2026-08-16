@@ -915,7 +915,9 @@ async function saveSmtp(){
   try{
     await api('/api/settings/smtp',{user:$('sm_user').value,pass:$('sm_pass').value,fromName:$('sm_fromName').value,
       host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,verify:!!$('sm_pass').value});
-    $('sm_pass').value='';$('smMsg').textContent='Mailbox connected ✓';toast('Mailbox connected');await load();
+    const hadPass=!!$('sm_pass').value;$('sm_pass').value='';
+    $('smMsg').textContent=hadPass?'Mailbox connected ✓':'Settings updated ✓';
+    toast(hadPass?'Mailbox connected':'Settings updated');await load();
   }catch(e){$('smMsg').textContent='';toast(e.message);}finally{b.disabled=false;b.textContent=o;}
 }
 // ---- bulk approve / send ----
