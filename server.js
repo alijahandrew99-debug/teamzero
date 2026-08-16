@@ -1228,6 +1228,17 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, warmup: sending.warmupStatus(patch) });
       }
 
+      // ---- live credential check: verifies the STORED mailbox login right
+      // now, changing nothing. The one-click answer to "is my password saved
+      // and does Gmail still accept it?"
+      if (p === '/api/settings/smtp/test' && req.method === 'POST') {
+        const tcfg = account.smtp || {};
+        if (!tcfg.user || !tcfg.pass) return json(res, { ok: false, error: 'No mailbox saved yet - enter your email and app password above.' });
+        const v = await smtp.verify(tcfg);
+        db.logActivity(acc, { agent: 'SEND', msg: v.ok ? 'Mailbox live-check passed' : `Mailbox live-check FAILED: ${v.error}` });
+        return json(res, v.ok ? { ok: true, user: tcfg.user } : { ok: false, error: v.error });
+      }
+
       // ---- email data quota (answers "why am I getting guesses?") ----
       if (p === '/api/settings/emailkey/status' && req.method === 'GET') {
         const st = await emailApi.accountStatus(db.getAccount(acc));

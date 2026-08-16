@@ -251,7 +251,7 @@
           <div class="field"><label>Minimum gap between sends (seconds)</label><div class="hint">Spacing protects your reputation. 25–60 is sensible.</div><input id="sm_delay" type="number" min="0" value="25"></div>
           <div class="field"><label>Max sends per day</label><div class="hint">Keep low on a new mailbox and ramp up.</div><input id="sm_cap" type="number" min="1" value="50"></div>
         </div>
-        <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><span class="muted" id="smMsg"></span></div>
+        <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><button class="sm ghost" onclick="testSmtp()" id="smTestBtn">Test connection</button><span class="muted" id="smMsg"></span></div>
       </div>
     </div>
   </div>
@@ -315,7 +315,11 @@
       <div>
         <div class="card">
           <div id="pipeStrip" class="pipe"></div>
-          <h2><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span>
+          <h2><span class="agent">CALENDAR</span> Upcoming appointments <span class="muted" id="apDeskCount"></span>
+            <button class="sm ghost" onclick="showTab('voice')" style="margin-left:auto">Open calendar →</button>
+          </h2>
+          <div class="body" id="apDesk"><div class="empty">Nothing booked yet — when the AI books a call it shows here.</div></div>
+          <h2 style="border-top:1px solid var(--line)"><span class="agent">LEADS</span> Leads <span class="muted" id="leadcount"></span>
             <span style="margin-left:auto;display:flex;gap:6px">
               <button class="sm ghost" onclick="clearLeads('guesses')" title="Delete leads without a real email, keep the sendable ones">Clear guesses</button>
               <button class="sm red" onclick="clearLeads('all')" title="Delete every lead for this business">Reject all</button>
@@ -520,11 +524,17 @@ const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta'
 // leave the forms alone until it is saved.
 let _dirty=false;
 const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_hours','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+// The SENDING/schedule/data-key forms suffered the same poll-wipe as the
+// profile form: type your email, tab to the password box, and 20s later the
+// email field snapped back to the saved value — so Connect verified the new
+// password against the OLD address and Gmail refused it.
+const SETTINGS_FIELDS=['sm_user','sm_fromName','sm_host','sm_delay','sm_cap','sm_pass','sch_time','sch_count','sch_hints','hk_key','v_testTo'];
 function markDirty(){_dirty=true;}
 function clearDirty(){_dirty=false;}
 window.addEventListener('DOMContentLoaded',()=>{
   FIELDS.forEach(k=>{const el=$('f_'+k); if(el)el.addEventListener('input',markDirty);});
   VOICE_FIELDS.forEach(id=>{const el=$(id); if(el){el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);}});
+  SETTINGS_FIELDS.forEach(id=>{const el=$(id); if(el){el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);}});
 });
 function fillForm(force){
   if(_dirty&&!force)return;                      // never clobber unsaved edits
@@ -592,6 +602,20 @@ async function testCall(){
   try{const r=await api('/api/voice/testcall',{to});$('vCallMsg').textContent=`Call placed (${r.status}). Your phone should ring.`;setTimeout(loadCalls,8000);}
   catch(e){$('vCallMsg').textContent='';toast(e.message);}
   finally{b.disabled=false;b.textContent=o;}
+}
+async function loadDeskAppointments(){
+  try{
+    const r=await fetch('/api/appointments');const d=await r.json();
+    const now=Date.now();
+    const up=(d.appointments||[]).filter(x=>x.status!=='cancelled'&&x.status!=='done'&&(!x.startsAt||new Date(x.startsAt).getTime()>=now-3600000)).slice(0,3);
+    $('apDeskCount').textContent=up.length?('· '+up.length):'';
+    if(!up.length)return;
+    $('apDesk').innerHTML=up.map(x=>{
+      const dt=x.startsAt?new Date(x.startsAt):null;
+      const when=dt&&!isNaN(dt)?dt.toLocaleString(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):(x.whenText||'time TBC');
+      return '<div class="lead"><b style="color:var(--red)">'+esc(when)+'</b> — '+esc(x.name||'Caller')+(x.company?' · '+esc(x.company):'')+'<div class="muted">'+esc(x.phone||'')+' · '+esc(x.reason||'')+'</div></div>';
+    }).join('');
+  }catch(e){}
 }
 async function loadAppointments(){
   try{
@@ -860,8 +884,8 @@ async function importCSV(){const csv=$('csv').value.trim();if(!csv)return toast(
 // populate the schedule + mailbox panels from saved settings
 function fillSettings(){
   const p=curProfile()||{};const s=p.schedule||{};
-  const set=(id,v)=>{const el=$(id);if(el&&document.activeElement!==el)el.value=v;};
-  if($('sch_enabled')&&document.activeElement!==$('sch_enabled'))$('sch_enabled').checked=!!s.enabled;
+  const set=(id,v)=>{if(_dirty)return;const el=$(id);if(el&&document.activeElement!==el)el.value=v;};
+  if(!_dirty&&$('sch_enabled')&&document.activeElement!==$('sch_enabled'))$('sch_enabled').checked=!!s.enabled;
   set('sch_time',s.time||'02:00');set('sch_count',s.count||50);set('sch_hints',s.hints||'');
   $('schMsg').textContent=s.enabled?`On — nightly at ${s.time||'02:00'}`:'';
   const m=STATE.smtp||{};
@@ -872,6 +896,7 @@ function fillSettings(){
   renderWarmup();
   loadSuppression();
   renderVoice();
+  loadDeskAppointments();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
   $('hkMsg').textContent=ed.connected?'Connected ✓ — leads use verified emails.':(ed.fallback?'Using the site-wide data key.':'Not connected — unfound emails will be guesses.');
   const info=$('sendInfo');
@@ -910,6 +935,14 @@ async function saveSchedule(){
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 // ---- sending mailbox ----
+async function testSmtp(){
+  const b=$('smTestBtn');b.disabled=true;const o=b.textContent;b.textContent='Testing…';
+  try{const r=await api('/api/settings/smtp/test',{});
+    if(r.ok){$('smMsg').textContent='Live check passed — signed in as '+r.user+' ✓';toast('Gmail accepted the saved password ✓');}
+    else toast('Test failed: '+r.error);
+  }catch(e){toast(e.message);}
+  finally{b.disabled=false;b.textContent=o;}
+}
 async function saveSmtp(){
   const b=$('smBtn');b.disabled=true;const o=b.textContent;b.textContent='Verifying…';
   try{
@@ -917,7 +950,7 @@ async function saveSmtp(){
       host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,verify:!!$('sm_pass').value});
     const hadPass=!!$('sm_pass').value;$('sm_pass').value='';
     $('smMsg').textContent=hadPass?'Mailbox connected ✓':'Settings updated ✓';
-    toast(hadPass?'Mailbox connected':'Settings updated');await load();
+    toast(hadPass?'Mailbox connected':'Settings updated');clearDirty();await load();
   }catch(e){$('smMsg').textContent='';toast(e.message);}finally{b.disabled=false;b.textContent=o;}
 }
 // ---- bulk approve / send ----
