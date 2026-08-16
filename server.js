@@ -1113,13 +1113,24 @@ const server = http.createServer(async (req, res) => {
       // charged customer could sit locked out permanently with nothing in the
       // product able to fix it.
       const sessionId = url.searchParams.get('session_id') || '';
-      if (sessionId && !stripe.isPaid(account)) {
-        try {
-          if (await stripe.reconcileCheckout(account, sessionId)) account = db.getAccount(account.id);
-        } catch (e) {
-          console.error('checkout reconcile failed:', e.message);
+      // 'none' | 'ok' | 'pending' — the page must not congratulate someone on a
+      // payment that did not actually switch their account on.
+      let checkoutResult = 'none';
+      if (sessionId) {
+        if (stripe.isPaid(account)) checkoutResult = 'ok';
+        else {
+          try {
+            if (await stripe.reconcileCheckout(account, sessionId)) {
+              account = db.getAccount(account.id);
+              checkoutResult = 'ok';
+            } else checkoutResult = 'pending';
+          } catch (e) {
+            console.error('checkout reconcile failed:', e.message);
+            checkoutResult = 'pending';
+          }
         }
       }
+      page = page.replace('__CHECKOUT__', checkoutResult);
       const locked = !stripe.hasAccess(account);
       page = page.replace('__EMAIL__', account.email).replace('__LOCKED__', locked ? 'true' : 'false').replace('__AIMODE__', aiMode());
       return html(res, page);

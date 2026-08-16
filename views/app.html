@@ -410,6 +410,10 @@
           <span class="muted">Forwarding your existing business number to this one keeps the number your customers already know.</span>
         </div>
       </div>
+      <div id="numNoPlan" class="hide">
+        <p class="muted" style="margin:0 0 10px">Your current plan doesn't include the phone agent, so there's no number to set up yet.</p>
+        <button class="red" onclick="showUpgrade()">See plans with calling →</button>
+      </div>
       <div id="numGet">
         <p class="muted" style="margin:0 0 10px">Pick a number and your AI starts answering it immediately — nothing to configure.</p>
         <div class="row">
@@ -541,9 +545,25 @@ async function api(path,data){
   return j;
 }
 let _coTries=0;
+// The server already asked Stripe whether this checkout actually worked before
+// rendering the page, so say what it found. Announcing "Payment received" and
+// then leaving someone on a locked app is the single worst message we can
+// show — it reads as having been charged for nothing.
+const CHECKOUT_RESULT='__CHECKOUT__';
 function checkoutReturn(){
   if(new URLSearchParams(location.search).get('checkout')!=='success')return;
   history.replaceState(null,'','/app');
+  if(CHECKOUT_RESULT==='pending'){
+    // Stripe did not confirm a live subscription for this session. Do not
+    // claim the payment landed; we genuinely do not know that it did.
+    const bar=$('lockbar');
+    if(bar){
+      bar.style.display='';
+      $('lockmsg').innerHTML='⚑ <b>We could not confirm that payment yet.</b> If your card was charged, nothing is lost — reload in a minute, or email <a href="mailto:support@dawnpipe.com" style="color:inherit;text-decoration:underline">support@dawnpipe.com</a> and we will sort it out by hand.';
+    }
+    toast('Checkout finished, but we could not confirm it yet.');
+    return;
+  }
   toast('Payment received — switching your team on…');
   const t=setInterval(async()=>{
     try{const st=await api('/api/state');
@@ -822,9 +842,13 @@ async function saveVoice(){
 // ---- your own phone line ----
 function renderNumber(){
   const v=STATE.voice||{};
+  const included=!!((STATE.usage&&STATE.usage.voice)||{}).included;
   const have=!!v.number;
+  // Don't invite someone to pick a number their plan cannot use — they would
+  // buy a line that never rings and we would rent it every month.
+  if($('numNoPlan'))$('numNoPlan').classList.toggle('hide',included||have);
   if($('numHave'))$('numHave').classList.toggle('hide',!have);
-  if($('numGet'))$('numGet').classList.toggle('hide',have);
+  if($('numGet'))$('numGet').classList.toggle('hide',have||!included);
   if(have&&$('numMine'))$('numMine').textContent=v.number;
 }
 async function findNumbers(){
