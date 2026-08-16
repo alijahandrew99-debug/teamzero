@@ -948,7 +948,8 @@ async function approveAndSendAll(){
       if(s.status==='running'){setTimeout(poll,2500);return;}
       $('sendProgress').classList.remove('on');b.disabled=false;ab.disabled=false;
       if(s.status==='error')toast('Send failed: '+s.error);
-      else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
+      else if(s.note)toast(s.note);
+      else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.deferred?`, ${s.deferred} held for their business hours`:''}${s.blocked?`, ${s.blocked} held (unverified address)`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
     };
     poll();
   }catch(e){toast(e.message);b.disabled=false;ab.disabled=false;}

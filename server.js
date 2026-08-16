@@ -1282,6 +1282,16 @@ const server = http.createServer(async (req, res) => {
       // ---- send all approved (background, throttled) ----
       if (p === '/api/send/run' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
+        // Fail FAST and VISIBLY. These same checks exist inside the job, but an
+        // async job's error is easy to miss — a 400 here becomes an immediate
+        // toast telling the user exactly what to fix.
+        const cfg0 = account.smtp || {};
+        if (!cfg0.user || !cfg0.pass) return json(res, { error: 'Connect your sending mailbox first (Your Business tab → SENDING).' }, 400);
+        const prof0 = db.getProfile(acc, f.profileId);
+        if (!prof0) return json(res, { error: 'Pick a business first.' }, 400);
+        if (!String(prof0.mailingAddress || '').trim()) {
+          return json(res, { error: 'One thing missing: your business mailing address (Your Business tab → "Business mailing address"). The law requires it in every commercial email — takes 30 seconds, then hit send again.' }, 400);
+        }
         let job;
         try { job = startSendJob(account, f.profileId); }
         catch (e) {
