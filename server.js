@@ -540,7 +540,9 @@ function withDemoTel(page) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
-  const account = auth.currentAccount(req);
+  // `let`, not `const`: the checkout-return path re-reads the account after
+  // activating it so the rest of the request sees the unlocked state.
+  let account = auth.currentAccount(req);
 
   try {
     // ---------- health ----------
@@ -1066,8 +1068,21 @@ const server = http.createServer(async (req, res) => {
       const tier = url.searchParams.get('tier') || 'starter';
       // Already subscribed? Change the existing plan rather than starting a
       // second one that bills alongside it.
-      if (account.stripeCustomerId && stripe.isPaid(account)) {
-        try { return redirect(res, await stripe.createPortal(account)); } catch {}
+      // ANY existing Stripe customer goes to the portal, not just an active
+      // one. Gating this on isPaid() sent past_due customers back through
+      // Checkout, which is exactly the population most likely to click it —
+      // they were locked out and told to pick a plan — and it started a second
+      // subscription billing alongside the one Stripe was still retrying.
+      if (account.stripeCustomerId) {
+        try { return redirect(res, await stripe.createPortal(account)); }
+        catch (e) {
+          // Do NOT fall through to Checkout. A transient portal failure would
+          // otherwise hand an existing customer a brand-new subscription
+          // billing alongside the one they already have — the precise
+          // double-charge this branch exists to prevent.
+          db.logActivity(account.id, { agent: 'SYSTEM', msg: `Billing portal failed: ${e.message}` });
+          return html(res, `<p style="font-family:system-ui;padding:40px;max-width:520px;line-height:1.5">We couldn't open your billing page just now, and we won't start a second subscription by mistake. Please try again in a minute — or email <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a> and we'll sort your card out by hand.<br><br><a href="/app">Back to the app</a></p>`, 503);
+        }
       }
       const link = await stripe.createCheckout(account, tier);
       return redirect(res, link);
@@ -1075,6 +1090,18 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/app') {
       let page = view('app.html');
+      // Coming back from Checkout: confirm the payment with Stripe directly
+      // rather than waiting on a webhook that may never arrive. Without this a
+      // charged customer could sit locked out permanently with nothing in the
+      // product able to fix it.
+      const sessionId = url.searchParams.get('session_id') || '';
+      if (sessionId && !stripe.isPaid(account)) {
+        try {
+          if (await stripe.reconcileCheckout(account, sessionId)) account = db.getAccount(account.id);
+        } catch (e) {
+          console.error('checkout reconcile failed:', e.message);
+        }
+      }
       const locked = !stripe.hasAccess(account);
       page = page.replace('__EMAIL__', account.email).replace('__LOCKED__', locked ? 'true' : 'false').replace('__AIMODE__', aiMode());
       return html(res, page);
@@ -1112,6 +1139,10 @@ const server = http.createServer(async (req, res) => {
           isOwner: stripe.isOwner(account),
           usage: plans.usage(account, stripe.isOwner(account)),
           isPaid: stripe.isPaid(account),
+          // So the UI can say "your card was declined" instead of "choose a
+          // plan" — the second is both wrong and the thing that pushed them
+          // into buying a duplicate subscription.
+          dunning: stripe.DUNNING.includes(account.subStatus) ? { since: account.dunningSince || '', inGrace: stripe.inGrace(account) } : null,
           tiers: plans.tierList(),
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
