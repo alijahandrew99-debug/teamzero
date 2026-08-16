@@ -212,7 +212,17 @@ function startProspectJob(accountId, profileId, { count, hints, thenDraft, notif
           if (delta > 0) {
             plans.consume(acct, delta, stripe.isOwner(acct));
             // Mark them charged so drafting doesn't bill the same lead twice.
-            try { for (const l of db.getLeads(acc, profileId)) if (!l.metered) db.updateLead(acc, l.id, { metered: true }); } catch {}
+            // `acc` was a typo for `accountId` here. It threw ReferenceError on
+            // every run, the bare catch ate it, and so no lead was ever stamped
+            // metered — meaning OUTBOUND charged all of them a SECOND time and
+            // every customer silently got half the leads they paid for.
+            try {
+              for (const l of db.getLeads(accountId, profileId)) {
+                if (!l.metered) db.updateLead(accountId, l.id, { metered: true });
+              }
+            } catch (e) {
+              db.logActivity(accountId, { agent: 'PROSPECTOR', msg: `Metering mark failed: ${e.message}` });
+            }
           }
           job.done = done; job.total = total; job.added = added;
         },
@@ -610,8 +620,17 @@ const server = http.createServer(async (req, res) => {
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
         const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!vAllow.ok) {
-          db.logActivity(account.id, { agent: 'VOICE', msg: `Inbound call refused - ${vAllow.reason}` });
-          return xml(res, voice.sayAndHangup("Thanks for calling. Nobody's available to take your call right now - please try again later."));
+          // NEVER hang up on the customer's customer over OUR billing state.
+          // This used to drop every inbound call once minutes ran out or a card
+          // retry flipped the subscription to past_due — the owner lost every
+          // job for the rest of the month and found out from the silence.
+          // Take the message instead; the lead survives and the owner gets told.
+          db.logActivity(account.id, { agent: 'VOICE', msg: `Over plan limit (${vAllow.reason}) - taking a message instead of hanging up` });
+          return xml(res, voice.sayAndGather(
+            `Thanks for calling ${profile.name}. I can't put you through this second — but tell me your name, your number and what you need, and I'll make sure someone calls you straight back.`,
+            base + '/voice/msg',
+            voice.voiceFor(account),
+          ));
         }
         const agentName = vcfg.agentName || 'Sarah';
         // Transparency is mandatory: the caller is told it is an AI up front.
@@ -713,9 +732,13 @@ const server = http.createServer(async (req, res) => {
         if (out.action === 'transfer') {
           const to = (call.account.voice && call.account.voice.transferTo) || '';
           if (!to) return xml(res, voice.sayAndGather("There's nobody free right this second, but I can take a message. What's the best number for you?", base + '/voice/turn', voice.voiceFor(call.account)));
-          db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Transferring call to ' + to });
-          return xml(res, voice.sayAndDial(out.say || 'One sec, putting you through.', to, null, voice.voiceFor(call.account)));
+          // <Dial> needs an action URL. Without one, an unanswered/busy/declined
+          // transfer falls through to no verb at all and the call just dies —
+          // dropping a caller who asked for a human because they were ready to
+          // buy. /voice/dialback catches that and resumes the conversation.
+          // Outcome is recorded there too, once we know it actually connected.
+          return xml(res, voice.sayAndDial(out.say || 'One sec, putting you through.', to, base + '/voice/dialback', voice.voiceFor(call.account)));
         }
         if (out.action === 'book') {
           const d = out.data || {};
@@ -768,6 +791,61 @@ const server = http.createServer(async (req, res) => {
           return xml(res, voice.sayAndSignOff(out.say, voice.voiceFor(call.account), 'Thanks for your time. Bye now.'));
         }
         return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account)));
+      }
+
+      // ---- message taken because the plan was out of minutes ----
+      // The call still happened and the caller still wants the work, so the
+      // details land in the diary as an unscheduled booking and the owner is
+      // emailed — including WHY, so they can top up instead of quietly
+      // bleeding jobs.
+      if (p === '/voice/msg') {
+        const acct = db.accountByVoiceNumber(params.To || '');
+        const heard = String(params.SpeechResult || params.Digits || '').trim();
+        if (acct) {
+          const prof = db.getProfile(acct.id, (acct.voice || {}).profileId) || db.getProfiles(acct.id)[0];
+          const from = params.From || '';
+          try {
+            db.addAppointment(acct.id, {
+              name: 'Caller', phone: from, whenText: 'call back - message taken',
+              reason: heard || '(no message captured)', source: 'voice-overlimit', startsAt: '',
+            });
+          } catch (e) {
+            db.logActivity(acct.id, { agent: 'VOICE', msg: `Could not save message: ${e.message}` });
+          }
+          db.logActivity(acct.id, { agent: 'VOICE', msg: `Message taken from ${from} (over plan limit): ${heard.slice(0, 140)}` });
+          try {
+            await notify.callSummary({
+              account: acct, profile: prof, outcome: 'message taken - OVER PLAN LIMIT, top up to keep answering live',
+              call: { from, durationSec: 0, transcript: [{ who: 'caller', text: heard || '(nothing captured)' }] },
+            });
+          } catch {}
+        }
+        return xml(res, voice.sayAndHangup(
+          "Got it — I've passed that on and someone will call you right back. Thanks for calling.",
+          acct ? voice.voiceFor(acct) : undefined,
+        ));
+      }
+
+      // ---- a transfer came back unanswered ----
+      // Twilio POSTs here when <Dial> ends. If the human actually picked up we
+      // let the call finish; anything else (no answer, busy, declined, bad
+      // number) used to silently end the call, so instead we pick the
+      // conversation back up and take a message.
+      if (p === '/voice/dialback') {
+        const call = voice.getCall(sid);
+        const st = String(params.DialCallStatus || '');
+        if (st === 'completed' || st === 'answered') {
+          if (call) db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
+          res.writeHead(204); return res.end();
+        }
+        if (call) {
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `Transfer not answered (${st || 'unknown'}) - taking a message instead` });
+        }
+        return xml(res, voice.sayAndGather(
+          "Sorry — couldn't get hold of anyone just then. Let me take your number and what it's about, and I'll have someone call you straight back.",
+          base + '/voice/turn',
+          call && call.account ? voice.voiceFor(call.account) : undefined,
+        ));
       }
 
       // ---- call finished ----
