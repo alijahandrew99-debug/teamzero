@@ -442,6 +442,20 @@
   </div>
 
   <div class="card">
+    <h2><span class="agent">COLD CALLS</span> Work your list <span class="muted" id="callableCount"></span></h2>
+    <div class="body">
+      <p class="muted" style="margin:0 0 10px">The AI rings your leads one at a time, has the conversation, and books what it can. It never calls a number twice, never calls anyone who asked not to be, and stops on its own if you run out of minutes.</p>
+      <div class="warnbox" style="margin-bottom:12px">These are real calls to real people and they cost real money. Listen to a test call first so you know exactly what they will hear.</div>
+      <div class="row">
+        <label class="muted" for="vc_count">How many to call now</label>
+        <input id="vc_count" type="number" min="1" max="25" value="5" style="width:90px;margin:0">
+        <button class="red" onclick="startCallRun()" id="vcBtn">📞 Start calling</button>
+      </div>
+      <div id="vcProgress" class="muted" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="card">
     <h2><span class="agent">CALENDAR</span> Booked appointments <span class="muted" id="apCount"></span>
       <button class="sm ghost" onclick="loadAppointments()" style="margin-left:auto">Refresh</button>
     </h2>
@@ -497,7 +511,7 @@ function showTab(t){curTab=t;saveUI();
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();loadCalls();loadAppointments();}
+  if(t==='voice'){renderVoice();renderCallable();loadCalls();loadAppointments();}
   if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
@@ -731,6 +745,43 @@ async function saveVoice(){
       ttsVoice:$('v_ttsVoice').value});
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+// How many leads could actually be dialled right now. Shown up front so the
+// button never looks broken when the real answer is "none of them have a
+// phone number yet".
+function renderCallable(){
+  const el=$('callableCount'); if(!el)return;
+  const P=pid();
+  const leads=(STATE.leads||[]).filter(l=>l.profileId===P);
+  const ready=leads.filter(l=>l.phone&&!l.calledAt).length;
+  const called=leads.filter(l=>l.calledAt).length;
+  el.textContent=ready?`· ${ready} ready to call`:(called?`· all ${called} called`:'· no phone numbers yet');
+}
+async function startCallRun(){
+  const n=Number($('vc_count').value)||5;
+  if(!confirm(`Start calling ${n} lead(s)?\n\nThese are real phone calls to real people, spaced about 20 seconds apart. They cost Twilio and AI minutes.`))return;
+  const b=$('vcBtn');b.disabled=true;const o=b.textContent;b.textContent='Starting…';
+  try{
+    const r=await api('/api/voice/callrun',{count:n,profileId:pid()});
+    if(!r.started){toast(r.note||'Nothing to call');$('vcProgress').textContent=r.note||'';return;}
+    const sk=r.skipped||{};
+    const skipNote=[sk.noPhone?`${sk.noPhone} without a number`:'',sk.alreadyCalled?`${sk.alreadyCalled} already called`:'',sk.onDnc?`${sk.onDnc} on do-not-call`:'']
+      .filter(Boolean).join(', ');
+    toast(`Calling ${r.started} lead(s)…`);
+    const poll=async()=>{
+      const s=await api('/api/voice/callrun/status');
+      if(s.status==='idle')return;
+      $('vcProgress').innerHTML=`📞 <b>${s.done||0}</b> of ${s.total||0} called`
+        +(s.failed?` · ${s.failed} failed`:'')
+        +(skipNote?`<br><span class="muted">Skipped: ${esc(skipNote)}</span>`:'');
+      if(s.status==='running'){setTimeout(poll,4000);return;}
+      $('vcProgress').innerHTML=esc(s.note||'Done.')+(skipNote?`<br><span class="muted">Skipped: ${esc(skipNote)}</span>`:'');
+      toast(s.note||'Calling finished');
+      await load();loadCalls();loadAppointments();
+    };
+    poll();
+  }catch(e){toast(e.message);$('vcProgress').textContent=e.message;}
+  finally{b.disabled=false;b.textContent=o;}
 }
 async function testCall(){
   const to=$('v_testTo').value.trim();

@@ -282,6 +282,9 @@ const sendJobs = new Map();
 // One send job per account at a time. Without this, a second click or a page
 // reload starts a concurrent run over the same approved queue items and every
 // recipient gets the email twice.
+// One cold-calling run per account at a time — the AI can only hold one
+// conversation, and two overlapping runs would dial the same lead twice.
+const callJobs = new Map();
 const activeSends = new Map();
 function startSendJob(account, profileId) {
   const running = activeSends.get(account.id);
@@ -1299,6 +1302,96 @@ const server = http.createServer(async (req, res) => {
         } catch (e) {
           return json(res, { error: e.message }, 400);
         }
+      }
+
+      // ---- COLD CALL RUN: work the list, one call at a time ----
+      // The email side has had a "find and send" button since day one; the phone
+      // side only ever had a single manual test call, so the outbound voice agent
+      // was effectively unusable on a real list.
+      if (p === '/api/voice/callrun' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
+        const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+        if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
+        const vcfg = account.voice || {};
+        const from = vcfg.number || process.env.TWILIO_PHONE_NUMBER || '';
+        if (!from) return json(res, { error: 'No Twilio number configured.' }, 400);
+        const profileId = f.profileId || vcfg.profileId || '';
+        const profile = db.getProfile(acc, profileId) || db.getProfiles(acc)[0];
+        if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
+        if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
+        if (callJobs.get(acc) && callJobs.get(acc).status === 'running') {
+          return json(res, { error: 'A calling run is already going. Let it finish first.' }, 409);
+        }
+
+        // Who is actually callable: a real number, never called before, and not
+        // on the do-not-call list. Silent skips would look like the feature is
+        // broken, so every exclusion is counted and reported back.
+        const all = db.getLeads(acc, profile.id);
+        let noPhone = 0, alreadyCalled = 0, onDnc = 0;
+        const queue = [];
+        for (const l of all) {
+          const to = voice.toE164(l.phone || '');
+          if (!to) { noPhone++; continue; }
+          if (l.calledAt) { alreadyCalled++; continue; }
+          if (suppress.isPhoneSuppressed(acc, to).blocked) { onDnc++; continue; }
+          queue.push({ lead: l, to });
+        }
+        const want = Math.max(1, Math.min(Number(f.count) || 10, 25));
+        const batch = queue.slice(0, want);
+        if (!batch.length) {
+          return json(res, { ok: true, started: 0,
+            note: all.length
+              ? `Nothing to call: ${noPhone} without a phone number, ${alreadyCalled} already called, ${onDnc} on the do-not-call list.`
+              : 'No leads yet — find some on the Sales Desk first.' });
+        }
+
+        const job = { accountId: acc, status: 'running', total: batch.length, done: 0,
+          connected: 0, failed: 0, startedAt: Date.now(), note: '', skipped: { noPhone, alreadyCalled, onDnc } };
+        callJobs.set(acc, job);
+
+        (async () => {
+          for (const item of batch) {
+            // Re-check the plan every iteration: a long run can exhaust the
+            // month's minutes partway, and quietly dialling past that would
+            // bill the owner for minutes they have not bought.
+            const fresh = db.getAccount(acc);
+            const ok = plans.voiceAllowed(fresh, stripe.isOwner(fresh));
+            if (!ok.ok) { job.note = `Stopped early — ${ok.reason}`; break; }
+            try {
+              const call = await voice.placeCall({ to: item.to, from,
+                answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
+              voice.startCall(call.sid, { accountId: acc, account: fresh, profile, direction: 'outbound',
+                to: item.to, from, lead: { name: item.lead.name, company: item.lead.company, email: item.lead.email } });
+              db.saveCall(acc, { sid: call.sid, direction: 'outbound', to: item.to, from, profileId: profile.id,
+                status: call.status || 'queued', transcript: [] });
+              db.updateLead(acc, item.lead.id, { calledAt: new Date().toISOString(), callSid: call.sid });
+              job.connected++;
+              db.logActivity(acc, { agent: 'VOICE', profileId: profile.id,
+                msg: `Cold call placed to ${item.lead.company || item.to}` });
+            } catch (e) {
+              job.failed++;
+              // Mark it tried so a permanently bad number cannot jam every
+              // future run at the front of the queue.
+              db.updateLead(acc, item.lead.id, { calledAt: new Date().toISOString(), callError: e.message });
+              db.logActivity(acc, { agent: 'VOICE', profileId: profile.id,
+                msg: `Cold call to ${item.lead.company || item.to} failed: ${e.message}` });
+            }
+            job.done++;
+            // Space the calls out. Firing a whole list at once is both a carrier
+            // spam signal and unanswerable — the AI can only hold one at a time.
+            if (job.done < batch.length) await new Promise((r) => setTimeout(r, 20000));
+          }
+          job.status = 'done';
+          if (!job.note) job.note = `Called ${job.connected}${job.failed ? `, ${job.failed} failed` : ''}.`;
+        })().catch((e) => { job.status = 'error'; job.note = e.message; });
+
+        return json(res, { ok: true, started: batch.length, waiting: queue.length - batch.length,
+          skipped: { noPhone, alreadyCalled, onDnc } });
+      }
+      if (p === '/api/voice/callrun/status' && req.method === 'GET') {
+        return json(res, callJobs.get(acc) || { status: 'idle' });
       }
 
       // ---- billing setup diagnostic (owner only; reports names, never values) ----
