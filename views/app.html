@@ -1110,6 +1110,11 @@ function calCard(ap){
     +'<div><b>'+esc(when)+'</b> — '+esc(ap.name||'Caller')+(ap.company?' · '+esc(ap.company):'')
     +'<div class="muted">'+esc(ap.phone||'')+(ap.email?' · '+esc(ap.email):'')+' · '+esc(ap.reason||'')+'</div></div>'
     +'<span class="pill '+(ap.status==='done'?'sent':'approved')+'">'+esc(ap.status||'booked')+'</span></div>'
+    // What was said on the call, so the owner can call back already knowing
+    // the story instead of opening cold. Collapsed by default: it's there when
+    // you need it, not in the way when you're scanning the day.
+    +(ap.notes?'<details style="margin-top:6px"><summary class="muted" style="cursor:pointer;font-size:13px">What was said on the call</summary>'
+      +'<pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;margin:6px 0 0;padding:8px 10px;background:var(--paper2);border:1px solid var(--line);border-radius:6px;color:var(--ink2)">'+esc(ap.notes)+'</pre></details>':'')
     +'<div class="row" style="margin-top:7px">'
     +(ap.startsAt?'<a href="/api/appointments/ics?id='+ap.id+'"><button class="sm ghost">📥 Outlook / Apple (.ics)</button></a>'
     +'<a href="'+gcal+'" target="_blank" rel="noopener"><button class="sm ghost">Google Calendar</button></a>':'')

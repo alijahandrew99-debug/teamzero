@@ -843,6 +843,7 @@ const server = http.createServer(async (req, res) => {
           const phone = d.phone || params.From || '';
           // Put it in the diary. startsAt is the resolved date-time the agent
           // committed to; whenText keeps their own words for context.
+          call.saved = true;   // hangup salvage must not create a duplicate
           const appt = db.addAppointment(call.accountId, {
             profileId: call.profile.id, callSid: sid,
             name: d.name || 'Caller', company: d.company || '', phone,
@@ -897,6 +898,7 @@ const server = http.createServer(async (req, res) => {
           let appt = null;
           if (gotSomething) {
             try {
+              call.saved = true;
               appt = db.addAppointment(call.accountId, {
                 profileId: call.profile.id, callSid: sid,
                 name: d.name || 'Caller', company: d.company || '', phone,
@@ -1001,7 +1003,36 @@ const server = http.createServer(async (req, res) => {
               chars: call.turns.filter((t) => t.who !== 'caller').reduce((n, t) => n + (t.text || '').length, 0),
               tier: /Generative|Chirp3/.test(voice.voiceFor(call.account)) ? 'generative' : 'neural' }) });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
+          // Reply to Twilio NOW — it only needs the ack — then salvage in the
+          // background so a slow model reply can't stall the webhook.
+          res.writeHead(204); res.end();
+          // The caller hung up before the agent got a closing turn. Whatever
+          // they said in the meantime — a name, a number, "tomorrow morning" —
+          // is only in call.turns, and used to be thrown away with them.
+          // Read it once and put it in the diary before letting the call go.
+          const snapshot = { ...call, turns: call.turns.slice() };
           voice.endCall(sid);
+          if (!snapshot.saved && snapshot.turns.some((t) => t.who === 'caller')) {
+            voice.salvageFromTranscript(snapshot).then((got) => {
+              if (!got || !got.wantsCallback) return;
+              const from = snapshot.direction === 'inbound' ? (params.From || snapshot.from || '') : (snapshot.to || '');
+              const phone = got.phone || from;
+              const transcriptNote = snapshot.turns.map((t) => `${t.who === 'caller' ? 'Caller' : 'AI'}: ${t.text}`).join('\n');
+              const appt = db.addAppointment(snapshot.accountId, {
+                profileId: snapshot.profile.id, callSid: sid,
+                name: got.name || 'Caller', company: got.company || '', phone,
+                email: '', reason: got.reason || got.summary || 'wants a callback',
+                whenText: got.when || 'call back - no time agreed', startsAt: got.whenISO || '',
+                notes: (got.summary ? got.summary + '\n\n' : '') + '--- what was said ---\n' + transcriptNote,
+                source: (snapshot.direction === 'inbound' ? 'inbound call' : 'outbound call') + ' (caller hung up)',
+              });
+              db.saveCall(snapshot.accountId, { sid, outcome: got.whenISO ? 'booked' : 'callback' });
+              db.logActivity(snapshot.accountId, { agent: 'VOICE', profileId: snapshot.profile.id,
+                msg: `Saved from a call that ended early: ${got.name || 'Caller'} on ${phone}${got.when ? ' - ' + got.when : ''}` });
+              return notify.announceBooking({ account: snapshot.account, profile: snapshot.profile, appointment: appt });
+            }).catch((e) => db.logActivity(snapshot.accountId, { agent: 'VOICE', msg: `Could not salvage call details: ${e.message}` }));
+          }
+          return;
         }
         res.writeHead(204); return res.end();
       }
