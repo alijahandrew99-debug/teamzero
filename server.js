@@ -738,6 +738,74 @@ const server = http.createServer(async (req, res) => {
     // ================= VOICE (Twilio webhooks) =================
     // Public endpoints Twilio POSTs to. Every request is signature-verified so
     // nobody can spoof a call, inject a transcript, or burn AI spend.
+    // ---------- inbound SMS: the same agent, texting ----------
+    // Twilio POSTs here when someone texts a customer's number -- typically a
+    // reply to a missed-call text-back or a booking confirmation. Same brain as
+    // the phone, same booking path, same do-not-call list. Signature-verified
+    // exactly like the voice webhooks; STOP handled before the model ever runs.
+    if (p === '/sms/incoming') {
+      const raw = await readBody(req);
+      const params = parseForm(raw);
+      const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+      const base = host ? `${proto}://${host}` : (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+      if (!voice.configured()) { res.writeHead(204); return res.end(); }
+      if (!voice.verifySignature(base + p, params, req.headers['x-twilio-signature'])) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('bad signature');
+      }
+      const twimlReply = (text) => { res.writeHead(200, { 'Content-Type': 'text/xml' }); return res.end(`<?xml version="1.0" encoding="UTF-8"?><Response>${text ? `<Message>${voice.esc(text)}</Message>` : ''}</Response>`); };
+      const from = params.From || '', to = params.To || '', body = String(params.Body || '').trim();
+      const account = db.accountByVoiceNumber(to);
+      if (!account || !from) return twimlReply('');
+      // Opt-out words are law, not a preference. Handle before anything else.
+      if (/^\s*(stop|stopall|unsubscribe|cancel|end|quit)\s*$/i.test(body)) {
+        suppress.suppressPhone(account.id, from, 'unsubscribe', { note: 'texted STOP' });
+        db.logActivity(account.id, { agent: 'VOICE', msg: `SMS STOP from ${from} — number suppressed` });
+        return twimlReply("You're unsubscribed and won't hear from us again. Reply START if that was a mistake.");
+      }
+      if (/^\s*(start|unstop|yes)\s*$/i.test(body) && suppress.isPhoneSuppressed(account.id, from).blocked) {
+        suppress.unsuppress(account.id, suppress.phoneKey(from));
+        return twimlReply("You're back on. What can I do for you?");
+      }
+      if (suppress.isPhoneSuppressed(account.id, from).blocked) return twimlReply('');
+      const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
+      if (!vAllow.ok || account.subStatus === 'canceled') return twimlReply('');
+      const profile = db.getProfile(account.id, (account.voice || {}).profileId) || db.getProfiles(account.id)[0];
+      if (!profile) return twimlReply('');
+      // Build the thread as a pseudo-call so think() and the booking path just work.
+      const thread = db.getThread(account.id, from);
+      const turns = (thread && thread.turns) || [];
+      turns.push({ who: 'caller', text: body });
+      const hist = stats.callerHistory(account.id, from, suppress.phoneKey);
+      const pseudo = { sid: 'sms:' + from, accountId: account.id, account, profile, direction: 'inbound', channel: 'sms',
+        from, to, turns, lead: null, leadBrief: hist ? `=== THIS PERSON HAS BEEN IN TOUCH BEFORE ===\n${hist.brief}` : '', startedAt: Date.now() };
+      let out;
+      try { out = await voice.think(pseudo, body); }
+      catch (e) { db.logActivity(account.id, { agent: 'VOICE', msg: `SMS agent error: ${e.message}` }); return twimlReply("Sorry — give me a moment and text again."); }
+      turns.push({ who: 'agent', text: out.say });
+      db.saveThread(account.id, from, turns, { lastAt: new Date().toISOString() });
+      if (out.action === 'dnc') {
+        suppress.suppressPhone(account.id, from, 'unsubscribe', { note: 'asked by text' });
+      }
+      if (out.action === 'book') {
+        const d = out.data || {};
+        const clash = d.whenISO ? db.findConflict(account.id, d.whenISO, Number((account.voice || {}).slotMinutes) || 60) : null;
+        if (clash) {
+          turns.push({ who: 'agent', text: '[system: that time is taken — offer the nearest open times]' });
+          db.saveThread(account.id, from, turns);
+          return twimlReply("Ah — that slot just went. What else works? I can do either side of it.");
+        }
+        const appt = db.addAppointment(account.id, { profileId: profile.id, callSid: 'sms:' + from,
+          name: d.name || (hist && hist.name) || 'Texter', company: d.company || '', phone: d.phone || from,
+          email: d.email || '', reason: d.reason || 'booked by text', whenText: d.when || '', startsAt: d.whenISO || '',
+          source: 'sms' });
+        db.logActivity(account.id, { agent: 'VOICE', msg: `Booked by text: ${appt.name} — ${appt.reason}${d.when ? ' · ' + d.when : ''}` });
+        hooks.emit(account, 'booking.created', { appointment: appt, source: 'sms' });
+        notify.announceBooking({ account, profile, appointment: appt }).catch(() => {});
+      }
+      return twimlReply(out.say);
+    }
+
     if (p.startsWith('/voice/')) {
       const raw = await readBody(req);
       const params = parseForm(raw);
@@ -1210,6 +1278,31 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const acctForBill = db.getAccount(call.accountId);
           if (acctForBill && callerSpoke) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
           if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
+          // MISSED-CALL TEXT-BACK. A real person who hung up before the agent
+          // got a word in -- gave up on the greeting, bad signal, changed their
+          // mind -- is still a lead, and the highest-ROI capture in trades is
+          // texting them within seconds. Only inbound, only real callers (not
+          // blocked, not the shop's own transfer numbers), only if we have a
+          // line to text from, only once per number per day, and never to
+          // someone who opted out. Robocalls hang up too; the 5-second floor
+          // and the not-a-known-spam check keep most of those out.
+          try {
+            const vc = call.account.voice || {};
+            const from = params.From || call.from || '';
+            const mine = vc.number || (stripe.isOwner(call.account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
+            const isOwnLine = [vc.transferTo, ...(Array.isArray(vc.onCall) ? vc.onCall : [])].some((n) => n && suppress.phoneKey(n) === suppress.phoneKey(from));
+            const bookedOrCallback = ['booked', 'callback', 'transferred'].includes(((db.getCalls(call.accountId, 50).find((c) => c.sid === sid) || {}).outcome) || '');
+            if (call.direction === 'inbound' && !callerSpoke && dur >= 5 && mine && from && !isOwnLine && !bookedOrCallback
+                && vc.textBack !== false && !suppress.isPhoneSuppressed(call.accountId, from).blocked
+                && !stats.textedToday(call.accountId, from)) {
+              const biz = (call.profile && call.profile.name) || 'us';
+              const body = `Hi — this is ${biz}. Looks like we just missed each other. Reply here with what you need and a good time, or call back any time and I'll pick up: ${mine}. Reply STOP to opt out.`;
+              notify.sendSMS(from, body, mine).then((r) => {
+                if (r && r.ok) { stats.markTexted(call.accountId, from); db.logActivity(call.accountId, { agent: 'VOICE', msg: `Missed-call text sent to ${from}` }); }
+                else db.logActivity(call.accountId, { agent: 'VOICE', msg: `Missed-call text to ${from} failed: ${(r && r.error) || 'unknown'}` });
+              }).catch(() => {});
+            }
+          } catch (e) { db.logActivity(call.accountId, { agent: 'VOICE', msg: `Text-back error: ${e.message}` }); }
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: call.turns.length,
