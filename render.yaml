@@ -8,6 +8,13 @@ services:
     plan: starter              # paid: always-on (no idle sleep)
     buildCommand: "echo no build needed"
     startCommand: "node server.js"
+    # Zero-downtime deploys. Without this Render swaps traffic to the new
+    # instance the moment the process STARTS — before it is listening — and
+    # every visitor in that gap gets Render's own "502 Bad Gateway". With it,
+    # Render keeps the old instance serving until the new one answers /health,
+    # so a deploy is invisible from outside. Nothing in server.js can catch a
+    # 502, because it is generated upstream of the app; this is the fix.
+    healthCheckPath: /health
     # NOTE: the persistent disk is added MANUALLY in the Render dashboard
     # (Settings -> Disks -> Add Disk, mount path /app/data, 1GB). Render can't
     # add a disk to an existing service via blueprint sync, so it lives here as

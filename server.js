@@ -590,9 +590,36 @@ function withDemoTel(page) {
 }
 
 // ---- server ----
+// A deliberate "we're doing maintenance" page, for the times we choose to take
+// the site down rather than a deploy blip. Flip MAINTENANCE=1 in the Render
+// dashboard and every human-facing page shows this instead of a dead app.
+// Machines are exempt on purpose: Twilio still gets its webhooks (a caller mid-
+// conversation must not hear the line die), Stripe still gets its webhooks
+// (a payment must never be lost to a maintenance window), and /health keeps
+// answering so Render does not think the instance is broken.
+const MAINTENANCE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dawnpipe — back shortly</title><meta name="robots" content="noindex">
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:"Iowan Old Style",Georgia,serif;background:#f4f1ea;color:#1a1815;text-align:center;padding:24px}
+.m{font-weight:800;font-size:26px;letter-spacing:-.5px}.m b{color:#c02a1b}h1{font-size:28px;margin:22px 0 10px}p{color:#4a463f;font-size:16px;line-height:1.55;max-width:460px;margin:0 auto}
+.n{margin-top:26px;font-size:15px;color:#4a463f}</style></head><body><div>
+<div class="m">Dawn<b>pipe</b></div>
+<h1>Currently unavailable for maintenance</h1>
+<p>We're making some improvements and will be back in a few minutes. Your account, your leads and your calendar are safe — nothing is being reset.</p>
+<p class="n">Your phone line keeps answering during maintenance.<br>Need us? <a href="mailto:support@dawnpipe.com" style="color:#c02a1b">support@dawnpipe.com</a></p>
+</div></body></html>`;
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
+
+  if (process.env.MAINTENANCE === '1'
+      && !p.startsWith('/voice/') && !p.startsWith('/webhook/') && p !== '/health') {
+    // 503 + Retry-After is the honest status: search engines keep the page
+    // indexed and come back later instead of dropping it as a 5xx error.
+    res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8', 'Retry-After': '300', 'Cache-Control': 'no-store' });
+    return res.end(MAINTENANCE_HTML);
+  }
+
   // `let`, not `const`: the checkout-return path re-reads the account after
   // activating it so the rest of the request sees the unlocked state.
   let account = auth.currentAccount(req);
