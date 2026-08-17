@@ -781,8 +781,12 @@ const server = http.createServer(async (req, res) => {
           try { memory.remember(call.accountId, call.lead, { kind: 'call-answered', channel: 'phone', summary: 'spoke with them on the phone' }); } catch {}
         }
 
+        // Demo calls get tighter limits than a paying customer's — see
+        // limitsFor(): the demo line bills nobody, so a ten-minute one is pure
+        // spend, while a customer's call is 87% margin and must not be cut off.
+        const LIM = voice.limitsFor(call.account);
         const elapsedSec = Math.round((Date.now() - call.startedAt) / 1000);
-        if (elapsedSec > voice.MAX_CALL_SECONDS) {
+        if (elapsedSec > LIM.seconds) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'time-limit', transcript: call.turns,
             durationSec: elapsedSec, estCost: voice.estimateCost({ durationSec: elapsedSec, turns: call.turns.length }) });
           return xml(res, voice.sayAndHangup("I've got to run, but someone will follow up with you. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
@@ -790,7 +794,7 @@ const server = http.createServer(async (req, res) => {
         // Count the caller's turns, not every utterance — an exchange is a
         // pair, and our own opener is in here too.
         const exchanges = call.turns.filter((t) => t.who === 'caller').length;
-        if (exchanges > voice.MAX_EXCHANGES) {
+        if (exchanges > LIM.exchanges) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'max-length', transcript: call.turns });
           return xml(res, voice.sayAndHangup("Listen, I don't want to keep you all day - let me get someone to follow up properly. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
@@ -872,7 +876,36 @@ const server = http.createServer(async (req, res) => {
             'Someone will be in touch. Thanks for your time, and have a good one. Bye now.'));
         }
         if (out.action === 'end') {
-          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ended', transcript: call.turns });
+          // A call that ended without a slot being agreed is NOT nothing. The
+          // agent routinely takes a name and a number and says "someone will
+          // be in touch" — and that used to save a transcript and no more, so
+          // the owner had a real customer waiting for a callback and an empty
+          // calendar. Anything with contact details lands in the diary as an
+          // unscheduled callback and the owner is told.
+          const d = out.data || {};
+          const phone = d.phone || (call.direction === 'inbound' ? params.From : call.to) || '';
+          const gotSomething = !!(d.name || d.reason || phone);
+          let appt = null;
+          if (gotSomething) {
+            try {
+              appt = db.addAppointment(call.accountId, {
+                profileId: call.profile.id, callSid: sid,
+                name: d.name || 'Caller', company: d.company || '', phone,
+                email: d.email || '', reason: d.reason || 'wants a callback',
+                whenText: d.when || 'call back - no time agreed', startsAt: d.whenISO || '',
+                source: call.direction === 'inbound' ? 'inbound call' : 'outbound call',
+              });
+            } catch (e) {
+              db.logActivity(call.accountId, { agent: 'VOICE', msg: `Could not save callback: ${e.message}` });
+            }
+          }
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: appt ? 'callback' : 'ended', transcript: call.turns });
+          if (appt) {
+            db.logActivity(call.accountId, { agent: 'VOICE', profileId: call.profile.id,
+              msg: `Callback needed: ${d.name || 'Caller'}${d.company ? ' (' + d.company + ')' : ''} on ${phone}${d.reason ? ' - ' + d.reason : ''}` });
+            notify.announceBooking({ account: call.account, profile: call.profile, appointment: appt })
+              .catch((e) => db.logActivity(call.accountId, { agent: 'VOICE', msg: `Callback notify failed: ${e.message}` }));
+          }
           return xml(res, voice.sayAndSignOff(out.say, voice.voiceFor(call.account), 'Thanks for your time. Bye now.'));
         }
         return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account)));
