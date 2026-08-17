@@ -547,7 +547,11 @@ async function reclaimCancelledNumbers() {
     if (a.subStatus !== 'canceled' && a.subStatus !== 'incomplete_expired') continue;
     const since = Date.parse(a.canceledAt || '') || 0;
     if (!since) { db.updateAccount(a.id, { canceledAt: new Date().toISOString() }); continue; }
-    if (Date.now() - since < RECLAIM_AFTER_DAYS * 24 * 60 * 60 * 1000) continue;
+    // A trial that never converted gets its number back fast: they never paid,
+    // so there is no relationship to preserve and 21 days of rent is a gift.
+    // A real customer who cancels keeps the grace period in case they return.
+    const graceDays = a.everPaid ? RECLAIM_AFTER_DAYS : 2;
+    if (Date.now() - since < graceDays * 24 * 60 * 60 * 1000) continue;
     try {
       await numbers.release(v.numberSid);
       db.updateAccount(a.id, { voice: { ...v, number: '', numberSid: '', enabled: false } });
