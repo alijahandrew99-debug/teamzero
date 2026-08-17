@@ -846,7 +846,11 @@ function renderVoice(){
           ? `<div class="warnbox bad">⚠ Answering is switched OFF — calls to <b>${esc(v.number)}</b> are going to voicemail. Switch it back on below.</div>`
           : (vmins!==null&&vmins<=0)
             ? `<div class="warnbox bad">⚠ Out of phone minutes this month — <b>${esc(v.number)}</b> is taking messages instead of handling calls. <a href="#" onclick="showUpgrade();return false">Add minutes →</a></div>`
-            : `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b></div>`;
+            // Name the business it answers AS. It uses voice.profileId and
+            // silently falls back to whichever profile sorts first, so an
+            // account with several businesses can have its line pitching the
+            // wrong company with nothing on screen saying so.
+            : `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b> as <b>${esc((curProfileForVoice()||{}).name||'—')}</b></div>`;
   if(_dirty)return;                             // don't clobber unsaved edits
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
@@ -885,6 +889,13 @@ async function saveVoice(){
       ttsVoice:$('v_ttsVoice').value});
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
+}
+// Which business the PHONE answers as — deliberately not the tab's dropdown,
+// which is a different selection and can disagree with it.
+function curProfileForVoice(){
+  const v=STATE.voice||{};
+  const ps=STATE.profiles||[];
+  return ps.find(p=>p.id===v.profileId)||ps[0]||null;
 }
 // ---- your own phone line ----
 function renderNumber(){
