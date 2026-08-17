@@ -811,15 +811,29 @@ const server = http.createServer(async (req, res) => {
         // homepage promises the disclosure happens on every call. Their own
         // greeting still plays; it just comes after the part the law needs.
         const disclosure = 'Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. Just so you know, this call may be transcribed.';
-        const greeting = disclosure + ' ' + (vcfg.greeting || 'What can I do for you?');
+        // Greet returning callers by name. The legal disclosure is unchanged and
+        // still comes first; only the friendly part personalises.
+        const histEarly = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
+        const hello = histEarly && histEarly.name
+          ? `Hi ${histEarly.name.split(' ')[0]}, good to hear from you again — ${(vcfg.greeting || 'what can I do for you today?').replace(/^\s*[A-Z]/, (c) => c.toLowerCase())}`
+          : (vcfg.greeting || 'What can I do for you?');
+        const greeting = disclosure + ' ' + hello;
         // Does this caller already exist as a lead? If so the AI opens the call
         // knowing what we emailed them and where they stand — the thing no
         // email tool and no answering service can do.
         const knownLead = db.getLeads(account.id, profile.id)
           .find((l) => suppress.phoneKey(l.phone || '') && suppress.phoneKey(l.phone) === suppress.phoneKey(params.From || ''));
+        // Beyond email leads: anyone who has CALLED or BOOKED before is a known
+        // person, and the agent should treat them like one. Built from the
+        // call and appointment history for this number.
+        const hist = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
+        const leadBrief = [knownLead ? memory.briefFor(knownLead) : '', hist ? `=== THIS CALLER HAS BEEN IN TOUCH BEFORE ===
+${hist.brief}
+Use it the way a good receptionist would: greet them by name if you have one, don't re-ask what you already know (address, what they usually need), and if they're calling about the same thing as last time, say so. Never read the history back like a file.` : '']
+          .filter(Boolean).join('\n\n');
         const inCall = voice.startCall(sid, { accountId: account.id, account, profile, direction: 'inbound',
           from: params.From || '', to: params.To || '', lead: knownLead || null,
-          leadBrief: knownLead ? memory.briefFor(knownLead) : '' });
+          leadBrief, callerName: hist ? hist.name : '' });
         // Record what we just said. Without this the model can't see its own
         // opener and asks the same question again on the next turn.
         inCall.turns.push({ who: 'agent', text: greeting });
