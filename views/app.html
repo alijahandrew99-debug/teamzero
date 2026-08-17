@@ -463,6 +463,16 @@
       <div class="two">
         <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
         <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
+        <div class="field"><label>Your time zone</label><div class="hint">Every "tomorrow morning" a caller says is worked out in this zone. Get this wrong and bookings land on the wrong day.</div>
+          <select id="v_timezone">
+            <option value="America/New_York">Eastern</option>
+            <option value="America/Chicago">Central</option>
+            <option value="America/Denver">Mountain</option>
+            <option value="America/Phoenix">Arizona (no DST)</option>
+            <option value="America/Los_Angeles">Pacific</option>
+            <option value="America/Anchorage">Alaska</option>
+            <option value="Pacific/Honolulu">Hawaii</option>
+          </select></div>
       </div>
       <div class="field"><label>What counts as a win on this call?</label><div class="hint">The one outcome it drives toward. Be specific — vague goals make it wander and wander costs money.</div><input id="v_objective" placeholder="Book a 15-minute demo with Alijah."></div>
       <div class="field"><label>Qualifying questions</label><div class="hint">The 2-3 things that tell you if they're worth your time. It weaves these in naturally rather than reading them out.</div><textarea id="v_qualifying" placeholder="How many people are doing outbound today?&#10;Are you already using a sales tool?&#10;Who signs off on something like this?"></textarea></div>
@@ -778,7 +788,7 @@ const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta'
 // AI-autofilled fields before they could be saved. Once anything is edited we
 // leave the forms alone until it is saved.
 let _dirty=false;
-const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_hours','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_hours','v_timezone','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
 // The SENDING/schedule/data-key forms suffered the same poll-wipe as the
 // profile form: type your email, tab to the password box, and 20s later the
 // email field snapped back to the saved value — so Connect verified the new
@@ -858,6 +868,11 @@ function renderVoice(){
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
   $('v_transferTo').value=v.transferTo||'';
+  // First-time default: the browser knows where the owner is. Fall back to
+  // Central only if that isn't one of the listed zones.
+  const tzSel=$('v_timezone');
+  if(tzSel){const want=v.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone;
+    tzSel.value=[...tzSel.options].some(o=>o.value===want)?want:'America/Chicago';}
   $('v_hours').value=v.hours||'';
   $('v_faq').value=v.faq||'';
   $('v_objective').value=v.objective||'';
@@ -886,7 +901,7 @@ async function saveVoice(){
     // shutdown, then fixed a typo in the greeting, silently had the AI start
     // taking live calls again — and the toggle still read OFF.
     await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:$('v_profileId').value,
-      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,
+      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,hours:$('v_hours').value,timezone:$('v_timezone').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
       ttsVoice:$('v_ttsVoice').value});

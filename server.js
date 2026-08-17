@@ -1496,6 +1496,10 @@ const server = http.createServer(async (req, res) => {
           qualifying: (f.qualifying ?? cur.qualifying ?? '').trim(),
           objections: (f.objections ?? cur.objections ?? '').trim(),
           hours: (f.hours ?? cur.hours ?? '').trim(),
+          // Only accept a zone Intl actually knows, or the date math silently
+          // falls back and every booking lands on the wrong day.
+          timezone: (() => { const z = String(f.timezone ?? cur.timezone ?? '').trim();
+            try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return z; } catch { return cur.timezone || ''; } })(),
         };
         db.updateAccount(acc, { voice: v });
         return json(res, { ok: true, voice: v });
