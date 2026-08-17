@@ -21,6 +21,10 @@ const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
 
 const PORT = process.env.PORT || 8090;
+// Stamped from the git commit at deploy time (Render sets RENDER_GIT_COMMIT).
+// Lets anyone confirm WHICH code is live from /health, instead of inferring it
+// from an uptime counter that a stale instance also reports.
+const BUILD_ID = (process.env.RENDER_GIT_COMMIT || process.env.BUILD_ID || 'local').slice(0, 7);
 
 // Launch-day survival: a single unhandled error must never take the server down
 // for everyone. Log it and keep serving.
@@ -616,6 +620,21 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
+  // /health is Render's deploy gate: with healthCheckPath set, Render only
+  // switches traffic to a new instance once this answers 200. It therefore has
+  // to be the FIRST thing in the handler and depend on nothing — no session
+  // lookup, no disk read, no auth, nothing that could throw before it returns.
+  // It used to sit ~500 lines in, after auth and routing; a probe that failed
+  // anywhere on that path made Render silently keep the OLD instance while
+  // the old instance's own /health kept answering 200 — which is how a dozen
+  // commits looked deployed and were not.
+  if (req.method === 'GET' && p === '/health') {
+    let ai = 'unknown';
+    try { ai = aiMode(); } catch {}
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ ok: true, ai, uptime: Math.round(process.uptime()), build: BUILD_ID }));
+  }
+
   if (process.env.MAINTENANCE === '1'
       && !p.startsWith('/voice/') && !p.startsWith('/webhook/') && p !== '/health') {
     // 503 + Retry-After is the honest status: search engines keep the page
@@ -1126,9 +1145,6 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    if (req.method === 'GET' && p === '/health') {
-      return json(res, { ok: true, ai: aiMode(), uptime: Math.round(process.uptime()) });
-    }
 
 
     // ---------- public ----------
