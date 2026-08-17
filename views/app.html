@@ -529,6 +529,17 @@
     <div class="body"><div id="apList"><div class="empty">No appointments yet.</div></div></div>
   </div>
 
+  <!-- What the AI actually did. This is the answer to "why am I paying for
+       this" — the number a $399 line item lives or dies on at the first slow
+       month. Same figures go out in the monthly recap email. -->
+  <div class="card">
+    <h2><span class="agent">THIS MONTH</span> What your AI has done <span class="muted" id="statRange"></span></h2>
+    <div class="body">
+      <div id="statTiles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px"></div>
+      <div id="statNote" class="muted" style="margin-top:12px;font-size:13.5px"></div>
+    </div>
+  </div>
+
   <div class="card">
     <h2><span class="agent">CALLS</span> Recent calls <button class="sm ghost" onclick="loadCalls()" style="margin-left:auto">Refresh</button></h2>
     <div class="body">
@@ -581,7 +592,7 @@ function showTab(t){curTab=t;saveUI();
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadCalls();loadAppointments();if($('cardColdCalls'))$('cardColdCalls').classList.toggle('hide',!STATE.outboundCalling);}
+  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadStats();loadCalls();loadAppointments();if($('cardColdCalls'))$('cardColdCalls').classList.toggle('hide',!STATE.outboundCalling);}
   if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
@@ -1195,6 +1206,30 @@ async function loadAppointments(){
 async function apStatus(id,status){
   try{await api('/api/appointments/update',{id,status});toast('Updated');loadAppointments();}
   catch(e){toast(e.message);}
+}
+async function loadStats(){
+  const box=$('statTiles'); if(!box)return;
+  try{
+    const s=await api('/api/voice/stats');
+    const m=s.thisMonth||{}, w=s.last7||{};
+    const tile=(n,label,sub,accent)=>`<div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:${accent?'#eaf5ee':'var(--paper2)'}">
+      <div style="font-size:28px;font-weight:800;line-height:1;color:${accent?'#1f5c39':'var(--ink)'}">${n}</div>
+      <div style="font-size:13px;margin-top:4px;font-weight:700">${label}</div>${sub?`<div class="muted" style="font-size:12px;margin-top:2px">${sub}</div>`:''}</div>`;
+    const est=(m.booked||0)*400;
+    box.innerHTML=[
+      tile(m.calls||0,'calls handled',`${w.calls||0} in the last 7 days`),
+      tile(m.afterHours||0,'after hours','nights, early, weekends — the ones voicemail would have got',true),
+      tile(m.booked||0,'jobs booked','or callbacks captured',true),
+      tile(m.transferred||0,'put through to you',''),
+      tile(m.emergencies||0,'emergencies escalated',''),
+      tile(m.minutes||0,'minutes on the phone',''),
+    ].join('');
+    $('statRange').textContent=' · since the 1st';
+    $('statNote').innerHTML=(m.booked||0)
+      ? `If those ${m.booked} bookings are worth even $400 each, that's roughly <b>$${est.toLocaleString()}</b> of work that would otherwise have gone to voicemail.`
+      +(m.topReasons&&m.topReasons.length?` Most common reason to call: <b>${esc(m.topReasons[0].reason)}</b>.`:'')
+      : 'No bookings yet this month. Once calls come in, this fills in on its own.';
+  }catch(e){box.innerHTML='<span class="muted">Stats unavailable: '+esc(e.message)+'</span>';}
 }
 async function loadCalls(){
   try{

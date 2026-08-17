@@ -16,6 +16,7 @@ const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
 const voice = require('./lib/voice');
 const numbers = require('./lib/numbers');
+const stats = require('./lib/stats');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -562,6 +563,36 @@ async function reclaimCancelledNumbers() {
   }
 }
 setInterval(() => { reclaimCancelledNumbers().catch(() => {}); }, 6 * 60 * 60 * 1000);
+
+/**
+ * "Here is what your AI did last month" -- the cheapest churn reducer in this
+ * category. Runs on the 1st, once per account per month (stamped so a restart
+ * cannot double-send), only to accounts whose plan includes the phone.
+ */
+async function sendMonthlyRecaps() {
+  const now = new Date();
+  if (now.getDate() !== 1) return;
+  const key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  for (const a of db.allAccounts()) {
+    if (a.lastRecapKey === key) continue;
+    const u = plans.usage(a, stripe.isOwner(a));
+    if (!u.voice || !u.voice.included) continue;
+    if (!['active', 'trialing', 'past_due'].includes(a.subStatus) && !stripe.isOwner(a)) continue;
+    try {
+      const prof = db.getProfile(a.id, (a.voice || {}).profileId) || db.getProfiles(a.id)[0];
+      const s = stats.summary(a, voice.tzFor(a)).lastMonth;
+      const tier = plans.TIERS[a.tier];
+      const body = stats.recapEmail(a, (prof && prof.name) || 'your business', s, tier ? tier.price : 0);
+      const monthName = new Date(now.getFullYear(), now.getMonth() - 1, 1).toLocaleString('en-US', { month: 'long' });
+      const r = await mailer.send(a.email, `${monthName}: ${s.calls} calls answered, ${s.booked} booked — your Dawnpipe recap`, body);
+      db.updateAccount(a.id, { lastRecapKey: key });
+      db.logActivity(a.id, { agent: 'SYSTEM', msg: r && r.ok ? `Monthly recap emailed (${s.calls} calls, ${s.booked} booked)` : `Monthly recap not sent: ${(r && r.error) || 'mailer off'}` });
+    } catch (e) {
+      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Monthly recap failed: ${e.message}` });
+    }
+  }
+}
+setInterval(() => { sendMonthlyRecaps().catch(() => {}); }, 60 * 60 * 1000);
 
 // The public demo number, injected into every page that offers it. One source
 // of truth on purpose: the number used to be hardcoded into the meta tags and
@@ -1655,6 +1686,11 @@ const server = http.createServer(async (req, res) => {
         };
         db.updateAccount(acc, { voice: v });
         return json(res, { ok: true, voice: v });
+      }
+      // What the AI actually did: this month, last month, last 7 days. Feeds the
+      // dashboard; the same numbers go out in the monthly recap email.
+      if (p === '/api/voice/stats' && req.method === 'GET') {
+        return json(res, stats.summary(account, voice.tzFor(account)));
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
         const rows = db.getCalls(acc, 50);
