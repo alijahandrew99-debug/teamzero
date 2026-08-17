@@ -149,10 +149,15 @@
   <span class="who"><span>__EMAIL__</span><a href="/logout">Log out</a></span>
 </header>
 
+<!-- Dawnpipe does three things. The tabs say those three things in the words
+     a plumber would use. "SDR" is industry jargon that means nothing to the
+     person paying, and it hid the cold-calling feature inside the receptionist
+     screen where nobody found it. -->
 <div class="tabs">
   <button class="tab active" id="tabBusinessBtn" onclick="showTab('business')">🏢 Your Business <span class="dot hide" id="bizDot"></span></button>
   <button class="tab" id="tabDeskBtn" onclick="showTab('desk')">🎯 Sales Desk</button>
-  <button class="tab" id="tabVoiceBtn" onclick="showTab('voice')">📞 Voice SDR</button>
+  <button class="tab" id="tabCallBtn" onclick="showTab('coldcall')">📞 Cold Calling</button>
+  <button class="tab" id="tabVoiceBtn" onclick="showTab('voice')">🎧 AI Answering</button>
   <button class="tab" id="tabCalBtn" onclick="showTab('calendar')">📅 Calendar</button>
 </div>
 
@@ -192,12 +197,12 @@
     <div class="card">
       <h2>Tell your sales team about this business</h2>
       <div class="body">
-        <div style="background:#fff;border:1px solid var(--line);border-left:4px solid var(--red);border-radius:8px;padding:14px 16px;margin-bottom:16px">
-          <div style="font-weight:700;margin-bottom:4px">✨ Have a website? Let AI fill this out.</div>
-          <div class="muted" style="margin-bottom:10px">Paste your site and the team reads it to draft your whole profile — then just review &amp; save.</div>
+        <div style="background:#fff;border:1px solid var(--line);border-left:4px solid var(--red);border-radius:8px;padding:16px 18px;margin-bottom:16px">
+          <div style="font-weight:700;font-size:16px;margin-bottom:4px">✨ Don't type any of this — paste your website</div>
+          <div class="muted" style="margin-bottom:10px">The AI reads your site and writes it all for you: what you sell, who your customers are, <b>and what your phone agent says</b> — the greeting, the questions it asks, your answers to the usual objections. Then you just read it over and change anything that isn't right.</div>
           <div class="row">
             <input id="autoUrl" placeholder="yourbusiness.com" style="flex:1;min-width:180px;margin:0">
-            <button onclick="autofill()" id="autoBtn">✨ Fill with AI</button>
+            <button onclick="autofill()" id="autoBtn">✨ Fill it in for me</button>
           </div>
           <span class="muted" id="autoMsg"></span>
         </div>
@@ -279,13 +284,16 @@
     </div>
     </details>
 
-    <div class="card" id="cardEmailData">
-      <h2><span class="agent">EMAIL DATA</span> Get real, verified email addresses</h2>
+    <!-- Email data is OUR plumbing, funded by us, and the customer never sees
+         it. Telling someone who is already paying us that they must go and buy
+         a second subscription for the product to work properly is how a paying
+         customer becomes a cancelled one. This card is owner-only. -->
+    <div class="card hide" id="cardEmailData">
+      <h2><span class="agent">OWNER</span> Email data key (platform)</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 6px">Without this, addresses the team can't find on a company's website are <b>guesses</b> and often bounce. Connect a free <a href="https://hunter.io/api-keys" target="_blank" rel="noopener">Hunter.io</a> key and leads come back with <b>database-verified</b> emails instead — your key, your quota.</p>
-        <div class="muted" style="margin-bottom:10px">Get one free: hunter.io → sign up → API. Free tier includes searches to test with; paid plans from ~$34/mo for volume.</div>
+        <p class="muted" style="margin:0 0 6px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
         <div class="row">
-          <input id="hk_key" type="password" placeholder="Hunter.io API key" style="flex:1;min-width:200px;margin:0">
+          <input id="hk_key" type="password" placeholder="Data provider API key" style="flex:1;min-width:200px;margin:0">
           <button onclick="saveEmailKey()" id="hkBtn">Connect &amp; verify</button>
           <button class="sm ghost" onclick="removeEmailKey()">Remove</button>
           <button class="sm ghost" onclick="checkEmailQuota()">Check quota</button>
@@ -331,7 +339,10 @@
   <div id="tab-desk" class="hide">
     <div class="row" style="margin-bottom:12px">
       <strong>Selling for:</strong> <span id="deskProfileName" class="badge"></span>
-      <button class="sm ghost" onclick="runScout()" id="scoutBtn">🔍 SCOUT brief</button>
+      <button class="sm ghost" onclick="runScout()" id="scoutBtn">🔍 Research this market</button>
+    </div>
+    <div class="muted" style="margin-bottom:14px;padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px">
+      <b>Email outreach.</b> Describe who you sell to and it finds those companies, gets a real verified email for the right person, and writes each one a personal message. Nothing sends until you approve it. Want the AI to <b>phone</b> these leads instead? That's the <a href="#" onclick="showTab('coldcall');return false"><b>Cold Calling</b></a> tab.
     </div>
 
     <div class="progress" id="progress">
@@ -343,7 +354,7 @@
     </div>
 
     <div class="card">
-      <h2><span class="agent">PROSPECTOR</span> Find leads automatically</h2>
+      <h2><span class="agent">FIND</span> Find new customers automatically</h2>
       <div class="body">
         <div class="muted" style="margin-bottom:8px">The team sources its own pipeline — real companies + decision-makers matching this business's ideal customer, found by live web research. No list needed.</div>
         <div class="muted" style="margin-bottom:8px;font-style:italic">Real web research — up to 50 per run. Leads are found in parallel batches and appear as they come in; each run auto-skips companies you already have.</div>
@@ -379,7 +390,7 @@
           </div>
         </div>
         <div class="card" id="briefCard" style="display:none">
-          <h2><span class="agent">SCOUT</span> Latest intel brief</h2>
+          <h2><span class="agent">RESEARCH</span> What it learned about this market</h2>
           <div class="body"><div class="brief" id="brief"></div></div>
         </div>
       </div>
@@ -407,6 +418,41 @@
         </div>
         <div class="card"><h2><span class="agent">LOG</span> Activity</h2><div class="body"><div class="feed" id="feed"></div></div></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== COLD CALLING TAB =====================
+     The AI rings the leads it found. This used to live inside the AI-answering
+     screen, which is a different job entirely (that one picks up; this one
+     dials out) — so nobody found it. -->
+<div id="tab-coldcall" class="hide">
+  <div class="card hide" id="cardColdCalls">
+    <h2><span class="agent">COLD CALLING</span> Let the AI call the leads it found <span class="muted" id="callableCount"></span></h2>
+    <div class="body">
+      <p class="muted" style="margin:0 0 10px">The AI rings your leads one at a time, has the conversation, and books what it can. It never calls a number twice, never calls anyone who asked not to be, and stops on its own when your minutes run out.</p>
+      <div class="warnbox" style="margin-bottom:12px">These are real calls to real people, and they use your plan minutes. Ring your own phone first (on the AI Answering tab) so you hear exactly what they will.</div>
+      <div class="row">
+        <label class="muted" for="vc_count">How many to call now</label>
+        <input id="vc_count" type="number" min="1" max="25" value="5" style="width:90px;margin:0">
+        <button class="red" onclick="startCallRun()" id="vcBtn">📞 Start calling</button>
+        <button class="sm ghost" onclick="findPhones()" id="vfBtn">Find phone numbers</button>
+      </div>
+      <div id="vcProgress" class="muted" style="margin-top:10px"></div>
+      <div id="vfProgress" class="muted" style="margin-top:6px"></div>
+      <div class="muted" style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
+        What it says on these calls comes from the same script you set on
+        <a href="#" onclick="showTab('voice');return false"><b>AI Answering</b></a> — the goal, your qualifying questions, your answers to objections.
+        Leads come from <a href="#" onclick="showTab('desk');return false"><b>Sales Desk</b></a>.
+      </div>
+    </div>
+  </div>
+  <!-- Shown instead when OUTBOUND_CALLING is off: see the compliance gate in server.js. -->
+  <div class="card hide" id="cardColdOff">
+    <h2><span class="agent">COLD CALLING</span> Not switched on for your account</h2>
+    <div class="body">
+      <p class="muted" style="margin:0 0 8px">Automated outbound calling is off on this account. It carries real telemarketing obligations — do-not-call scrubbing, consent, calling-hours rules — so we turn it on deliberately rather than by default.</p>
+      <p class="muted" style="margin:0">Want it on? Email <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a> and we'll walk you through what you need in place. Meanwhile, <a href="#" onclick="showTab('desk');return false">email outreach</a> and <a href="#" onclick="showTab('voice');return false">AI answering</a> both work today.</p>
     </div>
   </div>
 </div>
@@ -483,7 +529,7 @@
         <div class="field"><label>Agent name</label><div class="hint">It always says it's an AI — this is just the name.</div><input id="v_agentName" placeholder="Sarah"></div>
         <div class="field"><label>Language</label><div class="hint">Spanish lines answer in Spanish from the first word — greeting, disclosure, the whole conversation — with a Spanish voice. English lines will still switch to Spanish if a caller opens in it.</div>
           <select id="v_language"><option value="en-US">English</option><option value="es-US">Español</option></select></div>
-        <div class="field"><label>Voice</label><div class="hint">Generative voices sound markedly more human but cost ~4x per character spoken (and are still Twilio beta). Neural is cheaper and rock-solid.</div><select id="v_ttsVoice"></select></div>
+        <div class="field"><label>Voice</label><div class="hint">This is the voice your callers hear. Pick the one that sounds like your business — you can change it any time, and the change takes effect on the very next call.</div><select id="v_ttsVoice"></select></div>
         <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
       </div>
       <div class="field"><label>After the intro <span class="muted">(optional)</span></label><div class="hint">Every call opens with "Hi, this is [name], an AI assistant for [business]. Just so you know, this call may be transcribed." — that part is fixed, it's what keeps you on the right side of call-recording law. Whatever you type here is said right after it. Leave blank for "What can I do for you?"</div><input id="v_greeting" placeholder="e.g. Thanks for calling — what's going on?"></div>
@@ -511,9 +557,9 @@
             <option value="Pacific/Honolulu">Hawaii</option>
           </select></div>
       </div>
-      <div class="field"><label>What counts as a win on this call?</label><div class="hint">The one outcome it drives toward. Be specific — vague goals make it wander and wander costs money.</div><input id="v_objective" placeholder="Book a 15-minute demo with Alijah."></div>
+      <div class="field"><label>What counts as a win on this call?</label><div class="hint">The one outcome it drives toward. Be specific — a vague goal makes it wander instead of closing.</div><input id="v_objective" placeholder="Book a 15-minute demo with Alijah."></div>
       <div class="field"><label>Qualifying questions</label><div class="hint">The 2-3 things that tell you if they're worth your time. It weaves these in naturally rather than reading them out.</div><textarea id="v_qualifying" placeholder="How many people are doing outbound today?&#10;Are you already using a sales tool?&#10;Who signs off on something like this?"></textarea></div>
-      <div class="field"><label>Objections &amp; your answers</label><div class="hint">Write the pushback you actually hear and how you'd answer it. It uses your words instead of improvising.</div><textarea id="v_objections" placeholder="&quot;Too expensive&quot; -> One SDR costs 5 grand a month. This starts at 99.&#10;&quot;We already have someone&quot; -> This doesn't replace them, it fills their pipeline overnight.&#10;&quot;Send me info&quot; -> Happy to, what's your email? And can I grab 15 minutes Thursday?"></textarea></div>
+      <div class="field"><label>Objections &amp; your answers</label><div class="hint">Write the pushback you actually hear and how you'd answer it. It uses your words instead of improvising.</div><textarea id="v_objections" placeholder="&quot;Too expensive&quot; -> A receptionist is 3 grand a month. This starts at 149.&#10;&quot;We already have someone&quot; -> This doesn't replace them, it catches what they miss.&#10;&quot;Send me info&quot; -> Happy to, what's your email? And can I grab 15 minutes Thursday?"></textarea></div>
       <div class="field"><label>Approved answers / FAQ</label><div class="hint">The ONLY facts it may state. Anything not here, it says it doesn't know and offers a human. Never put prices here you don't want quoted.</div><textarea id="v_faq" placeholder="Q: Do you offer free assessments? A: Yes, the first walkthrough is free."></textarea></div>
       <div class="field"><label>Voicemail message</label><div class="hint">Left when an answering machine picks up. It never holds a conversation with voicemail.</div><input id="v_voicemail" placeholder=""></div>
       <div class="row"><button onclick="saveVoice()" id="vSaveBtn">Save agent</button><span class="muted" id="vMsg"></span></div>
@@ -523,29 +569,12 @@
   <div class="card">
     <h2><span class="agent">TEST</span> Place a real call</h2>
     <div class="body">
-      <div class="warnbox">This dials a real phone and costs real Twilio + AI money. Test on your own number first.</div>
+      <div class="warnbox">This places a real call and uses your plan minutes. Ring your own phone first so you hear exactly what your customers will.</div>
       <div class="row">
         <input id="v_testTo" placeholder="+13125550123" style="flex:1;min-width:180px;margin:0">
         <button class="red" onclick="testCall()" id="vCallBtn">📞 Call me</button>
       </div>
       <span class="muted" id="vCallMsg"></span>
-    </div>
-  </div>
-
-  <!-- Hidden unless OUTBOUND_CALLING=on: see the compliance gate in server.js. -->
-  <div class="card hide" id="cardColdCalls">
-    <h2><span class="agent">COLD CALLS</span> Work your list <span class="muted" id="callableCount"></span></h2>
-    <div class="body">
-      <p class="muted" style="margin:0 0 10px">The AI rings your leads one at a time, has the conversation, and books what it can. It never calls a number twice, never calls anyone who asked not to be, and stops on its own if you run out of minutes.</p>
-      <div class="warnbox" style="margin-bottom:12px">These are real calls to real people and they cost real money. Listen to a test call first so you know exactly what they will hear.</div>
-      <div class="row">
-        <label class="muted" for="vc_count">How many to call now</label>
-        <input id="vc_count" type="number" min="1" max="25" value="5" style="width:90px;margin:0">
-        <button class="red" onclick="startCallRun()" id="vcBtn">📞 Start calling</button>
-        <button class="sm ghost" onclick="findPhones()" id="vfBtn">Find phone numbers</button>
-      </div>
-      <div id="vcProgress" class="muted" style="margin-top:10px"></div>
-      <div id="vfProgress" class="muted" style="margin-top:6px"></div>
     </div>
   </div>
 
@@ -636,14 +665,25 @@ function isStarter(p){return !p||!p.offer||/edit me|describe what you sell/i.tes
 function showTab(t){curTab=t;saveUI();
   $('tab-business').classList.toggle('hide',t!=='business');
   $('tab-desk').classList.toggle('hide',t!=='desk');
+  $('tab-coldcall').classList.toggle('hide',t!=='coldcall');
   $('tab-voice').classList.toggle('hide',t!=='voice');
   $('tab-calendar').classList.toggle('hide',t!=='calendar');
   $('tabBusinessBtn').classList.toggle('active',t==='business');
   $('tabDeskBtn').classList.toggle('active',t==='desk');
+  $('tabCallBtn').classList.toggle('active',t==='coldcall');
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadStats();loadIntegrations();loadCalls();loadAppointments();if($('cardColdCalls'))$('cardColdCalls').classList.toggle('hide',!STATE.outboundCalling);}
+  if(t==='coldcall'){
+    // One of the two cards shows, never both: the working screen when outbound
+    // is enabled, the "why not" explanation when it isn't. An empty tab reads
+    // like a broken product.
+    const on=!!STATE.outboundCalling;
+    $('cardColdCalls').classList.toggle('hide',!on);
+    $('cardColdOff').classList.toggle('hide',on);
+    if(on){renderCallable();}
+  }
+  if(t==='voice'){renderVoice();renderNumber();loadStats();loadIntegrations();loadCalls();loadAppointments();}
   if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
@@ -937,6 +977,10 @@ function renderVoice(){
             // account with several businesses can have its line pitching the
             // wrong company with nothing on screen saying so.
             : `<div class="okbox">✓ Your AI is answering <b>${esc(v.number)}</b> as <b>${esc((curProfileForVoice()||{}).name||'—')}</b></div>`;
+  // Read-only chrome (what it knows, the voice list, the draft banner) must
+  // render even when there are unsaved edits — autofill deliberately leaves
+  // the form dirty, and an early return here left the voice dropdown empty.
+  renderVoiceChrome(v);
   if(_dirty)return;                             // don't clobber unsaved edits
   $('v_agentName').value=v.agentName||'Sarah';
   $('v_greeting').value=v.greeting||'';
@@ -955,19 +999,25 @@ function renderVoice(){
   $('v_qualifying').value=v.qualifying||'';
   $('v_objections').value=v.objections||'';
   $('v_voicemail').value=v.voicemail||'';
+}
+function renderVoiceChrome(v){
   const prof=(STATE.profiles||[]).find(p=>p.id===v.profileId)||(STATE.profiles||[])[0]||{};
   const miss=[];
   if(!prof.website)miss.push('website');
   if(!prof.pricing)miss.push('pricing');
   if(!prof.offer)miss.push('what you sell');
-  $('vKnows').innerHTML = `It answers using <b>${esc(prof.name||'your business')}</b>'s profile — what you sell, who you serve, your proof, <b>website</b> and <b>pricing</b> — plus everything you write below.`
-    + (miss.length?` <b>Missing: ${miss.join(', ')}</b> — fill those in on the 🏢 Your Business tab or it will say it doesn't know.`:' All the key facts are filled in ✓');
+  $('vKnows').innerHTML = window._voiceDrafted
+    ? `✨ <b>This script was written for you</b> from your website — read it over and change anything that isn't right, then hit <b>Save agent</b>. Nothing here is final; it is a draft in your words, not ours.`
+    : `It answers using <b>${esc(prof.name||'your business')}</b>'s profile — what you sell, who you serve, your proof, <b>website</b> and <b>pricing</b> — plus everything you write below.`
+      + (miss.length?` <b>Missing: ${miss.join(', ')}</b> — fill those in on the 🏢 Your Business tab or it will say it doesn't know.`:' All the key facts are filled in ✓');
   const vs=$('v_ttsVoice');
-  vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}${x.tier==='generative'?'':' · cheaper'}</option>`).join('');
-  vs.value=v.ttsVoice||v.defaultVoice||'';
+  // Name and character only. What each voice costs us is never on a
+  // customer's screen — only the owner's cost view mentions it.
+  vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}${(STATE.isOwner&&x.tier!=='generative')?' · low cost':''}</option>`).join('');
+  if(!_dirty)vs.value=v.ttsVoice||v.defaultVoice||'';
   const sel=$('v_profileId');
   sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
-  if(v.profileId)sel.value=v.profileId;
+  if(v.profileId&&!_dirty)sel.value=v.profileId;
 }
 async function saveVoice(){
   const b=$('vSaveBtn');b.disabled=true;
@@ -981,6 +1031,7 @@ async function saveVoice(){
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
       ttsVoice:$('v_ttsVoice').value});
+    window._voiceDrafted=false;   // reviewed and saved — it's theirs now
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
@@ -1122,7 +1173,7 @@ async function findPhones(){
 }
 async function startCallRun(){
   const n=Number($('vc_count').value)||5;
-  if(!confirm(`Start calling ${n} lead(s)?\n\nThese are real phone calls to real people, spaced about 20 seconds apart. They cost Twilio and AI minutes.`))return;
+  if(!confirm(`Start calling ${n} lead(s)?\n\nThese are real phone calls to real people, spaced about 20 seconds apart, and they use your plan minutes.`))return;
   const b=$('vcBtn');b.disabled=true;const o=b.textContent;b.textContent='Starting…';
   try{
     const r=await api('/api/voice/callrun',{count:n,profileId:pid()});
@@ -1149,7 +1200,7 @@ async function startCallRun(){
 async function testCall(){
   const to=$('v_testTo').value.trim();
   if(!to)return toast('Enter a number in +1... format');
-  if(!confirm(`Place a real call to ${to}? This costs Twilio + AI credits.`))return;
+  if(!confirm(`Place a real call to ${to}? It uses your plan minutes.`))return;
   const b=$('vCallBtn');b.disabled=true;const o=b.textContent;b.textContent='Dialling…';
   try{const r=await api('/api/voice/testcall',{to});$('vCallMsg').textContent=`Call placed (${r.status}). Your phone should ring.`;setTimeout(loadCalls,8000);}
   catch(e){$('vCallMsg').textContent='';toast(e.message);}
@@ -1559,11 +1610,20 @@ async function autofill(){
   try{
     const r=await api('/api/profile/autofill',{url});
     const f=r.fields||{};
-    ['name','senderName','offer','icp','valueProp','proof','tone','cta'].forEach(k=>{ if(f[k])$('f_'+k).value=f[k]; });
+    ['name','senderName','offer','icp','valueProp','proof','tone','cta','website','pricing','mailingAddress']
+      .forEach(k=>{ const el=$('f_'+k); if(el&&f[k])el.value=f[k]; });
+    // The phone agent's script is filled from the same read. Without this the
+    // owner escaped one wall of empty boxes only to hit a second one on the
+    // AI Answering tab — which is where they gave up.
+    const v=f.voice||{};let voiceFilled=0;
+    ['agentName','greeting','hours','objective','qualifying','objections','faq','voicemail']
+      .forEach(k=>{ const el=$('v_'+k); if(el&&v[k]){el.value=v[k];voiceFilled++;} });
+    if(voiceFilled)window._voiceDrafted=true;
     if($('manualFields'))$('manualFields').open=true;   // reveal the drafted fields to review
     markDirty();   // AI-filled values are unsaved edits — the poll must not wipe them
-    $('autoMsg').textContent='Filled from your site — review the fields and hit Save.';
-    toast('Profile drafted from your website — review & save');
+    $('autoMsg').innerHTML='Done — read it over below and change anything that isn\'t right, then hit Save.'
+      +(voiceFilled?' Your phone agent\'s script was written too: <a href="#" onclick="showTab(\'voice\');return false"><b>check it on AI Answering →</b></a>':'');
+    toast(voiceFilled?'Your profile and phone script are drafted — review & save':'Profile drafted from your website — review & save');
   }catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
   finally{b.disabled=false;b.textContent=o;}
 }
@@ -1662,20 +1722,17 @@ function fillSettings(){
   renderVoice();
   loadDeskAppointments();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
-  $('hkMsg').textContent=ed.connected?'Connected ✓ — leads use verified emails.':(ed.fallback?'Using the site-wide data key.':'Not connected — unfound emails will be guesses.');
-  // If the platform already supplies a data key, this is our plumbing, not the
-  // customer's homework — they are paying us precisely so they never have to
-  // go and register for a Hunter.io account. Only show it when it is genuinely
-  // the difference between verified emails and guesses (no platform key), or
-  // when they have deliberately connected their own.
+  $('hkMsg').textContent=ed.connected?'Per-account override active.':(ed.fallback?'Using the platform data key ✓':'⚠ No platform key set — set HUNTER_API_KEY on the server or leads fall back to site-published emails.');
+  // Owner-only, always. A customer paying for lead-finding must never be told
+  // to go and buy a second subscription to make the thing they bought work.
   const edCard=$('cardEmailData');
-  if(edCard)edCard.classList.toggle('hide',!!ed.fallback&&!ed.connected);
+  if(edCard)edCard.classList.toggle('hide',!STATE.isOwner);
   const info=$('sendInfo');
   if(info)info.textContent=m.connected?`via ${m.user} · ${STATE.sentToday||0}/${STATE.dailyCap??50} sent today`:'connect a mailbox to send automatically';
 }
 // ---- email data key ----
 async function saveEmailKey(){
-  const key=$('hk_key').value.trim();if(!key)return toast('Paste your Hunter.io API key');
+  const key=$('hk_key').value.trim();if(!key)return toast('Paste the data provider API key');
   const b=$('hkBtn');b.disabled=true;const o=b.textContent;b.textContent='Checking…';
   try{await api('/api/settings/emailkey',{key});$('hk_key').value='';$('hkMsg').textContent='Connected ✓ — new leads will use verified emails.';toast('Email data connected');await load();}
   catch(e){$('hkMsg').textContent='';toast(e.message);}
@@ -1688,7 +1745,7 @@ async function checkEmailQuota(){
     const sLeft=Math.max(0,(s.searches.available||0)-(s.searches.used||0));
     const vLeft=Math.max(0,(s.verifications.available||0)-(s.verifications.used||0));
     $('hkMsg').textContent=`${s.plan} plan — ${sLeft} searches + ${vLeft} verifications left${s.resetDate?` (resets ${s.resetDate})`:''}.`
-      +(sLeft===0?' ⚠ OUT OF SEARCHES — this is why lookups fail. Upgrade Hunter or wait for reset.':'');
+      +(sLeft===0?' ⚠ OUT OF SEARCHES — this is why lookups fail. Upgrade the platform data plan or wait for the reset.':'');
   }catch(e){toast(e.message);}
 }
 async function removeEmailKey(){
