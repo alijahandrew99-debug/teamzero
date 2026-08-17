@@ -946,6 +946,24 @@ const server = http.createServer(async (req, res) => {
         if (out.action === 'book') {
           const d = out.data || {};
           const phone = d.phone || params.From || '';
+          // Hard conflict check, independent of the prompt. The model is TOLD
+          // not to book into taken time, but a promise in a prompt is not a
+          // guarantee -- so if the slot it chose overlaps an existing booking,
+          // refuse to write it and send the agent back to offer another time.
+          // A double-booked plumber is the failure that gets us switched off.
+          if (d.whenISO) {
+            const clash = db.findConflict(call.accountId, d.whenISO, Number((call.account.voice || {}).slotMinutes) || 60);
+            if (clash) {
+              const tz = voice.tzFor(call.account);
+              const when = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(clash.startsAt));
+              db.logActivity(call.accountId, { agent: 'VOICE', msg: `Refused a double-booking at ${when} — asked the caller for another time` });
+              call.turns.push({ who: 'agent', text: `[system: ${when} is already taken — offer the nearest open times instead]` });
+              return xml(res, voice.sayAndGather(
+                `Ah — that slot's actually just been taken. What else works for you? I can look at either side of it.`,
+                base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account),
+              ));
+            }
+          }
           // Put it in the diary. startsAt is the resolved date-time the agent
           // committed to; whenText keeps their own words for context.
           call.saved = true;   // hangup salvage must not create a duplicate
@@ -1623,6 +1641,9 @@ const server = http.createServer(async (req, res) => {
           qualifying: (f.qualifying ?? cur.qualifying ?? '').trim(),
           objections: (f.objections ?? cur.objections ?? '').trim(),
           hours: (f.hours ?? cur.hours ?? '').trim(),
+          // How long a booking blocks the diary. Drives both the "already
+          // booked" context the agent sees and the hard conflict check.
+          slotMinutes: (() => { const n = Number(f.slotMinutes ?? cur.slotMinutes); return n >= 15 && n <= 480 ? Math.round(n) : 60; })(),
           // Only accept a zone Intl actually knows, or the date math silently
           // falls back and every booking lands on the wrong day.
           timezone: (() => { const z = String(f.timezone ?? cur.timezone ?? '').trim();

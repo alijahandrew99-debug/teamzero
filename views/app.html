@@ -464,6 +464,15 @@
         <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
         <div class="field"><label>On-call list for emergencies <span class="muted">(optional)</span></label><div class="hint">One number per line, in the order to try. When a caller has an <b>emergency</b> — burst pipe, no heat in a freeze, a gas smell — the AI texts every number here with the details, then rings them in order until someone picks up. Blank = uses the transfer number above.</div><textarea id="v_onCall" rows="3" placeholder="+13125550101&#10;+13125550102"></textarea></div>
         <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
+        <div class="field"><label>How long is a typical job?</label><div class="hint">The AI blocks this much time per booking and won't book anyone into it. It also refuses to double-book — if a slot is taken it says so and offers the nearest open times.</div>
+          <select id="v_slotMinutes">
+            <option value="30">30 minutes</option>
+            <option value="60" selected>1 hour</option>
+            <option value="90">1½ hours</option>
+            <option value="120">2 hours</option>
+            <option value="180">3 hours</option>
+            <option value="240">Half a day</option>
+          </select></div>
         <div class="field"><label>Your time zone</label><div class="hint">Every "tomorrow morning" a caller says is worked out in this zone. Get this wrong and bookings land on the wrong day.</div>
           <select id="v_timezone">
             <option value="America/New_York">Eastern</option>
@@ -790,7 +799,7 @@ const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta'
 // AI-autofilled fields before they could be saved. Once anything is edited we
 // leave the forms alone until it is saved.
 let _dirty=false;
-const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_timezone','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
 // The SENDING/schedule/data-key forms suffered the same poll-wipe as the
 // profile form: type your email, tab to the password box, and 20s later the
 // email field snapped back to the saved value — so Connect verified the new
@@ -871,6 +880,7 @@ function renderVoice(){
   $('v_greeting').value=v.greeting||'';
   $('v_transferTo').value=v.transferTo||'';
   if($('v_onCall'))$('v_onCall').value=(Array.isArray(v.onCall)?v.onCall:[]).join('\n');
+  if($('v_slotMinutes'))$('v_slotMinutes').value=String(v.slotMinutes||60);
   // First-time default: the browser knows where the owner is. Fall back to
   // Central only if that isn't one of the listed zones.
   const tzSel=$('v_timezone');
@@ -904,7 +914,7 @@ async function saveVoice(){
     // shutdown, then fixed a typo in the greeting, silently had the AI start
     // taking live calls again — and the toggle still read OFF.
     await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:$('v_profileId').value,
-      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,onCall:$('v_onCall').value,hours:$('v_hours').value,timezone:$('v_timezone').value,
+      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,onCall:$('v_onCall').value,hours:$('v_hours').value,slotMinutes:$('v_slotMinutes').value,timezone:$('v_timezone').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
       ttsVoice:$('v_ttsVoice').value});
