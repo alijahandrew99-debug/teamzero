@@ -763,7 +763,19 @@ const server = http.createServer(async (req, res) => {
       if (p === '/voice/turn') {
         const call = voice.getCall(sid);
         if (!call) return xml(res, voice.sayAndHangup("Sorry, we got cut off there. Give us a call back?", call && call.account ? voice.voiceFor(call.account) : undefined));
-        const heard = (params.SpeechResult || '').trim();
+        // Twilio scores every transcription 0-1. Background noise — a TV, a
+        // radio, traffic, someone else in the room — comes back as low-
+        // confidence word salad ("um the the yeah"), and treating it the same
+        // as a clear sentence made the agent answer things nobody said. Below
+        // the floor it is treated as silence, so the caller gets the patient
+        // "take your time" instead of a reply to the television.
+        const rawHeard = (params.SpeechResult || '').trim();
+        const conf = params.Confidence !== undefined ? Number(params.Confidence) : NaN;
+        const heard = voice.isNoise(rawHeard, conf) ? '' : rawHeard;
+        if (rawHeard && !heard) {
+          call.noiseHits = (call.noiseHits || 0) + 1;
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `Ignored low-confidence audio (${isNaN(conf) ? '?' : conf.toFixed(2)}): "${rawHeard.slice(0, 60)}"` });
+        }
 
         if (!heard) {
           call.silence = (call.silence || 0) + 1;
@@ -780,7 +792,7 @@ const server = http.createServer(async (req, res) => {
           const nudge = call.silence === 1
             ? 'Take your time — what can I do for you?'
             : "Sorry, I'm not hearing you — are you still there?";
-          return xml(res, voice.sayAndGather(nudge, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
+          return xml(res, voice.sayAndGather(nudge, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account), { noisy: (call.noiseHits || 0) >= 1 }));
         }
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
@@ -919,7 +931,7 @@ const server = http.createServer(async (req, res) => {
           }
           return xml(res, voice.sayAndSignOff(out.say, voice.voiceFor(call.account), 'Thanks for your time. Bye now.'));
         }
-        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
+        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account), { noisy: (call.noiseHits || 0) >= 1 }));
       }
 
       // ---- message taken because the plan was out of minutes ----
