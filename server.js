@@ -913,16 +913,35 @@ const server = http.createServer(async (req, res) => {
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'DO NOT CALL requested by ' + num + ' - suppressed' });
           return xml(res, voice.sayAndHangup(out.say || "Understood - you're off the list. Sorry to have bothered you.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
+        // Remember the highest urgency seen on this call — it decides who gets
+        // dialled and whether the tech gets a text before their phone rings.
+        const RANK = { routine: 0, urgent: 1, emergency: 2 };
+        if ((RANK[out.urgency] || 0) > (RANK[call.urgency] || 0)) call.urgency = out.urgency;
+
         if (out.action === 'transfer') {
-          const to = (call.account.voice && call.account.voice.transferTo) || '';
-          if (!to) return xml(res, voice.sayAndGather("There's nobody free right this second, but I can take a message. What's the best number for you?", base + '/voice/turn', voice.voiceFor(call.account)));
-          db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Transferring call to ' + to });
-          // <Dial> needs an action URL. Without one, an unanswered/busy/declined
-          // transfer falls through to no verb at all and the call just dies —
-          // dropping a caller who asked for a human because they were ready to
-          // buy. /voice/dialback catches that and resumes the conversation.
-          // Outcome is recorded there too, once we know it actually connected.
-          return xml(res, voice.sayAndDial(out.say || 'One sec, putting you through.', to, base + '/voice/dialback', voice.voiceFor(call.account)));
+          const vc = call.account.voice || {};
+          // Waterfall: an ordered on-call list, tried in sequence until someone
+          // answers. One number was the old model — if the tech was on a roof
+          // with the phone in the truck, a $1,500 emergency became a message
+          // read at 7am. The on-call list falls back to transferTo so existing
+          // customers keep working unchanged.
+          const chain = (Array.isArray(vc.onCall) && vc.onCall.length ? vc.onCall : [vc.transferTo]).map((n) => voice.toE164(n)).filter(Boolean);
+          if (!chain.length) return xml(res, voice.sayAndGather("There's nobody free right this second, but I can take a message. What's the best number for you?", base + '/voice/turn', voice.voiceFor(call.account)));
+          call.dialChain = chain; call.dialIdx = 0;
+          const to = chain[0];
+          const isEmergency = call.urgency === 'emergency';
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: (isEmergency ? 'EMERGENCY — ' : '') + 'Transferring call to ' + to + (chain.length > 1 ? ` (1 of ${chain.length} on-call)` : '') });
+          // Emergency: text the on-call tech the details BEFORE their phone
+          // rings, so they answer already knowing it's a burst pipe at 14 Elm,
+          // not a stranger. Fire-and-forget; the dial must not wait on SMS.
+          if (isEmergency) {
+            const d = out.data || {};
+            const from = params.From || call.from || '';
+            const body = `🚨 EMERGENCY call coming through now from ${from}${d.name ? ' — ' + d.name : ''}${d.reason ? ': ' + d.reason : ''}. Dawnpipe is connecting them to you.`;
+            const mine = vc.number || (stripe.isOwner(call.account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
+            for (const n of chain) notify.sendSMS(n, body, mine).catch(() => {});
+          }
+          return xml(res, voice.sayAndDial(out.say || (isEmergency ? "Okay — I'm getting someone on the line for you right now, stay with me." : 'One sec, putting you through.'), to, base + '/voice/dialback', voice.voiceFor(call.account)));
         }
         if (out.action === 'book') {
           const d = out.data || {};
@@ -1041,6 +1060,19 @@ const server = http.createServer(async (req, res) => {
         ));
       }
 
+      // ---- TEST ONLY: seed an in-memory call with an on-call chain ----
+      // Exists solely so the waterfall can be driven end to end by a signed
+      // webhook test. Compiled out of production: requires TEST_HOOKS=1, which
+      // render.yaml never sets.
+      if (p === '/voice/__test_seed_chain' && process.env.TEST_HOOKS === '1') {
+        const acct = db.allAccounts()[0];
+        voice.startCall(sid, { accountId: acct.id, account: acct, profile: { id: 'p', name: 'Test' },
+          direction: 'inbound', from: '+15551230000', to: '+12136822616', lead: null });
+        const c = voice.getCall(sid);
+        c.dialChain = ['+13125550101', '+13125550102', '+13125550103']; c.dialIdx = 0; c.urgency = 'emergency';
+        res.writeHead(200); return res.end('seeded');
+      }
+
       // ---- a transfer came back unanswered ----
       // Twilio POSTs here when <Dial> ends. If the human actually picked up we
       // let the call finish; anything else (no answer, busy, declined, bad
@@ -1053,11 +1085,23 @@ const server = http.createServer(async (req, res) => {
           if (call) db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
           res.writeHead(204); return res.end();
         }
+        // Waterfall: this number didn't pick up — try the next one on the
+        // on-call list before giving up. Only when the whole chain is exhausted
+        // do we fall back to taking a message.
+        if (call && Array.isArray(call.dialChain) && (call.dialIdx + 1) < call.dialChain.length) {
+          call.dialIdx += 1;
+          const next = call.dialChain[call.dialIdx];
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `On-call ${call.dialIdx} of ${call.dialChain.length} didn't answer (${st || 'unknown'}) — trying ${next}` });
+          return xml(res, voice.sayAndDial('One moment — trying the next person.', next, base + '/voice/dialback', voice.voiceFor(call.account)));
+        }
         if (call) {
-          db.logActivity(call.accountId, { agent: 'VOICE', msg: `Transfer not answered (${st || 'unknown'}) - taking a message instead` });
+          const tried = Array.isArray(call.dialChain) ? call.dialChain.length : 1;
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `Transfer not answered by ${tried} on-call number(s) (${st || 'unknown'}) - taking a message instead` });
         }
         return xml(res, voice.sayAndGather(
-          "Sorry — couldn't get hold of anyone just then. Let me take your number and what it's about, and I'll have someone call you straight back.",
+          call && call.urgency === 'emergency'
+            ? "I couldn't reach the on-call tech just then — I've already sent them your details and they'll be calling you back as soon as they see it. Give me the best number and the address, and if it's safe to, shut the water off at the mains while you wait."
+            : "Sorry — couldn't get hold of anyone just then. Let me take your number and what it's about, and I'll have someone call you straight back.",
           base + '/voice/turn',
           call && call.account ? voice.voiceFor(call.account) : undefined,
         ));
@@ -1565,6 +1609,13 @@ const server = http.createServer(async (req, res) => {
           agentName: (f.agentName ?? cur.agentName ?? 'Sarah').trim(),
           greeting: (f.greeting ?? cur.greeting ?? '').trim(),
           transferTo: voice.toE164((f.transferTo ?? cur.transferTo ?? '')),
+          // Ordered on-call list for waterfall transfer. Accepts a newline/comma
+          // separated string from the form; kept as E.164, junk dropped, max 5.
+          onCall: (() => {
+            const raw = f.onCall !== undefined ? f.onCall : cur.onCall;
+            const list = Array.isArray(raw) ? raw : String(raw || '').split(/[\n,;]+/);
+            return list.map((n) => voice.toE164(String(n || '').trim())).filter(Boolean).slice(0, 5);
+          })(),
           voicemail: (f.voicemail ?? cur.voicemail ?? '').trim(),
           faq: (f.faq ?? cur.faq ?? '').trim(),
           ttsVoice: (f.ttsVoice ?? cur.ttsVoice ?? voice.DEFAULT_VOICE),
