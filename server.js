@@ -919,6 +919,13 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // Record what we just said. Without this the model can't see its own
         // opener and asks the same question again on the next turn.
         inCall.turns.push({ who: 'agent', text: greeting });
+        // Warm the prompt cache while the greeting is being spoken. The first
+        // real think() otherwise sends the ~3k-token system prompt cold, and
+        // that first reply is the slowest turn of the call -- exactly when the
+        // caller is deciding whether this thing works. A throwaway 1-token
+        // request during the 4-5s greeting means the caller's first answer
+        // hits a warm cache. Fire-and-forget; failure changes nothing.
+        voice.warmCache(inCall).catch(() => {});
         db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
           profileId: profile.id, status: 'in-progress', transcript: [] });
         const inDnc = suppress.isPhoneSuppressed(account.id, params.From || '');
