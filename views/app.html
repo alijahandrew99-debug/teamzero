@@ -1207,6 +1207,11 @@ async function apStatus(id,status){
   try{await api('/api/appointments/update',{id,status});toast('Updated');loadAppointments();}
   catch(e){toast(e.message);}
 }
+async function blockCaller(num){
+  if(!confirm(`Block ${num}?\n\nFuture calls from this number are rejected before the AI answers, and don't use your minutes.`))return;
+  try{await api('/api/suppression/add',{emails:num});toast('Blocked '+num);loadCalls();}
+  catch(e){toast(e.message);}
+}
 async function loadStats(){
   const box=$('statTiles'); if(!box)return;
   try{
@@ -1268,7 +1273,7 @@ async function loadCalls(){
       return `<div class="qitem"><div class="row" style="justify-content:space-between">
         <span class="to">${c.direction==='inbound'?'⬅ from '+esc(c.from||'?'):'➡ to '+esc(c.to||'?')} · ${new Date(c.at).toLocaleString()}</span>
         <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome||c.status||'')}</span></div>
-        <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${(STATE.isOwner&&c.estCost)?`<b>~$${c.estCost.toFixed(2)}</b> est. cost`:''}</div>
+        <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${(STATE.isOwner&&c.estCost)?`<b>~$${c.estCost.toFixed(2)}</b> est. cost · `:''}${(c.direction==='inbound'&&c.from)?`<a href="#" onclick="blockCaller('${esc(c.from)}');return false" style="color:var(--ink2)">block this number</a>`:''}</div>
         ${c.booking?`<div class="okbox" style="margin:8px 0">📅 ${esc(c.booking.name||'Caller')} · ${esc(c.booking.phone||'')} · ${esc(c.booking.when||'')} — ${esc(c.booking.reason||'')}</div>`:''}
         ${t?`<div class="feed" style="max-height:180px;margin-top:8px">${t}</div>`:''}</div>`;
     }).join(''):'<div class="empty">No calls yet. Point Twilio at the webhook above, then call your number.</div>';

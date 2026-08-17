@@ -761,6 +761,14 @@ const server = http.createServer(async (req, res) => {
         const account = db.accountByVoiceNumber(params.To || '');
         if (!account) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
         const vcfg = account.voice || {};
+        // Blocked callers (the owner's own list, plus anyone who told us to
+        // stop) are rejected before a single AI token or plan minute is spent.
+        // <Reject> costs nothing and hangs up without answering.
+        if (suppress.isPhoneSuppressed(account.id, params.From || '').blocked) {
+          db.logActivity(account.id, { agent: 'VOICE', msg: `Rejected blocked caller ${params.From || 'unknown'} — not billed` });
+          res.writeHead(200, { 'Content-Type': 'text/xml' });
+          return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="rejected"/></Response>');
+        }
         // Switched off means switched off. Nothing was reading this flag, so
         // the owner could turn answering "off" and the AI would keep picking
         // up regardless. Rejecting the call here lets it fall through to the
@@ -1190,9 +1198,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
         if (call) {
           const dur = Number(params.CallDuration || 0);
-          // Bill the plan's minute allowance (rounded up, like a carrier).
+          // Bill the plan's minute allowance (rounded up, like a carrier) --
+          // but NOT for calls where the caller never said a word. Robocalls,
+          // dead air and pocket dials were eating paid minutes and could push
+          // a shop into message-only mode mid-month; every competitor excludes
+          // spam from billing, and it is the right thing to do regardless.
+          const callerSpoke = (call.turns || []).some((t) => t.who === 'caller' && String(t.text || '').trim());
           const acctForBill = db.getAccount(call.accountId);
-          if (acctForBill) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          if (acctForBill && callerSpoke) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: call.turns.length,
