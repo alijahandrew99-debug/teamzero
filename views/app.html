@@ -510,7 +510,10 @@
 
   <div class="card">
     <h2><span class="agent">CALLS</span> Recent calls <button class="sm ghost" onclick="loadCalls()" style="margin-left:auto">Refresh</button></h2>
-    <div class="body"><div id="vCalls"><div class="empty">No calls yet.</div></div></div>
+    <div class="body">
+      <div id="vSpend" style="padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px;margin-bottom:12px;font-size:14px"></div>
+      <div id="vCalls"><div class="empty">No calls yet.</div></div>
+    </div>
   </div>
 </div>
 
@@ -1164,6 +1167,28 @@ async function loadCalls(){
   try{
     const r=await fetch('/api/voice/calls');const d=await r.json();
     const cs=d.calls||[];
+    // What the phone actually costs this month, in one line. Per-call cost was
+    // already on each row, but nobody adds up a list by hand — and "am I making
+    // money on this" is the only question that matters about a spend number.
+    const mk=$('vSpend');
+    if(mk){
+      const now=new Date(), key=now.toISOString().slice(0,7);
+      // db.saveCall stamps `at`, not createdAt — filtering on the wrong field
+      // silently matched nothing and reported "no calls yet" forever.
+      const mine=cs.filter(c=>String(c.at||c.updatedAt||'').slice(0,7)===key);
+      const spend=mine.reduce((n,c)=>n+(Number(c.estCost)||0),0);
+      const mins=mine.reduce((n,c)=>n+Math.ceil((Number(c.durationSec)||0)/60),0);
+      const u=(STATE.usage&&STATE.usage.voice)||{};
+      const paidFor=(u.limit&&STATE.usage.isPro)?((STATE.tiers||[]).find(t=>t.id===STATE.usage.tier)||{}).price:0;
+      if(!mine.length){
+        mk.innerHTML='<span class="muted">No calls yet this month.</span>';
+      }else{
+        const per=spend/mine.length;
+        mk.innerHTML=`<b>${mine.length}</b> call${mine.length===1?'':'s'} this month · <b>${mins}</b> min · `
+          +`estimated cost <b>$${spend.toFixed(2)}</b> <span class="muted">(~$${per.toFixed(2)} each)</span>`
+          +(paidFor?` · your plan is <b>$${paidFor}</b>/mo`:'');
+      }
+    }
     $('vCalls').innerHTML=cs.length?cs.map(c=>{
       const t=(c.transcript||[]).map(x=>`<div><b>${x.who==='caller'?'Caller':'AI'}:</b> ${esc(x.text)}</div>`).join('');
       return `<div class="qitem"><div class="row" style="justify-content:space-between">
