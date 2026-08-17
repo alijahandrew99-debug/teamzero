@@ -737,7 +737,7 @@ const server = http.createServer(async (req, res) => {
         const inDnc = suppress.isPhoneSuppressed(account.id, params.From || '');
         db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown')
           + (inDnc.blocked ? ' (this number is on your do-not-call list — they called you, so we answered)' : '') });
-        return xml(res, voice.sayAndGather(greeting, base + '/voice/turn', voice.voiceFor(account)));
+        return xml(res, voice.sayAndGather(greeting, base + '/voice/turn', voice.voiceFor(account), voice.hintsFor(profile, account)));
       }
 
       // ---- outbound call answered ----
@@ -756,7 +756,7 @@ const server = http.createServer(async (req, res) => {
         const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
           + call.profile.name + '.' + who + ' Did I catch you at an okay time?';
         call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
-        return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account)));
+        return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
       }
 
       // ---- one conversational turn ----
@@ -767,11 +767,20 @@ const server = http.createServer(async (req, res) => {
 
         if (!heard) {
           call.silence = (call.silence || 0) + 1;
-          if (call.silence >= 2) {
+          // Three strikes, not two: an empty gather usually means they were
+          // still thinking, not that the line is dead, and hanging up on
+          // someone mid-thought is worse than waiting one more beat.
+          if (call.silence >= 3) {
             db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'no-response', transcript: call.turns });
             return xml(res, voice.sayAndHangup("I can't hear anything, so I'll let you go. Call back anytime.", call && call.account ? voice.voiceFor(call.account) : undefined));
           }
-          return xml(res, voice.sayAndGather("Sorry, you cut out - say that again?", base + '/voice/turn', voice.voiceFor(call.account)));
+          // Don't apologise on the first miss. "Sorry, you cut out" when the
+          // caller simply had not started talking is what makes it feel deaf;
+          // a person would just wait, then gently re-ask.
+          const nudge = call.silence === 1
+            ? 'Take your time — what can I do for you?'
+            : "Sorry, I'm not hearing you — are you still there?";
+          return xml(res, voice.sayAndGather(nudge, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
         }
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
@@ -908,7 +917,7 @@ const server = http.createServer(async (req, res) => {
           }
           return xml(res, voice.sayAndSignOff(out.say, voice.voiceFor(call.account), 'Thanks for your time. Bye now.'));
         }
-        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account)));
+        return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
       }
 
       // ---- message taken because the plan was out of minutes ----
