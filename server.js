@@ -158,6 +158,10 @@ const LEGAL_TERMS = `
 <p>We may suspend accounts that generate excessive bounces or spam complaints, attempt to circumvent usage limits, or abuse the Service.</p>
 <h2>Liability</h2>
 <p>To the maximum extent permitted by law, our total liability is limited to the amount you paid in the previous three months. We are not liable for indirect or consequential losses, including lost business or damage to sender reputation.</p>
+<h2>Indemnification</h2>
+<p>The messages your account sends and the calls it places or answers are made on your behalf, to contacts you chose or who chose to call you, using content you approved. You agree to defend, indemnify and hold harmless Dawnpipe and its operators from any claim, demand, fine or expense (including reasonable legal fees) arising from those communications — including claims under the TCPA, CAN-SPAM, state do-not-call, call-recording or consumer-protection laws — except to the extent caused by our own breach of these terms.</p>
+<h2>Governing law and disputes</h2>
+<p>These terms are governed by the laws of the State of Illinois, without regard to conflict-of-law rules. Any dispute will be resolved by binding individual arbitration, or in the state or federal courts located in Illinois where arbitration is unavailable; you waive any right to bring or participate in a class action. Either party may seek injunctive relief in court to protect intellectual property or confidential information.</p>
 <h2>Changes</h2>
 <p>We may update these terms; material changes will be notified by email. Continued use constitutes acceptance.</p>
 <h2>Contact</h2>
@@ -739,15 +743,21 @@ const server = http.createServer(async (req, res) => {
           // Take the message instead; the lead survives and the owner gets told.
           db.logActivity(account.id, { agent: 'VOICE', msg: `Over plan limit (${vAllow.reason}) - taking a message instead of hanging up` });
           return xml(res, voice.sayAndGather(
-            `Thanks for calling ${profile.name}. I can't put you through this second — but tell me your name, your number and what you need, and I'll make sure someone calls you straight back.`,
+            `Thanks for calling ${profile.name} — this is an AI assistant, and this call may be transcribed. I can't put you through this second, but tell me your name, your number and what you need, and I'll make sure someone calls you straight back.`,
             base + '/voice/msg',
             voice.voiceFor(account),
           ));
         }
         const agentName = vcfg.agentName || 'Sarah';
         // Transparency is mandatory: the caller is told it is an AI up front.
-        const greeting = vcfg.greeting
-          || ('Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + " — quick heads up, this call may be transcribed. What can I do for you?");
+        // The AI + transcription disclosure is a fixed prefix the customer
+        // CANNOT remove. A custom greeting used to replace the whole line and
+        // silently drop it — in Illinois, California and a dozen other
+        // all-party-consent states that is $5,000-per-call exposure, and the
+        // homepage promises the disclosure happens on every call. Their own
+        // greeting still plays; it just comes after the part the law needs.
+        const disclosure = 'Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. Just so you know, this call may be transcribed.';
+        const greeting = disclosure + ' ' + (vcfg.greeting || 'What can I do for you?');
         // Does this caller already exist as a lead? If so the AI opens the call
         // knowing what we emailed them and where they stand — the thing no
         // email tool and no answering service can do.
@@ -781,7 +791,7 @@ const server = http.createServer(async (req, res) => {
         const agentName = (call.account.voice && call.account.voice.agentName) || 'Sarah';
         const who = call.lead && call.lead.name ? ' Am I speaking with ' + call.lead.name + '?' : '';
         const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
-          + call.profile.name + '.' + who + ' Did I catch you at an okay time?';
+          + call.profile.name + '. This call may be transcribed.' + who + ' Did I catch you at an okay time?';
         call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
         return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
       }
@@ -1209,7 +1219,11 @@ const server = http.createServer(async (req, res) => {
       if (!email || pw.length < 6) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Enter a valid email and a password of 6+ characters.')), 400);
       if (db.getAccountByEmail(email)) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'That email already has an account. Try logging in.')), 400);
       const { salt, passHash } = auth.hashPassword(pw);
-      const acc = db.createAccount({ email, passHash, salt });
+      // Terms nobody was shown are terms a court will not enforce (browsewrap
+      // fails routinely). Require the click and record when and which version,
+      // so the responsibility-shift language actually binds.
+      if (!f.agree) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Please tick the box to agree to the Terms and Privacy Policy.')), 400);
+      const acc = db.createAccount({ email, passHash, salt, acceptedTermsAt: db.nowISO(), termsVersion: LEGAL_UPDATED });
       seedStarterProfile(acc.id, email);
       db.logActivity(acc.id, { agent: 'SYSTEM', msg: 'Account created' });
       const token = db.createSession(acc.id);
@@ -1352,6 +1366,7 @@ const server = http.createServer(async (req, res) => {
           email: account.email,
           locked: !stripe.hasAccess(account),
           isOwner: stripe.isOwner(account),
+          outboundCalling: process.env.OUTBOUND_CALLING === 'on',
           usage: plans.usage(account, stripe.isOwner(account)),
           isPaid: stripe.isPaid(account),
           // So the UI can say "your card was declined" instead of "choose a
@@ -1632,6 +1647,20 @@ const server = http.createServer(async (req, res) => {
 
       // ---- backfill phone numbers for leads that predate phone capture ----
       if (p === '/api/voice/findphones' && req.method === 'POST') {
+        // === COMPLIANCE GATE: outbound AI calling is OFF unless explicitly enabled ===
+        // Under the FCC's Feb 2024 ruling an AI voice is an "artificial voice"
+        // under the TCPA. Calling a cell phone with one requires prior express
+        // consent — written consent if it is marketing — and owner-operators
+        // answer on cells. Statutory damages are $500 per call, $1,500 if
+        // wilful, strict liability, and Dawnpipe owns the Twilio account, writes
+        // the words and runs the dial loop, so it is named as the initiator.
+        // One suit could also get the Twilio account suspended, taking every
+        // customer's inbound receptionist line down with it. The receptionist
+        // is the product; this feature is not worth that. Flip OUTBOUND_CALLING=on
+        // in the Render dashboard only once a consent model is in place.
+        if (process.env.OUTBOUND_CALLING !== 'on') {
+          return json(res, { error: 'Outbound AI calling is paused pending compliance review. Inbound answering is unaffected.', paused: true }, 403);
+        }
         const f = parseJSON(await readBody(req));
         if (!stripe.canSpend(account)) return json(res, { error: 'Your plan is out of room this month.', needUpgrade: true }, 402);
         const profileId = f.profileId || '';
@@ -1659,6 +1688,20 @@ const server = http.createServer(async (req, res) => {
       // side only ever had a single manual test call, so the outbound voice agent
       // was effectively unusable on a real list.
       if (p === '/api/voice/callrun' && req.method === 'POST') {
+        // === COMPLIANCE GATE: outbound AI calling is OFF unless explicitly enabled ===
+        // Under the FCC's Feb 2024 ruling an AI voice is an "artificial voice"
+        // under the TCPA. Calling a cell phone with one requires prior express
+        // consent — written consent if it is marketing — and owner-operators
+        // answer on cells. Statutory damages are $500 per call, $1,500 if
+        // wilful, strict liability, and Dawnpipe owns the Twilio account, writes
+        // the words and runs the dial loop, so it is named as the initiator.
+        // One suit could also get the Twilio account suspended, taking every
+        // customer's inbound receptionist line down with it. The receptionist
+        // is the product; this feature is not worth that. Flip OUTBOUND_CALLING=on
+        // in the Render dashboard only once a consent model is in place.
+        if (process.env.OUTBOUND_CALLING !== 'on') {
+          return json(res, { error: 'Outbound AI calling is paused pending compliance review. Inbound answering is unaffected.', paused: true }, 403);
+        }
         const f = parseJSON(await readBody(req));
         if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');

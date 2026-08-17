@@ -459,7 +459,7 @@
         <div class="field"><label>Voice</label><div class="hint">Generative voices sound markedly more human but cost ~4x per character spoken (and are still Twilio beta). Neural is cheaper and rock-solid.</div><select id="v_ttsVoice"></select></div>
         <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
       </div>
-      <div class="field"><label>Greeting <span class="muted">(optional)</span></label><div class="hint">Leave blank for: "Hi, this is [name], an AI assistant for [business]. How can I help you today?"</div><input id="v_greeting" placeholder=""></div>
+      <div class="field"><label>After the intro <span class="muted">(optional)</span></label><div class="hint">Every call opens with "Hi, this is [name], an AI assistant for [business]. Just so you know, this call may be transcribed." — that part is fixed, it's what keeps you on the right side of call-recording law. Whatever you type here is said right after it. Leave blank for "What can I do for you?"</div><input id="v_greeting" placeholder="e.g. Thanks for calling — what's going on?"></div>
       <div class="two">
         <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
         <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
@@ -495,7 +495,8 @@
     </div>
   </div>
 
-  <div class="card">
+  <!-- Hidden unless OUTBOUND_CALLING=on: see the compliance gate in server.js. -->
+  <div class="card hide" id="cardColdCalls">
     <h2><span class="agent">COLD CALLS</span> Work your list <span class="muted" id="callableCount"></span></h2>
     <div class="body">
       <p class="muted" style="margin:0 0 10px">The AI rings your leads one at a time, has the conversation, and books what it can. It never calls a number twice, never calls anyone who asked not to be, and stops on its own if you run out of minutes.</p>
@@ -570,7 +571,7 @@ function showTab(t){curTab=t;saveUI();
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadCalls();loadAppointments();}
+  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadCalls();loadAppointments();if($('cardColdCalls'))$('cardColdCalls').classList.toggle('hide',!STATE.outboundCalling);}
   if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
