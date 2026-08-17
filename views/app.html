@@ -463,6 +463,8 @@
       <div id="vKnows" class="warnbox" style="background:#eef2f7;border-color:#c3d2e4;color:#3a5a8a"></div>
       <div class="two">
         <div class="field"><label>Agent name</label><div class="hint">It always says it's an AI — this is just the name.</div><input id="v_agentName" placeholder="Sarah"></div>
+        <div class="field"><label>Language</label><div class="hint">Spanish lines answer in Spanish from the first word — greeting, disclosure, the whole conversation — with a Spanish voice. English lines will still switch to Spanish if a caller opens in it.</div>
+          <select id="v_language"><option value="en-US">English</option><option value="es-US">Español</option></select></div>
         <div class="field"><label>Voice</label><div class="hint">Generative voices sound markedly more human but cost ~4x per character spoken (and are still Twilio beta). Neural is cheaper and rock-solid.</div><select id="v_ttsVoice"></select></div>
         <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
       </div>
@@ -841,7 +843,7 @@ const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta'
 // AI-autofilled fields before they could be saved. Once anything is edited we
 // leave the forms alone until it is saved.
 let _dirty=false;
-const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_language','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
 // The SENDING/schedule/data-key forms suffered the same poll-wipe as the
 // profile form: type your email, tab to the password box, and 20s later the
 // email field snapped back to the saved value — so Connect verified the new
@@ -923,6 +925,7 @@ function renderVoice(){
   $('v_transferTo').value=v.transferTo||'';
   if($('v_onCall'))$('v_onCall').value=(Array.isArray(v.onCall)?v.onCall:[]).join('\n');
   if($('v_slotMinutes'))$('v_slotMinutes').value=String(v.slotMinutes||60);
+  if($('v_language'))$('v_language').value=v.language||'en-US';
   // First-time default: the browser knows where the owner is. Fall back to
   // Central only if that isn't one of the listed zones.
   const tzSel=$('v_timezone');
@@ -956,7 +959,7 @@ async function saveVoice(){
     // shutdown, then fixed a typo in the greeting, silently had the AI start
     // taking live calls again — and the toggle still read OFF.
     await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:$('v_profileId').value,
-      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,onCall:$('v_onCall').value,hours:$('v_hours').value,slotMinutes:$('v_slotMinutes').value,timezone:$('v_timezone').value,
+      greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,onCall:$('v_onCall').value,hours:$('v_hours').value,slotMinutes:$('v_slotMinutes').value,timezone:$('v_timezone').value,language:$('v_language').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
       ttsVoice:$('v_ttsVoice').value});

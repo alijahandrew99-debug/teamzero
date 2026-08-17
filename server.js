@@ -887,13 +887,18 @@ const server = http.createServer(async (req, res) => {
         // all-party-consent states that is $5,000-per-call exposure, and the
         // homepage promises the disclosure happens on every call. Their own
         // greeting still plays; it just comes after the part the law needs.
-        const disclosure = 'Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. Just so you know, this call may be transcribed.';
+        const es = voice.langFor(account) === 'es-US';
+        const disclosure = es
+          ? 'Hola, habla ' + agentName + ', asistente de inteligencia artificial de ' + profile.name + '. Le aviso que esta llamada puede ser transcrita.'
+          : 'Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. Just so you know, this call may be transcribed.';
         // Greet returning callers by name. The legal disclosure is unchanged and
         // still comes first; only the friendly part personalises.
         const histEarly = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
+        const dflt = es ? '¿En qué le puedo ayudar?' : 'What can I do for you?';
         const hello = histEarly && histEarly.name
-          ? `Hi ${histEarly.name.split(' ')[0]}, good to hear from you again — ${(vcfg.greeting || 'what can I do for you today?').replace(/^\s*[A-Z]/, (c) => c.toLowerCase())}`
-          : (vcfg.greeting || 'What can I do for you?');
+          ? (es ? `Hola ${histEarly.name.split(' ')[0]}, qué gusto escucharle de nuevo — ${(vcfg.greeting || '¿en qué le puedo ayudar hoy?')}`
+                : `Hi ${histEarly.name.split(' ')[0]}, good to hear from you again — ${(vcfg.greeting || 'what can I do for you today?').replace(/^\s*[A-Z]/, (c) => c.toLowerCase())}`)
+          : (vcfg.greeting || dflt);
         const greeting = disclosure + ' ' + hello;
         // Does this caller already exist as a lead? If so the AI opens the call
         // knowing what we emailed them and where they stand — the thing no
@@ -1820,6 +1825,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           ...cur,
           enabled: f.enabled !== false,
           record: f.record !== undefined ? !!f.record : (cur.record !== undefined ? cur.record : true),
+          language: ['en-US', 'es-US'].includes(f.language ?? cur.language) ? (f.language ?? cur.language) : 'en-US',
           // Play-along mode for a line whose callers are prospects testing it.
           // Defaults ON for the owner's line — that IS the demo number on the
           // website and in the sales script — and off for real customers,
