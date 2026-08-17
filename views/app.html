@@ -540,6 +540,30 @@
     </div>
   </div>
 
+  <!-- Integrations. This is what makes Dawnpipe pluggable: bookings into
+       Housecall Pro / Jobber / HubSpot / a Google Sheet via Zapier or Make,
+       without us building each one. Folded away — most owners never open it,
+       but the bookkeeper or the marketing agency asks on day one. -->
+  <details style="margin-bottom:12px">
+    <summary class="muted" style="cursor:pointer;padding:10px 0">Connect to Zapier, Make, Housecall Pro, Jobber, HubSpot, Google Sheets…</summary>
+    <div class="card">
+      <h2><span class="agent">INTEGRATIONS</span> Webhooks &amp; API</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 10px">When your AI books a job, finishes a call, or escalates an emergency, we can POST it to any URL — a Zapier "Catch Hook", Make, or your own system. From there it goes anywhere.</p>
+        <div class="field"><label>Webhook URLs <span class="muted">(one per line, https only, up to 5)</span></label><textarea id="int_urls" rows="3" placeholder="https://hooks.zapier.com/hooks/catch/…"></textarea></div>
+        <div class="row" style="margin-bottom:12px">
+          <button class="sm" onclick="saveIntegrations()">Save URLs</button>
+          <button class="sm ghost" onclick="testWebhook()">Send a test event</button>
+          <span class="muted" id="intMsg"></span>
+        </div>
+        <div class="field"><label>Signing secret</label><div class="hint">Every event is signed <code>Dawnpipe-Signature: t=…,v1=…</code> (HMAC-SHA256 over <code>t.body</code>, same shape as Stripe). Verify it if you care who's posting to you.</div><input id="int_secret" readonly style="font-family:ui-monospace,monospace"></div>
+        <div class="field"><label>API key</label><div class="hint">Read your bookings and calls from anywhere: <code>curl -H "Authorization: Bearer YOUR_KEY" https://dawnpipe.com/v1/bookings</code> — also <code>/v1/calls</code>, <code>/v1/callers/lookup?phone=</code>, <code>/v1/me</code>.</div><input id="int_key" readonly style="font-family:ui-monospace,monospace"></div>
+        <div class="row"><button class="sm ghost" onclick="rotateKeys()">Rotate secret &amp; key</button><span class="muted">Only if one leaks — anything using the old ones stops working immediately.</span></div>
+        <div class="muted" style="margin-top:10px;font-size:13px">Events: <code>booking.created</code> · <code>call.completed</code> · <code>emergency.escalated</code> · <code>lead.captured</code></div>
+      </div>
+    </div>
+  </details>
+
   <div class="card">
     <h2><span class="agent">CALLS</span> Recent calls <button class="sm ghost" onclick="loadCalls()" style="margin-left:auto">Refresh</button></h2>
     <div class="body">
@@ -592,7 +616,7 @@ function showTab(t){curTab=t;saveUI();
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadStats();loadCalls();loadAppointments();if($('cardColdCalls'))$('cardColdCalls').classList.toggle('hide',!STATE.outboundCalling);}
+  if(t==='voice'){renderVoice();renderNumber();renderCallable();loadStats();loadIntegrations();loadCalls();loadAppointments();if($('cardColdCalls'))$('cardColdCalls').classList.toggle('hide',!STATE.outboundCalling);}
   if(t==='calendar'){renderCalendar();}
 }
 async function api(path,data){
@@ -1205,6 +1229,28 @@ async function loadAppointments(){
 }
 async function apStatus(id,status){
   try{await api('/api/appointments/update',{id,status});toast('Updated');loadAppointments();}
+  catch(e){toast(e.message);}
+}
+// ---- integrations ----
+async function loadIntegrations(){
+  if(!$('int_urls'))return;
+  try{const r=await api('/api/integrations');
+    if(document.activeElement!==$('int_urls'))$('int_urls').value=(r.webhookUrls||[]).join('\n');
+    $('int_secret').value=r.webhookSecret||'';$('int_key').value=r.apiKey||'';
+  }catch(e){}
+}
+async function saveIntegrations(){
+  try{const r=await api('/api/integrations',{webhookUrls:$('int_urls').value});
+    $('intMsg').textContent=`Saved ${r.webhookUrls.length} URL(s).`;toast('Webhooks saved');
+  }catch(e){toast(e.message);}
+}
+async function testWebhook(){
+  try{const r=await api('/api/integrations/test',{});$('intMsg').textContent=r.note;toast('Test event sent');}
+  catch(e){toast(e.message);}
+}
+async function rotateKeys(){
+  if(!confirm('Rotate the signing secret and API key?\n\nAnything using the current ones stops working immediately.'))return;
+  try{const r=await api('/api/integrations/rotate',{});$('int_secret').value=r.webhookSecret;$('int_key').value=r.apiKey;toast('Rotated');}
   catch(e){toast(e.message);}
 }
 async function blockCaller(num){

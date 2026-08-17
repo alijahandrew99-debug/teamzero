@@ -17,6 +17,7 @@ const suppress = require('./lib/suppression');
 const voice = require('./lib/voice');
 const numbers = require('./lib/numbers');
 const stats = require('./lib/stats');
+const hooks = require('./lib/hooks');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -994,6 +995,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           if (isEmergency) {
             const d = out.data || {};
             const from = params.From || call.from || '';
+            hooks.emit(call.account, 'emergency.escalated', { callSid: sid, from, name: d.name || '', reason: d.reason || '', onCall: chain });
             const body = `🚨 EMERGENCY call coming through now from ${from}${d.name ? ' — ' + d.name : ''}${d.reason ? ': ' + d.reason : ''}. Dawnpipe is connecting them to you.`;
             const mine = vc.number || (stripe.isOwner(call.account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
             for (const n of chain) notify.sendSMS(n, body, mine).catch(() => {});
@@ -1033,6 +1035,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'booked', transcript: call.turns,
             booking: { name: d.name, company: d.company, phone, reason: d.reason, when: d.when } });
+          hooks.emit(call.account, 'booking.created', { appointment: appt, callSid: sid, source: 'phone' });
           db.addLeads(call.accountId, call.profile.id, [{
             name: d.name || 'Caller', company: d.company || '', email: '',
             emailConfidence: 'imported', emailSource: 'phone call',
@@ -1214,6 +1217,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
               chars: call.turns.filter((t) => t.who !== 'caller').reduce((n, t) => n + (t.text || '').length, 0),
               tier: /Generative|Chirp3/.test(voice.voiceFor(call.account)) ? 'generative' : 'neural' }) });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
+          hooks.emit(call.account, 'call.completed', { callSid: sid, direction: call.direction, from: call.from || params.From || '', to: call.to || params.To || '',
+            durationSec: dur, outcome: (db.getCalls(call.accountId, 50).find((c) => c.sid === sid) || {}).outcome || params.CallStatus,
+            urgency: call.urgency || 'routine', transcript: call.turns });
           // Reply to Twilio NOW — it only needs the ack — then salvage in the
           // background so a slow model reply can't stall the webhook.
           res.writeHead(204); res.end();
@@ -1420,6 +1426,36 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (!event) return json(res, { error: 'bad signature' }, 400);
       stripe.applyEvent(event);
       return json(res, { received: true });
+    }
+
+    // ---------- Public API (API key, no session) ----------
+    // For Zapier, Make, a spreadsheet script, or the customer's own developer.
+    // Authenticated by `Authorization: Bearer dp_live_...`. Read-only for now:
+    // bookings, calls, and a "who is this caller" lookup. Rate-limited per key.
+    if (p.startsWith('/v1/')) {
+      const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+      const keyAcc = bearer && bearer.startsWith('dp_live_') ? db.allAccounts().find((a) => a.apiKey === bearer) : null;
+      if (!keyAcc) return json(res, { error: 'Invalid or missing API key. Send it as: Authorization: Bearer dp_live_...' }, 401);
+      if (rateLimited(req, 'apikey:' + keyAcc.id, 600, 60 * 60 * 1000)) return json(res, { error: 'Rate limit: 600 requests per hour per key.' }, 429);
+      if (!stripe.hasAccess(keyAcc)) return json(res, { error: 'This account is not active.' }, 402);
+      const since = url.searchParams.get('since') ? Date.parse(url.searchParams.get('since')) : 0;
+      const lim = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+      if (req.method === 'GET' && p === '/v1/bookings') {
+        const rows = db.getAppointments(keyAcc.id).filter((a) => !since || Date.parse(a.createdAt) >= since).slice(-lim);
+        return json(res, { data: rows, count: rows.length });
+      }
+      if (req.method === 'GET' && p === '/v1/calls') {
+        const rows = db.getCalls(keyAcc.id, lim).filter((c) => !since || Date.parse(c.at) >= since).map(({ estCost, ...c }) => c);
+        return json(res, { data: rows, count: rows.length });
+      }
+      if (req.method === 'GET' && p === '/v1/callers/lookup') {
+        const num = url.searchParams.get('phone') || '';
+        return json(res, { data: stats.callerHistory(keyAcc.id, num, suppress.phoneKey) });
+      }
+      if (req.method === 'GET' && p === '/v1/me') {
+        return json(res, { data: { account: keyAcc.id, email: keyAcc.email, tier: keyAcc.tier || null, events: hooks.EVENTS } });
+      }
+      return json(res, { error: 'Unknown endpoint. Available: GET /v1/me, /v1/bookings, /v1/calls, /v1/callers/lookup?phone=' }, 404);
     }
 
     // ---------- auth-required below ----------
@@ -2022,6 +2058,32 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           detail: rows,
           note: apply ? 'Counters corrected.' : 'DRY RUN — nothing changed. POST {"apply":true} to write these.',
         });
+      }
+
+      // ---- integrations: webhooks + API key ----
+      // Read: the URLs, the events, and (once) the secret + API key.
+      if (p === '/api/integrations' && req.method === 'GET') {
+        const acc2 = hooks.ensureSecrets(account);
+        return json(res, { webhookUrls: acc2.webhookUrls || [], webhookSecret: acc2.webhookSecret, apiKey: acc2.apiKey, events: hooks.EVENTS });
+      }
+      // Write: up to 5 https URLs.
+      if (p === '/api/integrations' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const urls = String(f.webhookUrls || '').split(/[\s,]+/).map((u) => u.trim()).filter((u) => /^https:\/\/[^\s]+$/.test(u)).slice(0, 5);
+        db.updateAccount(acc, { webhookUrls: urls });
+        db.logActivity(acc, { agent: 'SYSTEM', msg: `Webhook URLs updated (${urls.length})` });
+        return json(res, { ok: true, webhookUrls: urls });
+      }
+      // Rotate the secret / key if one leaks.
+      if (p === '/api/integrations/rotate' && req.method === 'POST') {
+        db.updateAccount(acc, { webhookSecret: '', apiKey: '' });
+        const acc2 = hooks.ensureSecrets(db.getAccount(acc));
+        return json(res, { ok: true, webhookSecret: acc2.webhookSecret, apiKey: acc2.apiKey });
+      }
+      // Send a test event so the owner can confirm their receiver works.
+      if (p === '/api/integrations/test' && req.method === 'POST') {
+        hooks.emit(account, 'booking.created', { test: true, appointment: { name: 'Test Caller', phone: '+15555550123', reason: 'webhook test', startsAt: new Date(Date.now() + 86400000).toISOString() } });
+        return json(res, { ok: true, note: 'Sent a test booking.created to your URLs. Check your receiver — and the activity log here for any delivery errors.' });
       }
 
       // ---- billing setup diagnostic (owner only; reports names, never values) ----
