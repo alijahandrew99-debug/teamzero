@@ -18,6 +18,7 @@ const voice = require('./lib/voice');
 const numbers = require('./lib/numbers');
 const stats = require('./lib/stats');
 const hooks = require('./lib/hooks');
+const spend = require('./lib/spend');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -713,6 +714,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/robots.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('User-agent: *\nAllow: /\nDisallow: /app\nDisallow: /api/\nDisallow: /u/\nDisallow: /voice/\nSitemap: https://dawnpipe.com/sitemap.xml\n');
+    }
+    // Public plan catalogue: names, prices, what you get, and whether each
+    // one can be bought right now. Nothing here is secret (it is the pricing
+    // page as JSON) and it is how we verify from outside that the live plans
+    // are actually wired to live prices, without guessing at env vars.
+    if (req.method === 'GET' && p === '/plans.json') {
+      const tiers = plans.catalogue().map(({ priceEnvKey, ...t }) => t);
+      return json(res, { tiers, trust: plans.TRUST, billingConfigured: stripe.configured(), sellable: tiers.filter((t) => t.available).map((t) => t.id) });
     }
     if (req.method === 'GET' && p === '/sitemap.xml') {
       const site = 'https://dawnpipe.com';
@@ -1451,7 +1460,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         ? `<a class="btn red" href="/signup?tier=phone" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try Phone free for 7 days →</a> <a href="/signup?tier=frontdesk" style="color:#9fe0b8;font-size:14px;margin-left:8px">or start on Front Desk →</a>`
         : `<a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a>`;
       const voiceFrom = '$' + (phoneOn ? P.price : FD.price);
-      page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom);
+      const allowance = phoneOn
+        ? `Phone: ${P.voiceMinutes} minutes. Front Desk: ${FD.voiceMinutes.toLocaleString()} minutes + ${FD.leads} leads`
+        : `Front Desk: ${FD.voiceMinutes.toLocaleString()} minutes + ${FD.leads} leads a month`;
+      page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom).split('__ALLOWANCE_LINE__').join(allowance);
       return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
     }
     // Legal pages — public, and required before Stripe will approve billing.
@@ -1703,7 +1715,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // plan" — the second is both wrong and the thing that pushed them
           // into buying a duplicate subscription.
           dunning: stripe.DUNNING.includes(account.subStatus) ? { since: account.dunningSince || '', inGrace: stripe.inGrace(account) } : null,
-          tiers: plans.tierList(),
+          tiers: plans.catalogue().map(({ priceEnvKey, ...t }) => t),
+          trust: plans.TRUST,
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
           // masked: the app never ships the app-password back to the browser
@@ -2240,10 +2253,39 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         return json(res, { ok: true, note: 'Sent a test booking.created to your URLs. Check your receiver — and the activity log here for any delivery errors.' });
       }
 
+      // ---- REAL Twilio spend, from Twilio's ledger (owner only) ----
+      // ?days=30 (default) or ?start=YYYY-MM-DD&end=YYYY-MM-DD. Answers "what
+      // is this actually costing us per minute" from billed usage, not from
+      // the estimate's constants.
+      if (p === '/api/admin/spend' && req.method === 'GET') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const days = Math.min(Number(url.searchParams.get('days')) || 30, 92);
+        const end = url.searchParams.get('end') || new Date().toISOString().slice(0, 10);
+        const start = url.searchParams.get('start') || new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+        try {
+          const rows = await spend.usageRecords({ start, end });
+          const sum = spend.summarise(rows);
+          // Compare against what we THINK it costs, so the gap is visible.
+          const est = { note: 'estimateCost() assumes: phone $0.014/min, speech recognition $0.02 per turn, TTS $0.013/100 chars generative or $0.0032 neural, AI $0.006/turn, recording $0.0025/min. Twilio\'s advertised per-minute rate is the phone line only; speech-to-text and text-to-speech are ~80% of a real call.' };
+          return json(res, { start, end, ...sum, estimateAssumptions: est, rawCategories: rows.filter((r) => r.price).map((r) => ({ category: r.category, usage: r.usage, unit: r.usageUnit, price: r.price })).sort((a, b) => b.price - a.price) });
+        } catch (e) { return json(res, { error: e.message }, 502); }
+      }
+
       // ---- billing setup diagnostic (owner only; reports names, never values) ----
       if (p === '/api/billing/diag' && req.method === 'GET') {
         if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
         return json(res, stripe.configReport());
+      }
+      // Owner action: make every tier sellable by creating the Stripe prices
+      // that do not exist yet (existing ones are never touched). The plan
+      // modal offers this to the owner when some tiers have no price.
+      if (p === '/api/admin/stripe/sync-prices' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        try {
+          const r = await stripe.createMissingPrices();
+          db.logActivity(account.id, { agent: 'SYSTEM', msg: r.created.length ? `Created Stripe prices for: ${r.created.map((c) => c.tier).join(', ')}` : 'Stripe prices: nothing missing' });
+          return json(res, { ok: true, ...r, report: stripe.configReport() });
+        } catch (e) { return json(res, { error: e.message }, 502); }
       }
 
       // ---- suppression list ----
@@ -2481,7 +2523,19 @@ Use it the way a good receptionist would: greet them by name if you have one, do
   }
 });
 
+// Learn the live prices from Stripe itself, at boot and hourly, so a tier is
+// sellable the moment its price exists -- no Render env var to forget.
+async function refreshPrices(tag) {
+  try {
+    const found = await plans.discoverPrices();
+    const list = Object.keys(found);
+    console.log(`  Stripe prices (${tag}): ${list.length ? list.join(', ') : 'none discovered'}${process.env.STRIPE_SECRET_KEY ? '' : ' (no STRIPE_SECRET_KEY)'}`);
+  } catch (e) { console.error(`  Stripe price discovery failed (${tag}): ${e.message}`); }
+}
+setInterval(() => { refreshPrices('hourly'); }, 60 * 60 * 1000);
+
 server.listen(PORT, () => {
   console.log(`\n  Dawnpipe Cloud → http://localhost:${PORT}`);
   console.log(`  AI mode: ${aiMode()}  |  Billing: ${stripe.configured() ? 'Stripe configured' : 'not configured (DEV_UNLOCK=' + (process.env.DEV_UNLOCK || '0') + ')'}\n`);
+  refreshPrices('boot');
 });
