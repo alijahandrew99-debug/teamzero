@@ -413,6 +413,13 @@
           </label>
           <span class="muted" id="v_enabledHint">Turn it off and callers get your voicemail instead.</span>
         </div>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer">
+            <input type="checkbox" id="v_record" onchange="toggleRecording()" style="width:auto;margin:0">
+            <b>Record calls</b>
+          </label>
+          <span class="muted">Audio you can play back, alongside the transcript. Every call already says it may be transcribed, so callers are told. Turn off if you'd rather keep transcripts only.</span>
+        </div>
 
         <!-- The number people already have on their truck and their website is
              the one they must keep. Forwarding on no-answer is the whole
@@ -977,6 +984,7 @@ function renderNumber(){
   const on=v.enabled!==false;
   if($('v_enabled'))$('v_enabled').checked=on;
   if($('v_enabledLabel'))$('v_enabledLabel').textContent=on?'Answering is ON':'Answering is OFF';
+  if($('v_record'))$('v_record').checked=(v.record!==false);
   if($('v_enabledHint'))$('v_enabledHint').textContent=on
     ? 'Turn it off and callers get your voicemail instead.'
     : 'Callers are going to voicemail right now.';
@@ -1015,6 +1023,11 @@ function showFwd(k){
   }).join('<br>');
   $('fwdHow').innerHTML=`<b style="color:var(--ink)">${esc(f.t)}</b><br>${body}`
     +`<br><span style="font-size:12px">Codes differ between carriers and plans. If the tone does not confirm, ask your carrier for <b>conditional call forwarding on no answer</b> to ${esc(mine)} — that is the exact phrase they need.</span>`;
+}
+async function toggleRecording(){
+  const on=$('v_record').checked;
+  try{await api('/api/voice/save',{record:on,enabled:((STATE.voice||{}).enabled!==false),profileId:(STATE.voice||{}).profileId||''});toast(on?'Recording on':'Recording off — transcripts only');await load();renderNumber();}
+  catch(e){toast(e.message);$('v_record').checked=!on;}
 }
 async function toggleAnswering(){
   const on=$('v_enabled').checked;
@@ -1321,6 +1334,7 @@ async function loadCalls(){
         <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome||c.status||'')}</span></div>
         <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${(STATE.isOwner&&c.estCost)?`<b>~$${c.estCost.toFixed(2)}</b> est. cost · `:''}${(c.direction==='inbound'&&c.from)?`<a href="#" onclick="blockCaller('${esc(c.from)}');return false" style="color:var(--ink2)">block this number</a>`:''}</div>
         ${c.booking?`<div class="okbox" style="margin:8px 0">📅 ${esc(c.booking.name||'Caller')} · ${esc(c.booking.phone||'')} · ${esc(c.booking.when||'')} — ${esc(c.booking.reason||'')}</div>`:''}
+        ${c.recordingSid?`<audio controls preload="none" style="width:100%;height:32px;margin-top:8px" src="/api/voice/recording?sid=${encodeURIComponent(c.sid)}"></audio>`:''}
         ${t?`<div class="feed" style="max-height:180px;margin-top:8px">${t}</div>`:''}</div>`;
     }).join(''):'<div class="empty">No calls yet. Point Twilio at the webhook above, then call your number.</div>';
   }catch(e){$('vCalls').innerHTML=`<div class="muted">${esc(e.message)}</div>`;}

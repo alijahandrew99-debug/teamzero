@@ -919,6 +919,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const inDnc = suppress.isPhoneSuppressed(account.id, params.From || '');
         db.logActivity(account.id, { agent: 'VOICE', msg: 'Incoming call from ' + (params.From || 'unknown')
           + (inDnc.blocked ? ' (this number is on your do-not-call list — they called you, so we answered)' : '') });
+        // Record from the first word. Both legs; URL arrives at /voice/recording
+        // when the call ends. Never awaited -- a recording failure must not
+        // delay or break the greeting.
+        if ((account.voice || {}).record !== false) voice.startRecording(sid, base + '/voice/recording').catch(() => {});
         return xml(res, voice.sayAndGather(greeting, base + '/voice/turn', voice.voiceFor(account), voice.hintsFor(profile, account)));
       }
 
@@ -938,6 +942,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
           + call.profile.name + '. This call may be transcribed.' + who + ' Did I catch you at an okay time?';
         call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
+        if ((call.account.voice || {}).record !== false) voice.startRecording(sid, base + '/voice/recording').catch(() => {});
         return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
       }
 
@@ -1171,6 +1176,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           return xml(res, voice.sayAndSignOff(out.say, voice.voiceFor(call.account), 'Thanks for your time. Bye now.'));
         }
         return xml(res, voice.sayAndGather(out.say, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account), { noisy: (call.noiseHits || 0) >= 1 }));
+      }
+
+      // ---- a recording finished ----
+      if (p === '/voice/recording') {
+        const rsid = params.RecordingSid || '', rurl = params.RecordingUrl || '';
+        const dur = Number(params.RecordingDuration || 0);
+        const owner = db.accountByCallSid(sid);
+        if (owner && rsid) {
+          db.saveCall(owner.id, { sid, recordingSid: rsid, recordingUrl: rurl, recordingSec: dur });
+        }
+        res.writeHead(204); return res.end();
       }
 
       // ---- message taken because the plan was out of minutes ----
@@ -1803,6 +1819,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const v = {
           ...cur,
           enabled: f.enabled !== false,
+          record: f.record !== undefined ? !!f.record : (cur.record !== undefined ? cur.record : true),
           // Play-along mode for a line whose callers are prospects testing it.
           // Defaults ON for the owner's line — that IS the demo number on the
           // website and in the sales script — and off for real customers,
@@ -1848,6 +1865,23 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // dashboard; the same numbers go out in the monthly recap email.
       if (p === '/api/voice/stats' && req.method === 'GET') {
         return json(res, stats.summary(account, voice.tzFor(account)));
+      }
+      // Stream a recording to the owner's browser. Proxied with our Twilio
+      // credentials so recordings are never public URLs, and scoped to the
+      // account so nobody can play back another business's calls.
+      if (p === '/api/voice/recording' && req.method === 'GET') {
+        const wantSid = url.searchParams.get('sid') || '';
+        const call = db.getCalls(acc, 3000).find((c) => c.sid === wantSid);
+        if (!call || !call.recordingSid) return json(res, { error: 'No recording for that call.' }, 404);
+        const asid = process.env.TWILIO_ACCOUNT_SID, tok = process.env.TWILIO_AUTH_TOKEN;
+        try {
+          const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${asid}/Recordings/${encodeURIComponent(call.recordingSid)}.mp3`, {
+            headers: { Authorization: 'Basic ' + Buffer.from(`${asid}:${tok}`).toString('base64') }, signal: AbortSignal.timeout(20000) });
+          if (!r.ok) return json(res, { error: `Recording not available (${r.status}).` }, 502);
+          res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'private, max-age=3600' });
+          const buf = Buffer.from(await r.arrayBuffer());
+          return res.end(buf);
+        } catch (e) { return json(res, { error: e.message }, 502); }
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
         const rows = db.getCalls(acc, 50);
