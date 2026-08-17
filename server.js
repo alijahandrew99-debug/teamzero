@@ -1449,7 +1449,15 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, voice: v });
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
-        return json(res, { calls: db.getCalls(acc, 50) });
+        const rows = db.getCalls(acc, 50);
+        // estCost is OUR cost of goods, not the customer's. Someone paying
+        // $399 who can see a call cost us 62 cents will price the product for
+        // themselves, and badly. Stripped server-side rather than hidden in
+        // the UI, because "hidden" is one devtools tab away from visible.
+        if (!stripe.isOwner(account)) {
+          return json(res, { calls: rows.map(({ estCost, ...rest }) => rest) });
+        }
+        return json(res, { calls: rows });
       }
       // Place a real outbound call. Costs money, so it is metered and explicit.
       if (p === '/api/voice/testcall' && req.method === 'POST') {

@@ -1182,11 +1182,17 @@ async function loadCalls(){
       const paidFor=(u.limit&&STATE.usage.isPro)?((STATE.tiers||[]).find(t=>t.id===STATE.usage.tier)||{}).price:0;
       if(!mine.length){
         mk.innerHTML='<span class="muted">No calls yet this month.</span>';
-      }else{
+      }else if(STATE.isOwner){
+        // Owner view: what it actually costs us to run.
         const per=spend/mine.length;
         mk.innerHTML=`<b>${mine.length}</b> call${mine.length===1?'':'s'} this month · <b>${mins}</b> min · `
-          +`estimated cost <b>$${spend.toFixed(2)}</b> <span class="muted">(~$${per.toFixed(2)} each)</span>`
-          +(paidFor?` · your plan is <b>$${paidFor}</b>/mo`:'');
+          +`estimated cost <b>$${spend.toFixed(2)}</b> <span class="muted">(~$${per.toFixed(2)} each · owner view)</span>`;
+      }else{
+        // Customer view: the thing they actually bought — minutes — never our
+        // cost of running it.
+        const left=(typeof u.remaining==='number')?u.remaining:null;
+        mk.innerHTML=`<b>${mine.length}</b> call${mine.length===1?'':'s'} this month · <b>${mins}</b> min used`
+          +(left!==null&&u.limit?` · <b>${left}</b> of ${u.limit} min left on your plan`:'');
       }
     }
     $('vCalls').innerHTML=cs.length?cs.map(c=>{
@@ -1194,7 +1200,7 @@ async function loadCalls(){
       return `<div class="qitem"><div class="row" style="justify-content:space-between">
         <span class="to">${c.direction==='inbound'?'⬅ from '+esc(c.from||'?'):'➡ to '+esc(c.to||'?')} · ${new Date(c.at).toLocaleString()}</span>
         <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome||c.status||'')}</span></div>
-        <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${c.estCost?`<b>~$${c.estCost.toFixed(2)}</b> est. cost`:''}</div>
+        <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${(STATE.isOwner&&c.estCost)?`<b>~$${c.estCost.toFixed(2)}</b> est. cost`:''}</div>
         ${c.booking?`<div class="okbox" style="margin:8px 0">📅 ${esc(c.booking.name||'Caller')} · ${esc(c.booking.phone||'')} · ${esc(c.booking.when||'')} — ${esc(c.booking.reason||'')}</div>`:''}
         ${t?`<div class="feed" style="max-height:180px;margin-top:8px">${t}</div>`:''}</div>`;
     }).join(''):'<div class="empty">No calls yet. Point Twilio at the webhook above, then call your number.</div>';
