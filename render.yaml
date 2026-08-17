@@ -40,8 +40,10 @@ services:
         sync: false
       - key: STRIPE_PRICE_TESTER
         sync: false          # $49 Tester
+      - key: STRIPE_PRICE_PHONE
+        sync: false          # $149 Phone (300 voice min, entry point)
       - key: STRIPE_PRICE_FRONTDESK
-        sync: false          # $399 Front Desk (voice-first)
+        sync: false          # $399 Front Desk (1,000 voice min + 200 leads)
       - key: STRIPE_PRICE_COMPLETE
         sync: false          # $1,499 Complete (email + phone)
       - key: STRIPE_PRICE_STARTER

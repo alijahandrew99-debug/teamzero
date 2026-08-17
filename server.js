@@ -1438,6 +1438,20 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // placeholders too, and a raw __DEMO_NUM__ leaking into a share preview
       // is worse than an empty one.
       page = withDemoTel(page);
+      // The Phone tier appears on the page only once its Stripe price exists,
+      // so we never advertise a plan that dead-ends at checkout. The moment
+      // STRIPE_PRICE_PHONE is set in Render, the page shows it.
+      const phoneOn = !!plans.priceIdForTier('phone');
+      const P = plans.TIERS.phone, FD = plans.TIERS.frontdesk;
+      const block = phoneOn
+        ? `<div class="tname" style="color:#9fe0b8">Phone</div><div class="camt">$${P.price}<span>/mo</span></div><div class="cnote">Every call answered. Every job booked. ${P.voiceMinutes} minutes.</div>
+           <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(159,224,184,.25)"><div class="tname" style="color:#9fe0b8">Front Desk</div><div class="camt" style="font-size:34px">$${FD.price}<span>/mo</span></div><div class="cnote">${FD.voiceMinutes.toLocaleString()} minutes — and between calls it finds you new customers.</div></div>`
+        : `<div class="tname" style="color:#9fe0b8">Front Desk</div><div class="camt">$${FD.price}<span>/mo</span></div><div class="cnote">Every call answered. Every job booked. ${FD.voiceMinutes.toLocaleString()} minutes a month.</div>`;
+      const cta = phoneOn
+        ? `<a class="btn red" href="/signup?tier=phone" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try Phone free for 7 days →</a> <a href="/signup?tier=frontdesk" style="color:#9fe0b8;font-size:14px;margin-left:8px">or start on Front Desk →</a>`
+        : `<a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a>`;
+      const voiceFrom = '$' + (phoneOn ? P.price : FD.price);
+      page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom);
       return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
     }
     // Legal pages — public, and required before Stripe will approve billing.

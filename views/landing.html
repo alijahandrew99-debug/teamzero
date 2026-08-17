@@ -28,7 +28,7 @@
  "applicationCategory":"BusinessApplication","operatingSystem":"Web",
  "description":"AI receptionist and sales team for small businesses: answers missed calls, books appointments, finds verified leads and writes follow-up outreach.",
  "url":"https://dawnpipe.com/",
- "offers":{"@type":"AggregateOffer","priceCurrency":"USD","lowPrice":"49","highPrice":"1499","offerCount":"6"}}
+ "offers":{"@type":"AggregateOffer","priceCurrency":"USD","lowPrice":"49","highPrice":"1499","offerCount":"7"}}
 </script>
 <style>
   :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b}
@@ -139,7 +139,7 @@
     <h1>Every call answered. <span class="r">Every job booked.</span><br>Even the ones you miss.</h1>
     <p>Dawnpipe picks up when you're on a roof, under a sink, or asleep — books the appointment, texts the customer a confirmation, and drops it in your calendar. Between calls, it goes out and finds your next customers and writes the emails. You approve everything. Nothing to install, nobody to hire.</p>
     <a class="btn red" href="tel:__DEMO_TEL__" style="font-size:17px;padding:13px 26px">📞 Call the AI — __DEMO_NUM__</a> <a class="btn ghost" href="#pricing" style="font-size:17px;padding:13px 26px">See pricing</a>
-    <div style="margin-top:14px;font-size:15px;color:var(--ink2)">It answers 24/7, tells you it's an AI, and can sign you up on the call.<br>Phone answering from $399/mo — <b>try it free for 7 days</b> · lead-finding from __FROM_PRICE__/mo · month to month, cancel anytime.</div>
+    <div style="margin-top:14px;font-size:15px;color:var(--ink2)">It answers 24/7, tells you it's an AI, and can sign you up on the call.<br>Phone answering from __VOICE_FROM__/mo — <b>try it free for 7 days</b> · lead-finding from __FROM_PRICE__/mo · month to month, cancel anytime.</div>
   </div>
 
   
@@ -226,22 +226,20 @@ Worth 15 minutes to see if your lines qualify?
 
 <section id="pricing"><div class="wrap">
   <h2>Pricing you can see. Imagine that.</h2>
-  <p style="color:var(--ink2);margin-bottom:26px">Every AI receptionist company makes you “book a demo” to learn the price. Ours is right here. For scale: the best-known answering service charges about $300 a month for 30 answered calls, and a full-time hire is $5,000 and still misses the phone. Start at $49 to watch it work, or hand the whole front desk over for $399.</p>
+  <p style="color:var(--ink2);margin-bottom:26px">Every AI receptionist company makes you “book a demo” to learn the price. Ours is right here. For scale: the best-known answering service charges about $300 a month for 30 answered calls, and a full-time hire is $5,000 and still misses the phone. Phone answering starts at __VOICE_FROM__. Hand the whole front desk over — answering plus finding new customers — for $399.</p>
   <div class="complete" style="background:#1d2a20;margin-top:26px">
     <div class="cbadge" style="background:#2f7d4f">For anyone who misses calls</div>
     <div class="cgrid">
       <div>
-        <div class="tname" style="color:#9fe0b8">Front Desk</div>
-        <div class="camt">$399<span>/mo</span></div>
-        <div class="cnote">Every call answered. Every job booked.</div>
-        <a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a><div class="muted" style="font-size:12.5px;margin-top:8px">Card required, nothing charged until day 8. Cancel in one click before then and you pay nothing.</div>
+__PHONE_TIER_BLOCK__
+        __PHONE_TIER_CTA__<div class="muted" style="font-size:12.5px;margin-top:8px">Card required, nothing charged until day 8. Cancel in one click before then and you pay nothing.</div>
         <div style="margin-top:12px;font-size:13.5px;color:#b9c9bd">Not sure? Call it first: <a href="tel:__DEMO_TEL__" style="color:#9fe0b8">__DEMO_NUM__</a> — you will be talking to the exact thing you are buying.</div>
       </div>
       <div class="cfeat">
         <div class="cf"><b>It picks up when you can't</b><span>on a roof, under a sink, driving between jobs, or asleep. The call gets answered, every time.</span></div>
         <div class="cf"><b>It books the job into your calendar</b><span>takes their name and number, finds a time, texts them a confirmation, and drops the appointment straight into your phone.</span></div>
         <div class="cf"><b>It only says what you told it to</b><span>your prices, your answers. If it doesn't know, it says so and takes a message — it never makes something up to a customer.</span></div>
-        <div class="cf"><b>400 minutes + 200 leads a month</b><span>and between calls it goes looking for new customers for you.</span></div>
+        <div class="cf"><b>Phone: 300 minutes. Front Desk: 1,000 minutes + 200 leads</b><span>and on Front Desk, between calls it goes looking for new customers for you.</span></div>
       </div>
     </div>
   </div>
