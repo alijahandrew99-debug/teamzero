@@ -871,9 +871,27 @@ const server = http.createServer(async (req, res) => {
         // Count the caller's turns, not every utterance — an exchange is a
         // pair, and our own opener is in here too.
         const exchanges = call.turns.filter((t) => t.who === 'caller').length;
-        if (exchanges > LIM.exchanges) {
+        // The cap exists to stop a runaway call, NOT to hang up on a buyer.
+        // Someone who just said "I want the tester" or "sign me up" is the
+        // best thing that can happen on this line, and the cap fired on
+        // exactly that turn — cutting off the sale. If the latest thing they
+        // said sounds like intent to buy or book, or the agent has details it
+        // owes them, the cap yields: we let the model take ONE more turn to
+        // close, then a hard stop a few turns beyond that.
+        const buying = /(sign\s*me\s*up|sign\s*up|i(?:'| wi)?ll take|i want (?:the |to )|let'?s do (?:it|that)|book (?:it|me|that)|yes,? (?:let'?s|do it|please)|how do i (?:pay|start|get started)|the (?:tester|starter|front desk|growth|scale|complete))/i.test(heard);
+        const hardStop = LIM.exchanges + 4;
+        if (exchanges > hardStop || (exchanges > LIM.exchanges && !buying)) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'max-length', transcript: call.turns });
-          return xml(res, voice.sayAndHangup("Listen, I don't want to keep you all day - let me get someone to follow up properly. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
+          // Even the hard stop leaves them a way to buy. On the demo line the
+          // person may well be sold; sending them off with "someone will follow
+          // up" throws that away, so give the site out loud before hanging up.
+          const bye = voice.demoModeFor(call.account)
+            ? "I don't want to keep you all day. Everything you just heard is at dawnpipe dot com — takes about five minutes to set up. Thanks for calling."
+            : "Listen, I don't want to keep you all day - let me get someone to follow up properly. Thanks for your time.";
+          return xml(res, voice.sayAndHangup(bye, call && call.account ? voice.voiceFor(call.account) : undefined));
+        }
+        if (exchanges > LIM.exchanges && buying) {
+          call.closing = true;   // tell the model: they're buying — close, don't chat
         }
 
         let out;
