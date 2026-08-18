@@ -1711,7 +1711,7 @@ function showUpgrade(){
       :'Month to month · cancel in one click · no setup fee';
     let ownerFlag='';
     if(STATE.isOwner&&!t.available)ownerFlag=`<div style="font-size:11.5px;color:var(--red);font-weight:700;margin-bottom:4px">⚠ No Stripe price yet — customers can't buy this</div>`;
-    else if(STATE.isOwner&&t.priceCurrent===false)ownerFlag=`<div style="font-size:11.5px;color:var(--gold);font-weight:700;margin-bottom:4px">⚠ Still charging the OLD price — click "Create the missing Stripe prices" below to charge $${t.price}</div>`;
+    else if(STATE.isOwner&&t.priceCurrent===false)ownerFlag=`<div style="font-size:11.5px;color:var(--gold);font-weight:700;margin-bottom:4px">⚠ Showing and charging $${t.price} — you set this plan to $${t.listPrice}. Click "Create the missing Stripe prices" below to switch.</div>`;
     return `<div class="tcard ${cls}">${badge}${ownerFlag}
       <div class="tn">${esc(t.name)}</div>
       <div class="ttag">${esc(t.tagline||t.blurb||'')}</div>

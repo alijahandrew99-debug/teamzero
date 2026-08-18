@@ -1542,7 +1542,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ONE voice plan. There is no phone-only tier any more: the thing worth
       // buying is the whole front desk, and a cheaper half-product next to it
       // only made the real plan look expensive.
-      const FD = plans.TIERS.frontdesk;
+      // Quote what will actually be charged, not the intended number.
+      const FD = plans.catalogue().find((t) => t.id === 'frontdesk') || plans.TIERS.frontdesk;
       const block = `<div class="tname" style="color:#9fe0b8">Front Desk</div><div class="camt">$${FD.price}<span>/mo</span></div><div class="cnote">Every call answered. Every job booked. ${FD.voiceMinutes.toLocaleString()} minutes a month — and between calls it goes and finds you new customers.</div>`;
       const cta = `<a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a>`;
       const voiceFrom = '$' + FD.price;
