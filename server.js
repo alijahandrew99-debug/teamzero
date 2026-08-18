@@ -1553,7 +1553,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // a plan that no longer existed; a template cannot drift.
       const CAT = plans.catalogue();
       const COMP = CAT.find((t) => t.id === 'complete') || plans.TIERS.complete;
-      const cards = CAT.filter((t) => t.available && t.id !== 'complete' && t.id !== 'frontdesk').map((t) => {
+      const cards = CAT.filter((t) => t.id !== 'complete' && t.id !== 'frontdesk').map((t) => {
         const allow = [t.voiceMinutes ? `${t.voiceMinutes.toLocaleString()} phone minutes` : '', t.leads ? `${t.leads.toLocaleString()} leads` : ''].filter(Boolean).join(' + ');
         const feats = (t.features || []).slice(0, 4).map((f) => `<li>${voice.esc(f)}</li>`).join('');
         return `<div class="tier${t.badge ? ' featured' : ''}">${t.badge ? `<div class="tbadge">${voice.esc(t.badge)}</div>` : ''}
@@ -1564,7 +1564,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           <a class="btn" href="/signup?tier=${t.id}" style="display:block">Try it free for 7 days →</a>
         </div>`;
       }).join('');
-      const cols = Math.max(1, Math.min(3, CAT.filter((t) => t.available && t.id !== 'complete' && t.id !== 'frontdesk').length));
+      const cols = Math.max(1, Math.min(3, CAT.filter((t) => t.id !== 'complete' && t.id !== 'frontdesk').length));
       page = page
         .split('__TIER_CARDS__').join(cards ? `<div class="tiers4" style="grid-template-columns:repeat(${cols},1fr);max-width:${cols === 1 ? '420px' : '100%'};margin:0 auto">${cards}</div>` : '')
         .split('__COMPLETE_MINUTES__').join(COMP.voiceMinutes.toLocaleString())
@@ -2750,7 +2750,20 @@ async function refreshPrices(tag) {
     const found = await plans.discoverPrices();
     const list = Object.keys(found);
     console.log(`  Stripe prices (${tag}): ${list.length ? list.join(', ') : 'none discovered'}${process.env.STRIPE_SECRET_KEY ? '' : ' (no STRIPE_SECRET_KEY)'}`);
-  } catch (e) { console.error(`  Stripe price discovery failed (${tag}): ${e.message}`); }
+    // Self-heal: any tier whose Stripe price does not match the price in
+    // plans.js gets one created, right now, at boot. This is what makes a
+    // price change a one-line edit that is live on the next deploy, instead
+    // of a one-line edit plus a button somebody has to remember to click.
+    // AUTO_CREATE_PRICES=off disables it.
+    if (process.env.STRIPE_SECRET_KEY && process.env.AUTO_CREATE_PRICES !== 'off') {
+      const stale = plans.tierList().filter((t) => !plans.priceIsCurrent(t.id)).map((t) => t.id);
+      if (stale.length) {
+        console.log(`  Stripe prices out of date for: ${stale.join(', ')} — creating`);
+        const r = await stripe.createMissingPrices();
+        if (r.created.length) console.log(`  Created Stripe prices: ${r.created.map((c) => `${c.tier}=${c.priceId}`).join(', ')}${r.live ? ' (LIVE)' : ' (test)'}`);
+      }
+    }
+  } catch (e) { console.error(`  Stripe price sync failed (${tag}): ${e.message}`); }
 }
 setInterval(() => { refreshPrices('hourly'); }, 60 * 60 * 1000);
 
