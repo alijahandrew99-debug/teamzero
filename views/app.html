@@ -1641,6 +1641,7 @@ async function loadReps(){
           <input placeholder="payout method" value="${esc(r.payoutMethod||'')}" onchange="repSet('${r.id}','payoutMethod',this.value)" style="max-width:150px;margin:0;font-size:12.5px">
           <button class="sm ${r.blocked||r.payableCents<=0?'ghost':'red'}" ${r.blocked||r.payableCents<=0?'disabled':''} onclick="repPay('${r.id}')">Mark $${(r.payableCents/100).toFixed(2)} paid</button>
           ${r.status==='active'?`<button class="sm ghost" onclick="repSet('${r.id}','status','inactive')">Deactivate</button>`:`<button class="sm ghost" onclick="repSet('${r.id}','status','active')">Reactivate</button>`}
+          <button class="sm ghost" style="color:var(--red)" onclick="repDelete('${r.id}')">Delete</button>
         </div>
       </div>`;}).join('');
   }catch(e){$('repList').innerHTML=`<div class="warnbox">${esc(e.message)}</div>`;}
@@ -1653,6 +1654,15 @@ async function addRep(){
     $('rp_name').value='';$('rp_email').value='';$('rp_phone').value='';
     await loadReps();
   }catch(e){toast(e.message);}
+}
+async function repDelete(id){
+  const r=REPS.find(x=>x.id===id);
+  const has=(r.accountsList||[]).length;
+  if(has){toast(`${r.name} has ${has} customer${has===1?'':'s'} on their code — deactivate instead, so the ledger stays traceable.`);return;}
+  if(!confirm(`Delete ${r.name} (code ${r.code})?
+
+This removes them completely. Their link stops working.`))return;
+  try{await api('/api/admin/reps/delete',{id});toast(`${r.name} deleted`);await loadReps();}catch(e){toast(e.message);}
 }
 async function repCode(id){
   const r=REPS.find(x=>x.id===id);
