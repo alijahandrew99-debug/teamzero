@@ -203,6 +203,21 @@
         <div id="repList"><div class="empty">No reps yet.</div></div>
       </div>
     </div>
+    <div class="card">
+      <h2><span class="agent">PHONE CLOSES</span> Assign a customer to a rep by hand</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 10px">A rep closed someone on the phone and the customer signed up without the link or the code. Assign them here — <b>the rep is back-paid for every invoice already collected</b> from that customer, straight from Stripe. Nothing is paid twice.</p>
+        <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <input id="as_email" placeholder="customer's email" style="max-width:240px;margin:0">
+          <select id="as_rep" style="max-width:220px;margin:0"></select>
+          <input id="as_reason" placeholder="why (e.g. closed by phone 8/17)" style="max-width:220px;margin:0">
+          <label class="muted" style="font-size:12.5px"><input type="checkbox" id="as_force" style="width:auto"> move it anyway if already attributed</label>
+          <button class="sm red" onclick="assignRep()">Assign →</button>
+        </div>
+        <div style="font-weight:700;margin:10px 0 4px;font-size:14px">Paying customers with no rep</div>
+        <div id="unattributed" class="muted" style="font-size:13px">…</div>
+      </div>
+    </div>
     <div class="card" id="repLedgerCard" style="display:none">
       <h2><span class="agent">LEDGER</span> <span id="repLedgerWho"></span></h2>
       <div class="body"><div id="repLedger"></div></div>
@@ -1605,6 +1620,8 @@ async function loadReps(){
     REPS=d.reps||[];
     $('repRates').innerHTML=`<b>Current plan:</b> ${d.rateIntroPct}% of collected revenue for an account's first ${d.introMonths} paid months, then ${d.rateTailPct}% for as long as it lives.`
       +(d.bonusCents>0?` Plus a <b>$${(d.bonusCents/100).toFixed(0)} activation bonus</b> on each account's first successful payment, held ${d.holdDays} days in case it refunds or charges back.`:' No signing bonus — the recurring 30% is the deal.');
+    $('as_rep').innerHTML=REPS.filter(r=>r.status!=='terminated').map(r=>`<option value="${r.id}">${esc(r.name)} (${esc(r.code)})</option>`).join('')||'<option value="">— add a rep first —</option>';
+    loadUnattributed();
     if(!REPS.length){$('repList').innerHTML='<div class="empty">No reps yet. Add one and they get a referral link straight away.</div>';return;}
     $('repList').innerHTML=REPS.map(r=>{
       const acc=(r.accountsList||[]);
@@ -1652,6 +1669,23 @@ async function addRep(){
   try{const r=await api('/api/admin/reps/create',{name,email,phone:$('rp_phone').value.trim()});
     toast(`${r.rep.name} added — code ${r.rep.code}`);
     $('rp_name').value='';$('rp_email').value='';$('rp_phone').value='';
+    await loadReps();
+  }catch(e){toast(e.message);}
+}
+async function loadUnattributed(){
+  try{const d=await api('/api/admin/reps/unattributed');
+    $('unattributed').innerHTML=d.rows.length?d.rows.map(a=>`<div style="padding:4px 0;border-top:1px dashed var(--line)">${esc(a.email)} <span class="muted">· ${esc(a.tier||'')} · ${esc(a.subStatus)}</span> <button class="sm ghost" onclick="$('as_email').value='${esc(a.email)}';$('as_email').focus()">Assign this one</button></div>`).join('')
+      :'<span class="muted">None — every paying customer has a rep, or came in on their own.</span>';
+  }catch(e){$('unattributed').textContent=e.message;}
+}
+async function assignRep(){
+  const email=$('as_email').value.trim(), repId=$('as_rep').value, reason=$('as_reason').value.trim(), force=$('as_force').checked;
+  if(!email||!repId)return toast('Customer email and a rep, please');
+  try{
+    const r=await api('/api/admin/reps/assign',{email,repId,reason,force});
+    const bf=r.backfill||{};
+    toast(r.unchanged?`${email} was already on ${r.rep.name}`:`${email} → ${r.rep.name}${r.movedFrom?` (moved from ${r.movedFrom})`:''}${bf.posted?` · back-paid ${bf.posted} invoice${bf.posted===1?'':'s'}`:''}${bf.error?` · Stripe check failed: ${bf.error}`:''}`);
+    $('as_email').value='';$('as_reason').value='';$('as_force').checked=false;
     await loadReps();
   }catch(e){toast(e.message);}
 }

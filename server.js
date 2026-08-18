@@ -2653,6 +2653,29 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!r) return json(res, { error: 'No such rep.' }, 404);
         return json(res, { ok: true, rep: r });
       }
+      // Assign a customer to a rep by hand (the phone-close case), then
+      // back-pay any invoices Stripe already collected for that customer.
+      if (p === '/api/admin/reps/assign' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const f = parseJSON(await readBody(req));
+        const target = f.accountId ? db.getAccount(f.accountId) : db.getAccountByEmail(String(f.email || '').trim().toLowerCase());
+        if (!target) return json(res, { error: 'No customer with that email.' }, 404);
+        const r = reps.assign(target, f.repId, { by: account.email, reason: f.reason, force: !!f.force });
+        if (!r.ok) return json(res, { error: r.reason }, 400);
+        let backfill = { posted: 0, invoices: 0 };
+        try { backfill = await stripe.backfillCommissions(db.getAccount(target.id)); }
+        catch (e) { backfill = { posted: 0, invoices: 0, error: e.message }; }
+        if (backfill.posted) db.logActivity(target.id, { agent: 'SYSTEM', msg: `Back-paid ${r.rep.code} for ${backfill.posted} invoice(s) already collected` });
+        return json(res, { ok: true, rep: { id: r.rep.id, name: r.rep.name, code: r.rep.code }, unchanged: !!r.unchanged, movedFrom: r.movedFrom ? r.movedFrom.name : '', backfill });
+      }
+      // Paying customers with no rep — the ones a phone-close may have left
+      // unattributed. Surfaced so the owner can spot and assign them.
+      if (p === '/api/admin/reps/unattributed' && req.method === 'GET') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const rows = db.allAccounts().filter((a) => !a.repId && ['active', 'trialing'].includes(a.subStatus) && !stripe.isOwner(a))
+          .map((a) => ({ id: a.id, email: a.email, tier: a.tier, subStatus: a.subStatus, since: a.createdAt }));
+        return json(res, { rows });
+      }
       if (p === '/api/admin/reps/delete' && req.method === 'POST') {
         if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
         const f = parseJSON(await readBody(req));
