@@ -1709,7 +1709,9 @@ function showUpgrade(){
     const fine=t.trial
       ?'Card required · nothing charged until day 8 · cancel in one click before then and pay nothing'
       :'Month to month · cancel in one click · no setup fee';
-    const ownerFlag=(STATE.isOwner&&!t.available)?`<div style="font-size:11.5px;color:var(--red);font-weight:700;margin-bottom:4px">⚠ No Stripe price yet — customers can't buy this</div>`:'';
+    let ownerFlag='';
+    if(STATE.isOwner&&!t.available)ownerFlag=`<div style="font-size:11.5px;color:var(--red);font-weight:700;margin-bottom:4px">⚠ No Stripe price yet — customers can't buy this</div>`;
+    else if(STATE.isOwner&&t.priceCurrent===false)ownerFlag=`<div style="font-size:11.5px;color:var(--gold);font-weight:700;margin-bottom:4px">⚠ Still charging the OLD price — click "Create the missing Stripe prices" below to charge $${t.price}</div>`;
     return `<div class="tcard ${cls}">${badge}${ownerFlag}
       <div class="tn">${esc(t.name)}</div>
       <div class="ttag">${esc(t.tagline||t.blurb||'')}</div>
@@ -1738,8 +1740,11 @@ function showUpgrade(){
     : '';
   if(STATE.isOwner){
     const missing=all.filter(t=>!t.available).map(t=>t.name);
+    const stale=all.filter(t=>t.available&&t.priceCurrent===false).map(t=>t.name);
     note+=`<div style="margin-top:8px;padding:10px 12px;border:1px dashed var(--red);border-radius:8px"><b>Owner view:</b> ${all.length-missing.length} of ${all.length} plans have a Stripe price${STATE.billingConfigured?'':' (billing not configured on this server)'}.`
-      +(missing.length?` Missing: <b>${esc(missing.join(', '))}</b>. <button class="sm red" onclick="syncPrices()">Create the missing Stripe prices →</button>`:' Every plan is sellable.')
+      +(missing.length?` Missing: <b>${esc(missing.join(', '))}</b>.`:'')
+      +(stale.length?` <b>${esc(stale.join(', '))}</b> ${stale.length===1?'is':'are'} still charging the old price — existing customers keep theirs, new signups will pay the new one once you create it.`:'')
+      +((missing.length||stale.length)?` <button class="sm red" onclick="syncPrices()">Create the missing Stripe prices →</button>`:' Every plan is sellable at its current price.')
       +`</div>`;
   }
   $('billingNote').innerHTML=note;
