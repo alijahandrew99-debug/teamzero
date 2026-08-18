@@ -292,6 +292,28 @@ function jobView(job) {
 // Sending is deliberately throttled: blasting 50 cold emails back-to-back from a
 // fresh mailbox is the fastest way to get spam-filtered. Spacing + a daily cap
 // protect the user's sending reputation.
+// ---- who may run automated outbound calling ----
+// Two separate questions, and conflating them produced a dead tab with no way
+// forward: (1) is the feature switched on at all on this server — a compliance
+// decision, since an AI voice is an "artificial voice" under the TCPA and
+// calling a cell without prior express consent is $500-$1,500 per call; and
+// (2) does THIS customer's plan include it. The owner runs the Twilio account,
+// wrote the script and owns the consent process, so the owner is not gated by
+// the server switch — everyone else needs both.
+function outboundGate(account) {
+  if (stripe.isOwner(account)) return { ok: true };
+  const u = plans.usage(account, false);
+  if (!u.isPro) return { ok: false, needUpgrade: true, reason: 'Cold calling is part of the Front Desk plan. Pick a plan to switch it on.' };
+  if (!u.voice || !u.voice.included) {
+    return { ok: false, needUpgrade: true,
+      reason: `Cold calling isn't part of ${u.tierName}. Upgrade to Front Desk ($${plans.TIERS.frontdesk.price}/mo) — it answers your phone, books jobs, and can work a call list for you.` };
+  }
+  if (process.env.OUTBOUND_CALLING !== 'on') {
+    return { ok: false, paused: true, reason: 'Automated outbound calling is paused on this account pending your consent setup. Email support@dawnpipe.com and we will switch it on. Inbound answering is unaffected.' };
+  }
+  return { ok: true };
+}
+
 const sendJobs = new Map();
 
 // One send job per account at a time. Without this, a second click or a page
@@ -328,9 +350,20 @@ function startSendJob(account, profileId) {
   const cap = Math.min(Number(account.dailyCap ?? 50), warmAllow);
   const allowed = Math.max(0, cap - sentToday);
 
+  // "I approved 50 and it says it's sending 8" — say WHY, in the job itself.
+  // A silent cap looks like the product losing your work.
+  let capReason = '';
+  if (items.length > allowed) {
+    const warmLimited = Number.isFinite(warmAllow) && warmAllow <= Number(account.dailyCap ?? 50);
+    capReason = warmLimited
+      ? `Your domain is still warming up, so today's safe limit is ${warmAllow} email${warmAllow === 1 ? '' : 's'}${sentToday ? ` (${sentToday} already gone today)` : ''}. The other ${items.length - allowed} stay approved and go out over the next few days as the limit rises — that ramp is what keeps you out of spam folders.`
+      : `Your daily limit is ${cap}${sentToday ? ` and ${sentToday} already went out today` : ''}, so ${allowed} go now. The other ${items.length - allowed} stay approved and go tomorrow. Raise the limit in SENDING settings if you want more.`;
+  }
   const job = { id, accountId: account.id, status: 'running', done: 0, total: Math.min(items.length, allowed),
     sent: 0, failed: 0, deferred: 0, skipped: Math.max(0, items.length - allowed),
+    approved: items.length, capReason,
     warmupCap: Number.isFinite(warmAllow) ? warmAllow : null,
+    stopRequested: false,
     startedAt: Date.now(), error: null, lastError: null };
   sendJobs.set(id, job);
 
@@ -438,12 +471,29 @@ function startSendJob(account, profileId) {
         // machine fingerprint, but their configured value must still mean
         // something. Floor of 60s keeps it out of obvious-bot territory.
         const baseSec = Math.max(60, Number(account.sendDelaySec ?? 180));
-        if (job.done < job.total) await new Promise((r) => setTimeout(r, sending.nextDelayMs(baseSec, baseSec * 2.5)));
+        // STOP: checked here AND slept in short slices, so "stop" means stopped
+        // within a couple of seconds instead of after the next 2-minute gap.
+        // A campaign you cannot halt is a campaign you cannot trust — the
+        // moment you spot a wrong phone number in the copy, every further send
+        // is damage you chose not to prevent.
+        if (job.stopRequested) break;
+        if (job.done < job.total) {
+          const until = Date.now() + sending.nextDelayMs(baseSec, baseSec * 2.5);
+          while (Date.now() < until && !job.stopRequested) {
+            await new Promise((r) => setTimeout(r, Math.min(1000, until - Date.now())));
+          }
+        }
+        if (job.stopRequested) break;
       }
-      job.status = 'done';
+      if (job.stopRequested) {
+        job.status = 'stopped';
+        const left = Math.max(0, job.total - job.done);
+        job.note = `Stopped. ${job.sent} sent, ${left} still approved and waiting — nothing else went out. Fix what you need to and hit send again when you're ready.`;
+        db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Send STOPPED by you after ${job.sent} sent — ${left} left untouched` });
+      } else job.status = 'done';
       // Never finish silently at "sent 0". If everything was held for business
       // hours or blocked, say so — otherwise it looks like the product failed.
-      if (!job.sent) {
+      if (!job.sent && !job.stopRequested) {
         if (job.deferred) job.note = `Nothing sent yet — ${job.deferred} held for their local business hours (weekdays 8am-5pm their time; replies are ~3x higher then). Want them out now anyway? Flip "When to send" to "Any time" in the SENDING settings and hit send again.`;
         else if (job.blocked) job.note = `Nothing sent — ${job.blocked} draft(s) held because the address isn't verified. Use "Clear guesses" or re-run Find leads.`;
         else if (job.total === 0) job.note = 'Nothing to send — approve some drafts first.';
@@ -471,6 +521,8 @@ function sendJobView(j) {
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
     skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0,
     blocked: j.blocked || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
+    // Why is it sending 8 when I approved 50? The answer travels with the job.
+    approved: j.approved || 0, capReason: j.capReason || '', stopping: !!j.stopRequested && j.status === 'running',
     etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
 }
 
@@ -951,9 +1003,19 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (p === '/voice/answer') {
         const call = voice.getCall(sid);
         if (/machine|fax/i.test(params.AnsweredBy || '')) {
-          const vm = (call && call.account.voice && call.account.voice.voicemail)
-            || ('Hi, this is an AI assistant calling from ' + (call ? call.profile.name : 'our team')
-                + ". Sorry I missed you - I'll try again another time.");
+          // WE dialled THEM and got a machine. The saved message is used only if
+          // it actually reads like an outbound pitch: an inbound greeting
+          // ("thanks for calling, we couldn't pick up") left on a prospect's
+          // machine is nonsense to someone who never rang us, so it is replaced
+          // with a real pitch built from the business profile.
+          const saved = (call && call.account.voice && call.account.voice.voicemail) || '';
+          const usable = saved && !voice.looksInbound(saved);
+          const vm = usable ? saved
+            : (call ? voice.voicemailPitch(call.profile, call.account, (call.account.voice || {}).number)
+                    : 'Sorry I missed you. I will try again another time.');
+          if (call && saved && !usable) {
+            db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Your saved voicemail message reads like a greeting for incoming calls, so a proper outbound pitch was left instead. Fix it on the AI answering tab.' });
+          }
           if (call) db.saveCall(call.accountId, { sid, status: 'voicemail', outcome: 'voicemail' });
           return xml(res, voice.sayAndHangup(vm, call ? voice.voiceFor(call.account) : undefined));
         }
@@ -1447,22 +1509,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // placeholders too, and a raw __DEMO_NUM__ leaking into a share preview
       // is worse than an empty one.
       page = withDemoTel(page);
-      // The Phone tier appears on the page only once its Stripe price exists,
-      // so we never advertise a plan that dead-ends at checkout. The moment
-      // STRIPE_PRICE_PHONE is set in Render, the page shows it.
-      const phoneOn = !!plans.priceIdForTier('phone');
-      const P = plans.TIERS.phone, FD = plans.TIERS.frontdesk;
-      const block = phoneOn
-        ? `<div class="tname" style="color:#9fe0b8">Phone</div><div class="camt">$${P.price}<span>/mo</span></div><div class="cnote">Every call answered. Every job booked. ${P.voiceMinutes} minutes.</div>
-           <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(159,224,184,.25)"><div class="tname" style="color:#9fe0b8">Front Desk</div><div class="camt" style="font-size:34px">$${FD.price}<span>/mo</span></div><div class="cnote">${FD.voiceMinutes.toLocaleString()} minutes — and between calls it finds you new customers.</div></div>`
-        : `<div class="tname" style="color:#9fe0b8">Front Desk</div><div class="camt">$${FD.price}<span>/mo</span></div><div class="cnote">Every call answered. Every job booked. ${FD.voiceMinutes.toLocaleString()} minutes a month.</div>`;
-      const cta = phoneOn
-        ? `<a class="btn red" href="/signup?tier=phone" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try Phone free for 7 days →</a> <a href="/signup?tier=frontdesk" style="color:#9fe0b8;font-size:14px;margin-left:8px">or start on Front Desk →</a>`
-        : `<a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a>`;
-      const voiceFrom = '$' + (phoneOn ? P.price : FD.price);
-      const allowance = phoneOn
-        ? `Phone: ${P.voiceMinutes} minutes. Front Desk: ${FD.voiceMinutes.toLocaleString()} minutes + ${FD.leads} leads`
-        : `Front Desk: ${FD.voiceMinutes.toLocaleString()} minutes + ${FD.leads} leads a month`;
+      // ONE voice plan. There is no phone-only tier any more: the thing worth
+      // buying is the whole front desk, and a cheaper half-product next to it
+      // only made the real plan look expensive.
+      const FD = plans.TIERS.frontdesk;
+      const block = `<div class="tname" style="color:#9fe0b8">Front Desk</div><div class="camt">$${FD.price}<span>/mo</span></div><div class="cnote">Every call answered. Every job booked. ${FD.voiceMinutes.toLocaleString()} minutes a month — and between calls it goes and finds you new customers.</div>`;
+      const cta = `<a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a>`;
+      const voiceFrom = '$' + FD.price;
+      const allowance = `${FD.voiceMinutes.toLocaleString()} phone minutes + ${FD.leads} new customers found, every month`;
       page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom).split('__ALLOWANCE_LINE__').join(allowance);
       return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
     }
@@ -1682,6 +1736,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // can build their whole profile (sunk effort converts); only finding
       // leads, drafting and sending cost money.
       const READ_ONLY = ['/api/state', '/api/prospect/status', '/api/send/status',
+        // STOPPING a send is never paywalled. If a plan lapses mid-run the one
+        // thing the user must still be able to do is halt their own mail.
+        '/api/send/stop',
         '/api/profile/save', '/api/profile/delete', '/api/pipeline',
         // Handing a rented number BACK must never be paywalled. It was, so a
         // cancelled customer had no way to release it and we kept paying the
@@ -1708,7 +1765,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           email: account.email,
           locked: !stripe.hasAccess(account),
           isOwner: stripe.isOwner(account),
-          outboundCalling: process.env.OUTBOUND_CALLING === 'on',
+          outboundCalling: outboundGate(account).ok,
+          outboundGate: outboundGate(account),
           usage: plans.usage(account, stripe.isOwner(account)),
           isPaid: stripe.isPaid(account),
           // So the UI can say "your card was declined" instead of "choose a
@@ -1722,6 +1780,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // masked: the app never ships the app-password back to the browser
           smtp: account.smtp ? { host: account.smtp.host, port: account.smtp.port, user: account.smtp.user,
             fromName: account.smtp.fromName, fromEmail: account.smtp.fromEmail, connected: !!account.smtp.pass } : { connected: false },
+          // So a page refresh can re-attach to a run in progress — otherwise
+          // reloading loses the only Stop button on screen while mail keeps going.
+          activeSend: (() => { const j = sendJobs.get(activeSends.get(acc)); return j && j.status === 'running' ? sendJobView(j) : null; })(),
           sendDelaySec: account.sendDelaySec ?? 25,
           sendWindow: account.sendWindow || 'business',
           dailyCap: account.dailyCap ?? 50,
@@ -2035,8 +2096,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // customer's inbound receptionist line down with it. The receptionist
         // is the product; this feature is not worth that. Flip OUTBOUND_CALLING=on
         // in the Render dashboard only once a consent model is in place.
-        if (process.env.OUTBOUND_CALLING !== 'on') {
-          return json(res, { error: 'Outbound AI calling is paused pending compliance review. Inbound answering is unaffected.', paused: true }, 403);
+        {
+          const gate = outboundGate(account);
+          if (!gate.ok) return json(res, { error: gate.reason, paused: gate.paused, needUpgrade: gate.needUpgrade }, gate.needUpgrade ? 402 : 403);
         }
         const f = parseJSON(await readBody(req));
         if (!stripe.canSpend(account)) return json(res, { error: 'Your plan is out of room this month.', needUpgrade: true }, 402);
@@ -2076,8 +2138,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // customer's inbound receptionist line down with it. The receptionist
         // is the product; this feature is not worth that. Flip OUTBOUND_CALLING=on
         // in the Render dashboard only once a consent model is in place.
-        if (process.env.OUTBOUND_CALLING !== 'on') {
-          return json(res, { error: 'Outbound AI calling is paused pending compliance review. Inbound answering is unaffected.', paused: true }, 403);
+        {
+          const gate = outboundGate(account);
+          if (!gate.ok) return json(res, { error: gate.reason, paused: gate.paused, needUpgrade: gate.needUpgrade }, gate.needUpgrade ? 402 : 403);
         }
         const f = parseJSON(await readBody(req));
         if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
@@ -2426,6 +2489,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const j = sendJobs.get(url.searchParams.get('jobId'));
         if (!j || j.accountId !== acc) return json(res, { error: 'job not found', gone: true }, 404);
         return json(res, sendJobView(j));
+      }
+      // ---- STOP a running send ----
+      // Takes no job id: "stop" must work from any device and any tab, even the
+      // one that did not start the run. Whatever is sending for this account is
+      // what stops.
+      if (p === '/api/send/stop' && req.method === 'POST') {
+        const running = activeSends.get(acc);
+        const j = running && sendJobs.get(running);
+        if (!j || j.status !== 'running') return json(res, { ok: true, wasRunning: false, note: 'Nothing is sending right now.' });
+        j.stopRequested = true;
+        db.logActivity(acc, { agent: 'SEND', msg: 'Stop requested — finishing the email in flight, then halting' });
+        return json(res, { ok: true, wasRunning: true, jobId: j.id, ...sendJobView(j) });
       }
 
       if (p === '/api/leads/import' && req.method === 'POST') {

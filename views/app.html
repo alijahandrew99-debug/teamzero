@@ -384,7 +384,13 @@
             </div>
             <div class="progress" id="sendProgress" style="margin-bottom:14px">
               <div class="pbar"><div class="pfill" id="sendFill"></div></div>
-              <div class="prow"><span class="msg" id="smsg">Sending…</span><span class="time" id="stime"></span></div>
+              <div class="prow"><span class="msg" id="smsg">Sending…</span><span class="time" id="stime"></span>
+                <button class="sm red" id="stopSendBtn" onclick="stopSend()" style="margin-left:10px">■ Stop sending</button></div>
+              <div class="muted" id="sendWhy" style="margin-top:6px;font-size:12.5px"></div>
+              <div class="muted" style="margin-top:6px;font-size:12.5px;line-height:1.5">
+                <b>This is meant to be slow.</b> Emails go out a few minutes apart, in a random rhythm, during your recipients' business hours. Fifty emails fired off in a minute is the exact pattern spam filters look for — pacing them is what keeps you landing in inboxes.
+                <b>You can close this page.</b> It keeps sending on our server, and "Stop sending" works from any device.
+              </div>
             </div>
             <div id="queue"><div class="empty">Nothing pending yet.</div></div>
           </div>
@@ -449,10 +455,11 @@
   </div>
   <!-- Shown instead when OUTBOUND_CALLING is off: see the compliance gate in server.js. -->
   <div class="card hide" id="cardColdOff">
-    <h2><span class="agent">COLD CALLING</span> Not switched on for your account</h2>
+    <h2><span class="agent">COLD CALLING</span> <span id="coldOffTitle">Not on your plan yet</span></h2>
     <div class="body">
-      <p class="muted" style="margin:0 0 8px">Automated outbound calling is off on this account. It carries real telemarketing obligations — do-not-call scrubbing, consent, calling-hours rules — so we turn it on deliberately rather than by default.</p>
-      <p class="muted" style="margin:0">Want it on? Email <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a> and we'll walk you through what you need in place. Meanwhile, <a href="#" onclick="showTab('desk');return false">email outreach</a> and <a href="#" onclick="showTab('voice');return false">AI answering</a> both work today.</p>
+      <p style="margin:0 0 10px" id="coldOffMsg"></p>
+      <div id="coldOffCta" style="margin-bottom:10px"></div>
+      <p class="muted" style="margin:0">Meanwhile, <a href="#" onclick="showTab('desk');return false">email outreach</a> and <a href="#" onclick="showTab('voice');return false">AI answering</a> both work today.</p>
     </div>
   </div>
 </div>
@@ -561,7 +568,11 @@
       <div class="field"><label>Qualifying questions</label><div class="hint">The 2-3 things that tell you if they're worth your time. It weaves these in naturally rather than reading them out.</div><textarea id="v_qualifying" placeholder="How many people are doing outbound today?&#10;Are you already using a sales tool?&#10;Who signs off on something like this?"></textarea></div>
       <div class="field"><label>Objections &amp; your answers</label><div class="hint">Write the pushback you actually hear and how you'd answer it. It uses your words instead of improvising.</div><textarea id="v_objections" placeholder="&quot;Too expensive&quot; -> A receptionist is 3 grand a month. This starts at 149.&#10;&quot;We already have someone&quot; -> This doesn't replace them, it catches what they miss.&#10;&quot;Send me info&quot; -> Happy to, what's your email? And can I grab 15 minutes Thursday?"></textarea></div>
       <div class="field"><label>Approved answers / FAQ</label><div class="hint">The ONLY facts it may state. Anything not here, it says it doesn't know and offers a human. Never put prices here you don't want quoted.</div><textarea id="v_faq" placeholder="Q: Do you offer free assessments? A: Yes, the first walkthrough is free."></textarea></div>
-      <div class="field"><label>Voicemail message</label><div class="hint">Left when an answering machine picks up. It never holds a conversation with voicemail.</div><input id="v_voicemail" placeholder=""></div>
+      <div class="field"><label>Voicemail pitch — for calls <b>you</b> make</label>
+        <div class="hint">This is what the AI leaves on a <b>prospect's</b> answering machine when it cold-calls them. It is not a greeting for people who ring you. Say who's calling, why it's worth two minutes, and the number to call back. Leave it blank and one is written from your business profile automatically.</div>
+        <input id="v_voicemail" placeholder="Leave blank to use a pitch built from your business profile">
+        <div class="muted" id="v_voicemailWarn" style="display:none;color:var(--red);font-size:12.5px;margin-top:4px">⚠ This reads like a greeting for <b>incoming</b> calls. The person hearing it never called you — they'd have no idea who rang or why. Clear it and we'll leave a proper pitch instead.</div>
+      </div>
       <div class="row"><button onclick="saveVoice()" id="vSaveBtn">Save agent</button><span class="muted" id="vMsg"></span></div>
     </div>
   </div>
@@ -682,6 +693,16 @@ function showTab(t){curTab=t;saveUI();
     $('cardColdCalls').classList.toggle('hide',!on);
     $('cardColdOff').classList.toggle('hide',on);
     if(on){renderCallable();}
+    else{
+      // Two very different "off"s: your plan doesn't include it (sell the
+      // upgrade) versus we've paused it pending your consent setup (say so).
+      const g=STATE.outboundGate||{};
+      $('coldOffTitle').textContent=g.needUpgrade?'Not on your plan yet':'Paused on your account';
+      $('coldOffMsg').textContent=g.reason||'Cold calling is not switched on for this account.';
+      $('coldOffCta').innerHTML=g.needUpgrade
+        ? '<button class="red" onclick="showUpgrade()">Upgrade your plan to add cold calling →</button>'
+        : '<a href="mailto:support@dawnpipe.com"><button class="ghost">Email support to switch it on</button></a>';
+    }
   }
   if(t==='voice'){renderVoice();renderNumber();loadStats();loadIntegrations();loadCalls();loadAppointments();}
   if(t==='calendar'){renderCalendar();}
@@ -752,6 +773,8 @@ async function load(){
     $('trialbar').style.display='';
     $('trialmsg').innerHTML=`<b>${u.tierName}</b> — ${u.remaining} of ${u.limit} leads left this month.`;
   } else $('trialbar').style.display='none';
+  // Re-attach to a send already running on the server (page reload, second device).
+  if(STATE.activeSend&&STATE.activeSend.id)watchSend(STATE.activeSend.id);
 
   // The lockbar is assigned in FULL every time — message, button label and
   // handler together. Rewriting only the button inside the dunning branch left
@@ -999,6 +1022,9 @@ function renderVoice(){
   $('v_qualifying').value=v.qualifying||'';
   $('v_objections').value=v.objections||'';
   $('v_voicemail').value=v.voicemail||'';
+  // Flag a saved voicemail that is really an inbound greeting — the bug where
+  // prospects heard "thanks for calling, we couldn't pick up" on a call we made.
+  $('v_voicemailWarn').style.display=/thanks? for call|you'?ve reached|we (can'?t|couldn'?t) (pick up|take your call)/i.test(v.voicemail||'')?'':'none';
 }
 function renderVoiceChrome(v){
   const prof=(STATE.profiles||[]).find(p=>p.id===v.profileId)||(STATE.profiles||[])[0]||{};
@@ -1013,7 +1039,10 @@ function renderVoiceChrome(v){
   const vs=$('v_ttsVoice');
   // Name and character only. What each voice costs us is never on a
   // customer's screen — only the owner's cost view mentions it.
-  vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}${(STATE.isOwner&&x.tier!=='generative')?' · low cost':''}</option>`).join('');
+  // Names and how they sound. Nothing about what a voice costs us belongs in a
+  // customer's dropdown — it buys them nothing and reads like we're steering
+  // them to the cheap one. Our own cost lives on the owner's spend line.
+  vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}</option>`).join('');
   if(!_dirty)vs.value=v.ttsVoice||v.defaultVoice||'';
   const sel=$('v_profileId');
   sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
@@ -1787,33 +1816,68 @@ async function approveAll(){
   try{const r=await api('/api/queue/approve-all',{profileId:pid()});toast(`Approved ${r.approved}`);await load();}
   catch(e){toast(e.message);}finally{b.disabled=false;}
 }
+// Stop a running send from anywhere — no job id, no "which tab started it".
+async function stopSend(){
+  const b=$('stopSendBtn');if(b)b.disabled=true;
+  try{
+    const r=await api('/api/send/stop',{});
+    toast(r.wasRunning?'Stopping — finishing the one in flight, then halting.':(r.note||'Nothing is sending.'));
+  }catch(e){toast(e.message);if(b)b.disabled=false;}
+}
 async function approveAndSendAll(){
   if(!STATE.smtp||!STATE.smtp.connected){toast('Connect your mailbox first (Your Business tab)');showTab('business');return;}
-  const pend=STATE.queue.filter(q=>q.profileId===pid()&&(q.status==='pending'||q.status==='approved')).length;
-  if(!pend)return toast('Nothing to send');
-  if(!confirm(`Approve and SEND ${pend} email(s) from ${STATE.smtp.user}?\n\nThey go out spaced ${STATE.sendDelaySec}s apart. This cannot be undone.`))return;
+  // Count what the user can SEE in the queue, not a narrower slice of it.
+  // "Nothing to send" while 31 drafts sit on screen is the product calling the
+  // user a liar; the real cause is almost always drafts held back for an
+  // unverified address, so name that instead.
+  const mine=STATE.queue.filter(q=>q.profileId===pid()&&q.status!=='rejected'&&q.status!=='sent');
+  const pend=mine.filter(q=>q.status==='pending'||q.status==='approved').length;
+  const held=mine.filter(q=>q.status==='held').length;
+  if(!pend){
+    if(held)return toast(`${held} draft(s) are held because the address couldn't be verified — sending those would bounce and hurt your domain. Re-run Find leads, or use "Clear guesses".`);
+    return toast('Nothing to send — no approved or pending drafts for this business.');
+  }
+  if(!confirm(`Approve and SEND ${pend} email(s) from ${STATE.smtp.user}?\n\nThey go out a few minutes apart to protect your sender reputation — you can close the page, and you can stop it at any time.`))return;
   const b=$('sendAllBtn'),ab=$('apprAllBtn');b.disabled=true;ab.disabled=true;
   try{
     await api('/api/queue/approve-all',{profileId:pid()});
     const r=await api('/api/send/run',{profileId:pid()});
-    $('sendProgress').classList.add('on');
-    const fill=$('sendFill');fill.classList.add('determinate');
-    const poll=async()=>{
-      let s;try{s=await api('/api/send/status?jobId='+encodeURIComponent(r.jobId));}
-      catch(e){$('sendProgress').classList.remove('on');b.disabled=false;ab.disabled=false;await load();return;}
-      const pct=s.total?Math.round((s.done/s.total)*100):100;
-      fill.style.width=Math.max(4,pct)+'%';
-      $('smsg').innerHTML=`✉ Sending — <b>${s.sent}</b> sent${s.failed?`, ${s.failed} failed`:''} of ${s.total}`;
-      $('stime').textContent=fmtETA(s.etaMs)||'';
-      await load();
-      if(s.status==='running'){setTimeout(poll,2500);return;}
-      $('sendProgress').classList.remove('on');b.disabled=false;ab.disabled=false;
-      if(s.status==='error')toast('Send failed: '+s.error);
-      else if(s.note)toast(s.note);
-      else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.deferred?`, ${s.deferred} held for their business hours`:''}${s.blocked?`, ${s.blocked} held (unverified address)`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
-    };
-    poll();
+    watchSend(r.jobId);
   }catch(e){toast(e.message);b.disabled=false;ab.disabled=false;}
+}
+// One watcher, shared by "send all" and by a page that reloads mid-run. Without
+// the second path, refreshing the tab left mail going out with no Stop button
+// anywhere on screen.
+let _sendWatch=null;
+function watchSend(jobId){
+  if(!jobId||_sendWatch===jobId)return;
+  _sendWatch=jobId;
+  const b=$('sendAllBtn'),ab=$('apprAllBtn');if(b)b.disabled=true;if(ab)ab.disabled=true;
+  $('sendProgress').classList.add('on');
+  const fill=$('sendFill');fill.classList.add('determinate');
+  const finish=()=>{_sendWatch=null;$('sendProgress').classList.remove('on');
+    if(b)b.disabled=false;if(ab)ab.disabled=false;const sb=$('stopSendBtn');if(sb)sb.disabled=false;};
+  const poll=async()=>{
+    let s;try{s=await api('/api/send/status?jobId='+encodeURIComponent(jobId));}
+    catch(e){finish();await load().catch(()=>{});return;}
+    const pct=s.total?Math.round((s.done/s.total)*100):100;
+    fill.style.width=Math.max(4,pct)+'%';
+    $('smsg').innerHTML=s.stopping
+      ? '■ Stopping — finishing the one already sending…'
+      : `✉ Sending — <b>${s.sent}</b> sent${s.failed?`, ${s.failed} failed`:''} of ${s.total}`;
+    $('stime').textContent=s.stopping?'':(fmtETA(s.etaMs)||'');
+    // Explain a capped batch on screen, not only in a toast at the end.
+    $('sendWhy').innerHTML=s.capReason
+      ? `<b>Sending ${s.total} of your ${s.approved} approved today.</b> ${esc(s.capReason)}`:'';
+    const sb=$('stopSendBtn');if(sb)sb.disabled=!!s.stopping;
+    await load().catch(()=>{});
+    if(s.status==='running'){setTimeout(poll,2500);return;}
+    finish();
+    if(s.status==='error')toast('Send failed: '+s.error);
+    else if(s.note)toast(s.note);
+    else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.deferred?`, ${s.deferred} held for their business hours`:''}${s.blocked?`, ${s.blocked} held (unverified address)`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
+  };
+  poll();
 }
 async function approve(id){try{await api('/api/queue/approve',{id});await load();}catch(e){toast(e.message);}}
 async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'reject'),{id});toast(kind==='sent'?'Logged as sent':'Rejected');await load();}catch(e){toast(e.message);}}
