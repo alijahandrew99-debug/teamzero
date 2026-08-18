@@ -5,6 +5,10 @@
 // months accrue -> refund -> duplicate webhook -> cancel -> re-subscribe ->
 // the 24-month rate step -> a terminated rep. Run: node test-reps.js
 process.env.DATA_DIR = process.env.DATA_DIR || require('path').join(require('os').tmpdir(), 'dp-reptest-' + Date.now());
+// The bonus is OFF in production. These tests set it on so the hold/claw logic
+// stays covered for the day it is switched back on; a separate check below
+// asserts that with the default (0) no bonus row is ever posted.
+process.env.REP_ACTIVATION_BONUS_CENTS = process.env.REP_ACTIVATION_BONUS_CENTS || '15000';
 const fs = require('fs');
 fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
 

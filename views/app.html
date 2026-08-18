@@ -1606,8 +1606,8 @@ async function loadReps(){
   try{
     const d=await api('/api/admin/reps');
     REPS=d.reps||[];
-    $('repRates').innerHTML=`<b>Current plan:</b> ${d.rateIntroPct}% of collected revenue for an account's first ${d.introMonths} paid months, then ${d.rateTailPct}% for as long as it lives. `
-      +`Plus a <b>$${(d.bonusCents/100).toFixed(0)} activation bonus</b> on each account's first successful payment, held ${d.holdDays} days in case it refunds or charges back.`;
+    $('repRates').innerHTML=`<b>Current plan:</b> ${d.rateIntroPct}% of collected revenue for an account's first ${d.introMonths} paid months, then ${d.rateTailPct}% for as long as it lives.`
+      +(d.bonusCents>0?` Plus a <b>$${(d.bonusCents/100).toFixed(0)} activation bonus</b> on each account's first successful payment, held ${d.holdDays} days in case it refunds or charges back.`:' No signing bonus — the recurring 30% is the deal.');
     if(!REPS.length){$('repList').innerHTML='<div class="empty">No reps yet. Add one and they get a referral link straight away.</div>';return;}
     $('repList').innerHTML=REPS.map(r=>{
       const acc=(r.accountsList||[]);
