@@ -1548,6 +1548,27 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       const cta = `<a class="btn red" href="/signup?tier=frontdesk" style="margin-top:16px;background:#2f7d4f;border-color:#2f7d4f">Try it free for 7 days →</a>`;
       const voiceFrom = '$' + FD.price;
       const allowance = `${FD.voiceMinutes.toLocaleString()} phone minutes + ${FD.leads} new customers found, every month`;
+      // Tier cards are RENDERED from the plan list, never hand-written into the
+      // page. Every previous price change left a stale card behind advertising
+      // a plan that no longer existed; a template cannot drift.
+      const CAT = plans.catalogue();
+      const COMP = CAT.find((t) => t.id === 'complete') || plans.TIERS.complete;
+      const cards = CAT.filter((t) => t.available && t.id !== 'complete' && t.id !== 'frontdesk').map((t) => {
+        const allow = [t.voiceMinutes ? `${t.voiceMinutes.toLocaleString()} phone minutes` : '', t.leads ? `${t.leads.toLocaleString()} leads` : ''].filter(Boolean).join(' + ');
+        const feats = (t.features || []).slice(0, 4).map((f) => `<li>${voice.esc(f)}</li>`).join('');
+        return `<div class="tier${t.badge ? ' featured' : ''}">${t.badge ? `<div class="tbadge">${voice.esc(t.badge)}</div>` : ''}
+          <div class="tname">${voice.esc(t.name)}</div>
+          <div class="tamt">$${t.price.toLocaleString()}<span>/mo</span></div>
+          <div class="tlead">${voice.esc(allow)} / month</div>
+          <ul>${feats}</ul>
+          <a class="btn" href="/signup?tier=${t.id}" style="display:block">Try it free for 7 days →</a>
+        </div>`;
+      }).join('');
+      const cols = Math.max(1, Math.min(3, CAT.filter((t) => t.available && t.id !== 'complete' && t.id !== 'frontdesk').length));
+      page = page
+        .split('__TIER_CARDS__').join(cards ? `<div class="tiers4" style="grid-template-columns:repeat(${cols},1fr);max-width:${cols === 1 ? '420px' : '100%'};margin:0 auto">${cards}</div>` : '')
+        .split('__COMPLETE_MINUTES__').join(COMP.voiceMinutes.toLocaleString())
+        .split('__COMPLETE_LEADS__').join(COMP.leads.toLocaleString());
       page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom).split('__ALLOWANCE_LINE__').join(allowance);
       return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
     }
