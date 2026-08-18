@@ -19,6 +19,7 @@ const numbers = require('./lib/numbers');
 const stats = require('./lib/stats');
 const hooks = require('./lib/hooks');
 const spend = require('./lib/spend');
+const reps = require('./lib/reps');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -313,6 +314,12 @@ function outboundGate(account) {
   }
   return { ok: true };
 }
+
+// The referral cookie. 90 days: a small-business owner who calls the demo
+// line on a Friday and signs up after talking to their partner the following
+// month is still that rep's customer.
+const REF_COOKIE = 'dp_ref';
+const REF_COOKIE_DAYS = 90;
 
 const sendJobs = new Map();
 
@@ -763,6 +770,23 @@ const server = http.createServer(async (req, res) => {
         return res.end(img);
       } catch { res.writeHead(404); return res.end(); }
     }
+    // ---- referral link: /r/CODE ----
+    // A rep's link. Sets a first-party cookie so the credit survives the
+    // prospect wandering the site, sleeping on it, and signing up two days
+    // later. FIRST TOUCH WINS: an existing cookie is never overwritten, so a
+    // second rep cannot walk over the first rep's work by getting the last
+    // click. An unknown or inactive code sets nothing and redirects silently —
+    // a departed rep's old links must stop attributing.
+    if (req.method === 'GET' && /^\/r\/[A-Za-z0-9]{2,16}$/.test(p)) {
+      const code = reps.normaliseCode(p.slice(3));
+      const rep = reps.repByCode(code);
+      const existing = reps.normaliseCode(auth.parseCookies(req)[REF_COOKIE] || '');
+      const dest = '/signup' + (url.searchParams.get('tier') ? `?tier=${encodeURIComponent(url.searchParams.get('tier'))}` : '');
+      if (!rep || rep.status !== 'active' || existing) return redirect(res, dest);
+      const secure = (process.env.PUBLIC_URL || '').startsWith('https') ? ' Secure;' : '';
+      return redirect(res, dest, `${REF_COOKIE}=${encodeURIComponent(rep.code)};${secure} SameSite=Lax; Path=/; Max-Age=${REF_COOKIE_DAYS * 24 * 3600}`);
+    }
+
     if (req.method === 'GET' && p === '/robots.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('User-agent: *\nAllow: /\nDisallow: /app\nDisallow: /api/\nDisallow: /u/\nDisallow: /voice/\nSitemap: https://dawnpipe.com/sitemap.xml\n');
@@ -1530,7 +1554,21 @@ Use it the way a good receptionist would: greet them by name if you have one, do
 
     if (req.method === 'GET' && p === '/signup') {
       const t = (url.searchParams.get('tier') || '').toLowerCase();
-      return html(res, withDemoTel(view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : '')));
+      // The ref may arrive on the URL or in the cookie set by /r/CODE. Render
+      // it into a hidden field AND re-read the cookie on POST, so a stripped
+      // field or a blocked cookie each still leave one working path.
+      const qref = reps.normaliseCode(url.searchParams.get('ref') || '');
+      const cref = reps.normaliseCode(auth.parseCookies(req)[REF_COOKIE] || '');
+      const ref = (reps.repByCode(qref) ? qref : '') || (reps.repByCode(cref) ? cref : '');
+      let page = view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : '').split('__REF__').join(voice.esc(ref));
+      const r = ref && reps.repByCode(ref);
+      page = page.split('__REF_NOTE__').join(r ? `<div class="refnote">Referred by <b>${voice.esc(r.name)}</b></div>` : '');
+      let cookie;
+      if (qref && reps.repByCode(qref) && !cref) {
+        const secure = (process.env.PUBLIC_URL || '').startsWith('https') ? ' Secure;' : '';
+        cookie = `${REF_COOKIE}=${encodeURIComponent(qref)};${secure} SameSite=Lax; Path=/; Max-Age=${REF_COOKIE_DAYS * 24 * 3600}`;
+      }
+      return html(res, withDemoTel(page), 200, cookie ? { 'Set-Cookie': cookie } : {});
     }
     if (req.method === 'GET' && p === '/login') return html(res, view('login.html'));
 
@@ -1593,6 +1631,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       const acc = db.createAccount({ email, passHash, salt, acceptedTermsAt: db.nowISO(), termsVersion: LEGAL_UPDATED });
       seedStarterProfile(acc.id, email);
       db.logActivity(acc.id, { agent: 'SYSTEM', msg: 'Account created' });
+      // Attribution happens HERE, once, permanently. Read the hidden field
+      // first and fall back to the cookie, so losing either one still pays the
+      // rep. Nothing about it is retried later: a paycheck that can change
+      // after the fact is a paycheck nobody trusts.
+      try {
+        const ref = reps.normaliseCode(f.ref || '') || reps.normaliseCode(auth.parseCookies(req)[REF_COOKIE] || '');
+        if (ref) reps.attribute(acc, ref, { source: 'signup' });
+      } catch (e) { console.error('attribution failed:', e.message); }
       const token = db.createSession(acc.id);
       // Came from a pricing card? Skip the re-decision and go straight to the
       // plan they already chose. Every extra decision point loses buyers.
@@ -2334,6 +2380,76 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const est = { note: 'estimateCost() assumes: phone $0.014/min, speech recognition $0.02 per turn, TTS $0.013/100 chars generative or $0.0032 neural, AI $0.006/turn, recording $0.0025/min. Twilio\'s advertised per-minute rate is the phone line only; speech-to-text and text-to-speech are ~80% of a real call.' };
           return json(res, { start, end, ...sum, diagnostics: diag, estimateAssumptions: est, rawCategories: rows.filter((r) => r.price).map((r) => ({ category: r.category, usage: r.usage, unit: r.usageUnit, price: r.price })).sort((a, b) => b.price - a.price) });
         } catch (e) { return json(res, { error: e.message }, 502); }
+      }
+
+      // ---- SALES REPS (owner only) ----
+      // The paycheck tracker. Every figure here is a sum of ledger rows, and
+      // every ledger row carries the Stripe id it came from, so any number on
+      // this screen can be traced to an object in the Stripe dashboard.
+      if (p === '/api/admin/reps' && req.method === 'GET') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+        const all = db.allAccounts();
+        const rows = reps.listReps().map((r) => {
+          const sum = reps.summary(r.id);
+          const mine = all.filter((a) => a.repId === r.id);
+          return { ...r, link: `${base}/r/${r.code}`, ...sum,
+            blocked: reps.payoutBlocked(r),
+            accountsList: mine.map((a) => ({ id: a.id, email: a.email, tier: a.tier, subStatus: a.subStatus,
+              selfReferral: !!a.repSelfReferral,
+              earned: reps.ledgerForAccount(a.id).filter((x) => x.kind !== 'reversal').reduce((n, x) => n + x.amountCents, 0) })),
+          };
+        });
+        return json(res, { reps: rows, rateIntroPct: reps.RATE_INTRO_BPS / 100, rateTailPct: reps.RATE_TAIL_BPS / 100,
+          introMonths: reps.INTRO_MONTHS, bonusCents: reps.ACTIVATION_BONUS_CENTS, holdDays: reps.BONUS_HOLD_DAYS });
+      }
+      if (p === '/api/admin/reps/create' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const f = parseJSON(await readBody(req));
+        try { const r = reps.createRep({ name: f.name, email: f.email, phone: f.phone, notes: f.notes });
+          db.logActivity(acc, { agent: 'SYSTEM', msg: `Sales rep added: ${r.name} (${r.code})` });
+          return json(res, { ok: true, rep: r });
+        } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      if (p === '/api/admin/reps/update' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const f = parseJSON(await readBody(req));
+        const patch = {};
+        // Onboarding gates are dates, not booleans: "when did they sign" is the
+        // question that matters if a commission is ever disputed.
+        if (f.status) patch.status = f.status;
+        if (f.agreementSigned !== undefined) patch.agreementSignedAt = f.agreementSigned ? db.nowISO() : '';
+        if (f.w9Received !== undefined) patch.w9ReceivedAt = f.w9Received ? db.nowISO() : '';
+        if (f.payoutMethod !== undefined) patch.payoutMethod = String(f.payoutMethod || '');
+        if (f.notes !== undefined) patch.notes = String(f.notes || '');
+        const r = reps.updateRep(f.id, patch);
+        if (!r) return json(res, { error: 'No such rep.' }, 404);
+        return json(res, { ok: true, rep: r });
+      }
+      if (p === '/api/admin/reps/ledger' && req.method === 'GET') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const id = url.searchParams.get('repId') || '';
+        const rows = reps.ledgerFor(id).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+        return json(res, { rows, summary: reps.summary(id) });
+      }
+      // Mark a period paid. Hard-gated on the paperwork: an unsigned rep or one
+      // with no W-9 cannot be paid, because that is the moment the gate matters.
+      if (p === '/api/admin/reps/pay' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const f = parseJSON(await readBody(req));
+        const rep = reps.repById(f.repId);
+        const blocked = reps.payoutBlocked(rep);
+        if (blocked) return json(res, { error: `Cannot pay ${rep ? rep.name : 'this rep'}: ${blocked}` }, 400);
+        reps.releaseHolds();
+        const batch = db.uid();
+        let n = 0, cents = 0;
+        for (const row of reps.ledgerFor(rep.id)) {
+          if (row.status === 'held' || row.status === 'paid') continue;
+          db.patchCollection('commissions', row.id, { status: 'paid', paidAt: db.nowISO(), batch });
+          n++; cents += row.amountCents;
+        }
+        db.logActivity(acc, { agent: 'SYSTEM', msg: `Paid ${rep.name} ${reps.usd(cents)} across ${n} ledger rows (batch ${batch})` });
+        return json(res, { ok: true, batch, rows: n, amount: reps.usd(cents), cents });
       }
 
       // ---- billing setup diagnostic (owner only; reports names, never values) ----

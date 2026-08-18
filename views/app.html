@@ -159,6 +159,7 @@
   <button class="tab" id="tabCallBtn" onclick="showTab('coldcall')">📞 Cold Calling</button>
   <button class="tab" id="tabVoiceBtn" onclick="showTab('voice')">🎧 AI Answering</button>
   <button class="tab" id="tabCalBtn" onclick="showTab('calendar')">📅 Calendar</button>
+  <button class="tab hide" id="tabRepsBtn" onclick="showTab('reps')">💵 Sales Reps</button>
 </div>
 
 <div class="wrap">
@@ -186,6 +187,28 @@
   </div>
 
   <!-- ===================== BUSINESS TAB ===================== -->
+  <!-- ===================== SALES REPS (owner only) ===================== -->
+  <div id="tab-reps" class="hide">
+    <div class="card">
+      <h2><span class="agent">SALES REPS</span> Who is selling, and what they are owed</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 12px">Every figure here is a sum of ledger rows, and every row carries the Stripe invoice it came from — so any number can be traced to a real payment. Commission accrues on <b>money actually collected</b>, never on "active" subscriptions, so a 7-day trial that cancels pays nobody.</p>
+        <div id="repRates" class="muted" style="margin-bottom:14px;padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px"></div>
+        <div class="row" style="margin-bottom:12px;gap:6px;flex-wrap:wrap">
+          <input id="rp_name" placeholder="Rep's full name" style="max-width:200px;margin:0">
+          <input id="rp_email" placeholder="their@email.com" style="max-width:220px;margin:0">
+          <input id="rp_phone" placeholder="Phone (optional)" style="max-width:150px;margin:0">
+          <button class="sm red" onclick="addRep()">+ Add rep</button>
+        </div>
+        <div id="repList"><div class="empty">No reps yet.</div></div>
+      </div>
+    </div>
+    <div class="card" id="repLedgerCard" style="display:none">
+      <h2><span class="agent">LEDGER</span> <span id="repLedgerWho"></span></h2>
+      <div class="body"><div id="repLedger"></div></div>
+    </div>
+  </div>
+
   <div id="tab-business">
     <div class="row" style="margin-bottom:14px">
       <strong>Business:</strong>
@@ -666,7 +689,7 @@ let STATE={profiles:[],leads:[],queue:[],activity:[]};
 const UI_KEY='dawnpipe.ui';
 function readUI(){try{return JSON.parse(localStorage.getItem(UI_KEY))||{};}catch(e){return {};}}
 function saveUI(){try{localStorage.setItem(UI_KEY,JSON.stringify({tab:curTab,profileId:$('profileSel')?$('profileSel').value:''}));}catch(e){}}
-const TABS=['business','desk','voice','calendar'];
+const TABS=['business','desk','voice','calendar','coldcall','reps'];
 let curTab=(TABS.indexOf(readUI().tab)>=0?readUI().tab:'business');
 const $=(id)=>document.getElementById(id);
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
@@ -679,6 +702,8 @@ function showTab(t){curTab=t;saveUI();
   $('tab-coldcall').classList.toggle('hide',t!=='coldcall');
   $('tab-voice').classList.toggle('hide',t!=='voice');
   $('tab-calendar').classList.toggle('hide',t!=='calendar');
+  $('tab-reps').classList.toggle('hide',t!=='reps');
+  $('tabRepsBtn').classList.toggle('active',t==='reps');
   $('tabBusinessBtn').classList.toggle('active',t==='business');
   $('tabDeskBtn').classList.toggle('active',t==='desk');
   $('tabCallBtn').classList.toggle('active',t==='coldcall');
@@ -706,6 +731,7 @@ function showTab(t){curTab=t;saveUI();
   }
   if(t==='voice'){renderVoice();renderNumber();loadStats();loadIntegrations();loadCalls();loadAppointments();}
   if(t==='calendar'){renderCalendar();}
+  if(t==='reps'){loadReps();}
 }
 async function api(path,data){
   let r;
@@ -760,6 +786,7 @@ async function load(){
   STATE=await api('/api/state');
   $('lockbar').style.display=STATE.locked?'':'none';
   $('ownerBadge').style.display=STATE.isOwner?'':'none';
+  $('tabRepsBtn').classList.toggle('hide',!STATE.isOwner);
   // trial meter — show what's left so the upgrade ask lands after real value
   const u=STATE.usage||{};
   // A customer in dunning is NOT on a free trial. plans.usage() doesn't know
@@ -1569,6 +1596,93 @@ async function checkDomain(){
 async function saveWarmup(){
   try{await api('/api/settings/warmup',{ceiling:Number($('wCeil').value)||40});toast('Warmup updated');await load();}
   catch(e){toast(e.message);}
+}
+// ---- SALES REPS (owner) ----
+// Deliberately plain: a table of what each rep is owed and why. No projections,
+// no "if you had 10 customers" widget -- the whole point of this screen is that
+// every number on it is real money already collected.
+let REPS=[];
+async function loadReps(){
+  try{
+    const d=await api('/api/admin/reps');
+    REPS=d.reps||[];
+    $('repRates').innerHTML=`<b>Current plan:</b> ${d.rateIntroPct}% of collected revenue for an account's first ${d.introMonths} paid months, then ${d.rateTailPct}% for as long as it lives. `
+      +`Plus a <b>$${(d.bonusCents/100).toFixed(0)} activation bonus</b> on each account's first successful payment, held ${d.holdDays} days in case it refunds or charges back.`;
+    if(!REPS.length){$('repList').innerHTML='<div class="empty">No reps yet. Add one and they get a referral link straight away.</div>';return;}
+    $('repList').innerHTML=REPS.map(r=>{
+      const acc=(r.accountsList||[]);
+      const paying=acc.filter(a=>a.subStatus==='active').length;
+      const warn=r.blocked?`<div style="color:var(--red);font-size:12.5px;margin-top:4px">⚠ Cannot be paid: ${esc(r.blocked)}</div>`:'';
+      const self=acc.some(a=>a.selfReferral)?'<div style="color:var(--red);font-size:12.5px">⚠ Self-referral flagged on one of these accounts</div>':'';
+      return `<div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px;background:#fff">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <b>${esc(r.name)}</b> <span class="muted">· ${esc(r.email)}</span>
+            <span class="pill ${r.status==='active'?'drafted':''}">${esc(r.status)}</span>
+            <div class="muted" style="font-size:12.5px;margin-top:3px">Referral link:
+              <code style="background:var(--paper2);padding:1px 5px;border-radius:4px">${esc(r.link)}</code>
+              <button class="sm ghost" onclick="navigator.clipboard.writeText('${esc(r.link)}');toast('Link copied')">Copy</button></div>
+            ${warn}${self}
+          </div>
+          <div style="text-align:right;white-space:nowrap">
+            <div style="font-size:22px;font-weight:800">$${(r.payableCents/100).toFixed(2)}</div>
+            <div class="muted" style="font-size:12px">owed now</div>
+          </div>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:13px">
+          <b>${acc.length}</b> account${acc.length===1?'':'s'} referred · <b>${paying}</b> paying ·
+          held $${(r.heldCents/100).toFixed(2)} · paid to date $${(r.paidCents/100).toFixed(2)}
+          ${r.nextRelease?` · next hold releases ${new Date(r.nextRelease).toLocaleDateString()}`:''}
+        </div>
+        <div class="row" style="margin-top:8px;gap:5px;flex-wrap:wrap">
+          <button class="sm ghost" onclick="repLedger('${r.id}')">See every row</button>
+          <label class="muted" style="font-size:12.5px"><input type="checkbox" ${r.agreementSignedAt?'checked':''} onchange="repSet('${r.id}','agreementSigned',this.checked)" style="width:auto"> agreement signed</label>
+          <label class="muted" style="font-size:12.5px"><input type="checkbox" ${r.w9ReceivedAt?'checked':''} onchange="repSet('${r.id}','w9Received',this.checked)" style="width:auto"> W-9 on file</label>
+          <input placeholder="payout method" value="${esc(r.payoutMethod||'')}" onchange="repSet('${r.id}','payoutMethod',this.value)" style="max-width:150px;margin:0;font-size:12.5px">
+          <button class="sm ${r.blocked||r.payableCents<=0?'ghost':'red'}" ${r.blocked||r.payableCents<=0?'disabled':''} onclick="repPay('${r.id}')">Mark $${(r.payableCents/100).toFixed(2)} paid</button>
+          ${r.status==='active'?`<button class="sm ghost" onclick="repSet('${r.id}','status','inactive')">Deactivate</button>`:`<button class="sm ghost" onclick="repSet('${r.id}','status','active')">Reactivate</button>`}
+        </div>
+      </div>`;}).join('');
+  }catch(e){$('repList').innerHTML=`<div class="warnbox">${esc(e.message)}</div>`;}
+}
+async function addRep(){
+  const name=$('rp_name').value.trim(), email=$('rp_email').value.trim();
+  if(!name||!email)return toast('Name and email, please');
+  try{const r=await api('/api/admin/reps/create',{name,email,phone:$('rp_phone').value.trim()});
+    toast(`${r.rep.name} added — code ${r.rep.code}`);
+    $('rp_name').value='';$('rp_email').value='';$('rp_phone').value='';
+    await loadReps();
+  }catch(e){toast(e.message);}
+}
+async function repSet(id,key,val){
+  try{await api('/api/admin/reps/update',{id,[key]:val});await loadReps();}catch(e){toast(e.message);}
+}
+async function repPay(id){
+  const r=REPS.find(x=>x.id===id);
+  if(!confirm(`Mark $${(r.payableCents/100).toFixed(2)} as paid to ${r.name}?
+
+This records the payout in the ledger. It does NOT move money — send that separately.`))return;
+  try{const d=await api('/api/admin/reps/pay',{repId:id});toast(`Recorded ${d.amount} paid across ${d.rows} rows`);await loadReps();}catch(e){toast(e.message);}
+}
+async function repLedger(id){
+  const r=REPS.find(x=>x.id===id);
+  try{
+    const d=await api('/api/admin/reps/ledger?repId='+encodeURIComponent(id));
+    $('repLedgerWho').textContent=r?r.name:'';
+    $('repLedgerCard').style.display='';
+    $('repLedger').innerHTML=d.rows.length?`<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr style="text-align:left;border-bottom:1px solid var(--line)"><th>When</th><th>What</th><th>Basis</th><th>Rate</th><th>Amount</th><th>Status</th><th>Stripe</th></tr>
+      ${d.rows.map(x=>`<tr style="border-bottom:1px dashed var(--line)">
+        <td>${new Date(x.at).toLocaleDateString()}</td>
+        <td>${esc(x.kind)}${x.monthIndex?` <span class="muted">mo ${x.monthIndex}</span>`:''}</td>
+        <td>${x.basisCents?'$'+(x.basisCents/100).toFixed(2):'—'}</td>
+        <td>${x.rateBps?(x.rateBps/100)+'%':'—'}</td>
+        <td style="font-weight:700;color:${x.amountCents<0?'var(--red)':'inherit'}">$${(x.amountCents/100).toFixed(2)}</td>
+        <td>${esc(x.status)}${x.holdUntil&&x.status==='held'?` <span class="muted">till ${new Date(x.holdUntil).toLocaleDateString()}</span>`:''}</td>
+        <td class="muted" style="font-size:11px">${esc(x.stripeId||'')}</td></tr>`).join('')}
+    </table>`:'<div class="empty">No ledger rows yet.</div>';
+    $('repLedgerCard').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){toast(e.message);}
 }
 function showUpgrade(){
   const all=STATE.tiers||[];const cur=(STATE.usage||{}).tier;const isPro=!!(STATE.usage&&STATE.usage.isPro);

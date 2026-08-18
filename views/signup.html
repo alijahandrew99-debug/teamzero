@@ -15,6 +15,7 @@
   .err:empty{display:none}
   .alt{text-align:center;margin-top:18px;font-size:14px;color:var(--ink2)}
   a{color:var(--red);text-decoration:none}
+  .refnote{background:#eaf5ee;border:1px solid #bcdcc8;color:#1f5c39;border-radius:8px;padding:9px 12px;font-size:14px;margin-bottom:12px}
 </style><link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
 <link rel="shortcut icon" href="/favicon.ico?v=3">
 <script src="/favicon.js?v=3" defer></script>
@@ -30,6 +31,8 @@
     <label>Password</label>
     <input type="password" name="password" required minlength="6" placeholder="6+ characters">
     <input type="hidden" name="tier" value="__TIER__">
+    <input type="hidden" name="ref" value="__REF__">
+    __REF_NOTE__
     <label style="display:flex;gap:9px;align-items:flex-start;margin-top:16px;font-size:13.5px;color:var(--ink2);line-height:1.45;cursor:pointer">
       <input type="checkbox" name="agree" value="1" required style="width:auto;margin:3px 0 0">
       <span>I agree to the <a href="/terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>, and I understand I'm responsible for having the right to contact the people my account emails or calls.</span>
