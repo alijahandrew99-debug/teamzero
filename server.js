@@ -2453,6 +2453,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!r) return json(res, { error: 'No such rep.' }, 404);
         return json(res, { ok: true, rep: r });
       }
+      if (p === '/api/admin/reps/code' && req.method === 'POST') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        const f = parseJSON(await readBody(req));
+        try { const r = reps.setCode(f.id, f.code); db.logActivity(acc, { agent: 'SYSTEM', msg: `Rep code changed: ${r.name} is now ${r.code}` }); return json(res, { ok: true, rep: r }); }
+        catch (e) { return json(res, { error: e.message }, 400); }
+      }
       if (p === '/api/admin/reps/ledger' && req.method === 'GET') {
         if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
         const id = url.searchParams.get('repId') || '';

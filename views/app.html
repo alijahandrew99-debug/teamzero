@@ -1619,6 +1619,9 @@ async function loadReps(){
           <div>
             <b>${esc(r.name)}</b> <span class="muted">· ${esc(r.email)}</span>
             <span class="pill ${r.status==='active'?'drafted':''}">${esc(r.status)}</span>
+            <div style="margin-top:6px;font-size:14px">Code: <b style="font-size:17px;letter-spacing:1px">${esc(r.code)}</b>
+              <span class="muted" style="font-size:12px">— customers type this in the "Referral code" box on the payment page, or use the link</span>
+              ${(r.accountsList||[]).length?'':`<button class="sm ghost" onclick="repCode('${r.id}')" title="Only while nobody has signed up on it">Change</button>`}</div>
             <div class="muted" style="font-size:12.5px;margin-top:3px">Referral link:
               <code style="background:var(--paper2);padding:1px 5px;border-radius:4px">${esc(r.link)}</code>
               <button class="sm ghost" onclick="navigator.clipboard.writeText('${esc(r.link)}');toast('Link copied')">Copy</button></div>
@@ -1653,6 +1656,14 @@ async function addRep(){
     $('rp_name').value='';$('rp_email').value='';$('rp_phone').value='';
     await loadReps();
   }catch(e){toast(e.message);}
+}
+async function repCode(id){
+  const r=REPS.find(x=>x.id===id);
+  const code=prompt(`New referral code for ${r.name}?
+
+Usually their last name — short, one word, easy to say on the phone.`, r.code);
+  if(!code||code===r.code)return;
+  try{await api('/api/admin/reps/code',{id,code});toast('Code updated');await loadReps();}catch(e){toast(e.message);}
 }
 async function repSet(id,key,val){
   try{await api('/api/admin/reps/update',{id,[key]:val});await loadReps();}catch(e){toast(e.message);}
