@@ -797,7 +797,12 @@ const server = http.createServer(async (req, res) => {
     // are actually wired to live prices, without guessing at env vars.
     if (req.method === 'GET' && p === '/plans.json') {
       const tiers = plans.catalogue().map(({ priceEnvKey, ...t }) => t);
-      return json(res, { tiers, trust: plans.TRUST, billingConfigured: stripe.configured(), sellable: tiers.filter((t) => t.available).map((t) => t.id) });
+      return json(res, { tiers, trust: plans.TRUST, billingConfigured: stripe.configured(),
+        sellable: tiers.filter((t) => t.available).map((t) => t.id),
+        // Any tier whose Stripe price does not match the displayed price. Should
+        // always be empty; if it is not, the site is quoting one number and the
+        // card is charged another.
+        priceMismatch: tiers.filter((t) => t.available && t.priceCurrent === false).map((t) => t.id) });
     }
     if (req.method === 'GET' && p === '/sitemap.xml') {
       const site = 'https://dawnpipe.com';
