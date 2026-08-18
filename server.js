@@ -1040,6 +1040,7 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/voice/')) {
       const raw = await readBody(req);
       const params = parseForm(raw);
+      req.__params = params;   // so the outer error handler can name the call
       // Twilio signs the URL it actually POSTed to. Reconstructing it from the
       // request (proxy headers) instead of PUBLIC_URL means webhooks keep
       // verifying through a domain migration — with PUBLIC_URL, flipping the
@@ -1208,6 +1209,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           : 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
           + call.profile.name + '. This call may be transcribed.' + who + ' Did I catch you at an okay time?';
         call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
+        // Same trick as inbound: warm the prompt cache while the opener plays,
+        // so the first real reply — the one that decides whether this call-back
+        // feels alive or broken — is not the cold, slowest turn of the call.
+        voice.warmCache(call).catch(() => {});
         if ((call.account.voice || {}).record !== false) voice.startRecording(sid, base + '/voice/recording').catch(() => {});
         return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
       }
@@ -2974,6 +2979,21 @@ Use it the way a good receptionist would: greet them by name if you have one, do
     return html(res, '<p>Not found. <a href="/app">Go to app</a></p>', 404);
   } catch (e) {
     if (p.startsWith('/api/')) return json(res, { error: e.message }, 500);
+    // A voice webhook must NEVER answer with a 500. Twilio turns that into
+    // "we're sorry, an application error has occurred" spoken to a customer,
+    // mid-call. Whatever went wrong, the caller hears the agent bow out
+    // gracefully, and the owner gets the real error in their activity log
+    // instead of a mystery.
+    if (p.startsWith('/voice/') || p.startsWith('/sms/')) {
+      console.error(`voice webhook error at ${p}:`, e && e.stack || e);
+      try {
+        const sid = String((req.__params && req.__params.CallSid) || '');
+        const call = sid ? voice.getCall(sid) : null;
+        if (call && call.accountId) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Call glitched at ${p}: ${String(e && e.message || e).slice(0, 200)}` });
+      } catch {}
+      if (p.startsWith('/sms/')) { res.writeHead(200, { 'Content-Type': 'text/xml' }); return res.end('<?xml version="1.0" encoding="UTF-8"?><Response></Response>'); }
+      return xml(res, voice.sayAndHangup("Sorry — something glitched on my end. Give me a minute and try again, or I'll have someone call you back."));
+    }
     return html(res, `<pre style="padding:40px;font-family:monospace">${e.message}</pre>`, 500);
   }
 });
