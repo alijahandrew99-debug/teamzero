@@ -156,7 +156,7 @@
 <div class="tabs">
   <button class="tab active" id="tabBusinessBtn" onclick="showTab('business')">🏢 Your Business <span class="dot hide" id="bizDot"></span></button>
   <button class="tab" id="tabDeskBtn" onclick="showTab('desk')">🎯 Sales Desk</button>
-  <button class="tab" id="tabCallBtn" onclick="showTab('coldcall')">📞 Cold Calling</button>
+  <button class="tab" id="tabCallBtn" onclick="showTab('coldcall')">📞 Call-backs</button>
   <button class="tab" id="tabVoiceBtn" onclick="showTab('voice')">🎧 AI Answering</button>
   <button class="tab" id="tabCalBtn" onclick="showTab('calendar')">📅 Calendar</button>
   <button class="tab hide" id="tabRepsBtn" onclick="showTab('reps')">💵 Sales Reps</button>
@@ -253,7 +253,7 @@
           </div>
           <div class="field"><label>Business mailing address <span style="color:var(--red)">*required to send</span></label><div class="hint">The law (CAN-SPAM) requires a real physical postal address in every commercial email. A street address, PO box, or registered agent address all work. This appears in your footer.</div><input id="f_mailingAddress" placeholder="e.g. 123 W Main St, Suite 4, Elgin, IL 60120"></div>
           <div class="field"><label>Call to action</label><div class="hint">What you want the reader to do.</div><input id="f_cta" placeholder="e.g. A 15-minute call, or a short reply."></div>
-          <div class="field"><label>Extra notes (optional)</label><div class="hint">Anything else the team should know.</div><input id="f_notes" placeholder="e.g. Email only — no cold calls."></div>
+          <div class="field"><label>Extra notes (optional)</label><div class="hint">Anything else the team should know.</div><input id="f_notes" placeholder="e.g. We only work east of the river."></div>
         </div>
         </details>
         <div class="row"><button onclick="saveProfile()" id="saveBtn">Save business →</button><span class="muted" id="saveMsg"></span></div>
@@ -365,7 +365,7 @@
       <button class="sm ghost" onclick="runScout()" id="scoutBtn">🔍 Research this market</button>
     </div>
     <div class="muted" style="margin-bottom:14px;padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px">
-      <b>Email outreach.</b> Describe who you sell to and it finds those companies, gets a real verified email for the right person, and writes each one a personal message. Nothing sends until you approve it. Want the AI to <b>phone</b> these leads instead? That's the <a href="#" onclick="showTab('coldcall');return false"><b>Cold Calling</b></a> tab.
+      <b>Email outreach.</b> Describe who you sell to and it finds those companies, gets a real verified email for the right person, and writes each one a personal message. Nothing sends until you approve it. When someone replies or asks for a call, the AI can <b>ring them back</b> within a minute — that's the <a href="#" onclick="showTab('coldcall');return false"><b>Call-backs</b></a> tab.
     </div>
 
     <div class="progress" id="progress">
@@ -451,38 +451,60 @@
   </div>
 </div>
 
-<!-- ===================== COLD CALLING TAB =====================
-     The AI rings the leads it found. This used to live inside the AI-answering
-     screen, which is a different job entirely (that one picks up; this one
-     dials out) — so nobody found it. -->
+<!-- ===================== CALL-BACKS TAB =====================
+     The AI rings back people who ASKED. Automated cold calling of strangers is
+     off for customers, and stays off: an AI voice is an "artificial voice"
+     under the TCPA and dialling someone who never asked is $500-$1,500 a call.
+     What is legal -- and converts far better -- is calling back within a
+     minute of someone raising their hand. Three ways in: the hosted request
+     form (they tick consent), a missed call (we text an offer, YES = consent),
+     and the owner ringing back a caller who left a number. -->
 <div id="tab-coldcall" class="hide">
-  <div class="card hide" id="cardColdCalls">
-    <h2><span class="agent">COLD CALLING</span> Let the AI call the leads it found <span class="muted" id="callableCount"></span></h2>
+  <div class="card" id="cardCallbacks">
+    <h2><span class="agent">CALL-BACKS</span> The AI rings back everyone who asks — in about a minute</h2>
     <div class="body">
-      <p class="muted" style="margin:0 0 10px">The AI rings your leads one at a time, has the conversation, and books what it can. It never calls a number twice, never calls anyone who asked not to be, and stops on its own when your minutes run out.</p>
-      <div class="warnbox" style="margin-bottom:12px">These are real calls to real people, and they use your plan minutes. Ring your own phone first (on the AI Answering tab) so you hear exactly what they will.</div>
-      <div class="row">
-        <label class="muted" for="vc_count">How many to call now</label>
-        <input id="vc_count" type="number" min="1" max="25" value="5" style="width:90px;margin:0">
-        <button class="red" onclick="startCallRun()" id="vcBtn">📞 Start calling</button>
-        <button class="sm ghost" onclick="findPhones()" id="vfBtn">Find phone numbers</button>
+      <p style="margin:0 0 12px">Someone fills in your request form at 11pm, or calls and hangs up before you could get to it. Instead of a voicemail they never leave, <b>the AI calls them back</b>, helps with exactly what they asked, and books it. Speed to lead is the single biggest thing that decides who gets the job — and yours will be about sixty seconds.</p>
+      <div id="cbGate"></div>
+
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fff">
+        <div style="font-weight:700;margin-bottom:6px">1 · Your request form</div>
+        <div class="muted" style="font-size:13px;margin-bottom:8px">A page for your business where people leave their name, number and what they need — and tick the box that lets the AI call them. Put the link on your website, your Google listing, your van, your invoices.</div>
+        <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
+          <code id="cbFormUrl" style="background:var(--paper2);padding:6px 10px;border-radius:6px;font-size:13px">…</code>
+          <button class="sm ghost" onclick="navigator.clipboard.writeText($('cbFormUrl').textContent);toast('Link copied')">Copy link</button>
+          <a id="cbFormOpen" href="#" target="_blank" rel="noopener"><button class="sm ghost">Open it</button></a>
+          <button class="sm ghost" onclick="cbShowEmbed()">Embed on my site</button>
+        </div>
+        <div id="cbEmbed" style="display:none;margin-top:8px">
+          <div class="muted" style="font-size:12.5px;margin-bottom:4px">Paste this anywhere on your website:</div>
+          <textarea id="cbEmbedCode" readonly style="width:100%;height:64px;font:12px ui-monospace,monospace;background:var(--paper2)"></textarea>
+          <button class="sm ghost" onclick="navigator.clipboard.writeText($('cbEmbedCode').value);toast('Embed code copied')">Copy embed code</button>
+        </div>
       </div>
-      <div id="vcProgress" class="muted" style="margin-top:10px"></div>
-      <div id="vfProgress" class="muted" style="margin-top:6px"></div>
-      <div class="muted" style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
-        What it says on these calls comes from the same script you set on
-        <a href="#" onclick="showTab('voice');return false"><b>AI Answering</b></a> — the goal, your qualifying questions, your answers to objections.
-        Leads come from <a href="#" onclick="showTab('desk');return false"><b>Sales Desk</b></a>.
+
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fff">
+        <div style="font-weight:700;margin-bottom:6px">2 · Missed calls</div>
+        <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+          <input type="checkbox" id="cbMissed" onchange="cbSaveSettings()" style="width:18px;height:18px;margin-top:2px">
+          <span style="font-size:14px">When someone calls and hangs up before the AI can help, <b>text them an offer to call back</b>. If they reply <b>YES</b>, the AI rings them straight away.
+            <span class="muted" style="display:block;font-size:12.5px;margin-top:2px">The text is the legal step: a number that hung up is not permission to ring it with an AI, but "YES, call me" is. Their reply is stored word for word.</span></span>
+        </label>
       </div>
-    </div>
-  </div>
-  <!-- Shown instead when OUTBOUND_CALLING is off: see the compliance gate in server.js. -->
-  <div class="card hide" id="cardColdOff">
-    <h2><span class="agent">COLD CALLING</span> <span id="coldOffTitle">Not on your plan yet</span></h2>
-    <div class="body">
-      <p style="margin:0 0 10px" id="coldOffMsg"></p>
-      <div id="coldOffCta" style="margin-bottom:10px"></div>
-      <p class="muted" style="margin:0">Meanwhile, <a href="#" onclick="showTab('desk');return false">email outreach</a> and <a href="#" onclick="showTab('voice');return false">AI answering</a> both work today.</p>
+
+      <div style="border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fff">
+        <div style="font-weight:700;margin-bottom:6px">3 · Ring someone back yourself</div>
+        <div class="muted" style="font-size:13px;margin-bottom:8px">For a caller who left their number with you — the AI calls them about their own enquiry. Not for cold lists: it must be someone who contacted you first, within the last 90 days.</div>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <input id="cbName" placeholder="Their name" style="max-width:160px;margin:0">
+          <input id="cbPhone" placeholder="Their number" style="max-width:160px;margin:0">
+          <input id="cbNeed" placeholder="What it's about (optional)" style="max-width:240px;margin:0">
+          <button class="red sm" onclick="cbCallNow()">📞 Call them back now</button>
+        </div>
+      </div>
+
+      <div class="muted" style="font-size:12.5px;margin-bottom:10px" id="cbHours"></div>
+      <div style="font-weight:700;margin:6px 0">Recent call-backs</div>
+      <div id="cbLog"><div class="empty">No call-back requests yet. Share your form link to start.</div></div>
     </div>
   </div>
 </div>
@@ -591,8 +613,8 @@
       <div class="field"><label>Qualifying questions</label><div class="hint">The 2-3 things that tell you if they're worth your time. It weaves these in naturally rather than reading them out.</div><textarea id="v_qualifying" placeholder="How many people are doing outbound today?&#10;Are you already using a sales tool?&#10;Who signs off on something like this?"></textarea></div>
       <div class="field"><label>Objections &amp; your answers</label><div class="hint">Write the pushback you actually hear and how you'd answer it. It uses your words instead of improvising.</div><textarea id="v_objections" placeholder="&quot;Too expensive&quot; -> A receptionist is 3 grand a month. This starts at 149.&#10;&quot;We already have someone&quot; -> This doesn't replace them, it catches what they miss.&#10;&quot;Send me info&quot; -> Happy to, what's your email? And can I grab 15 minutes Thursday?"></textarea></div>
       <div class="field"><label>Approved answers / FAQ</label><div class="hint">The ONLY facts it may state. Anything not here, it says it doesn't know and offers a human. Never put prices here you don't want quoted.</div><textarea id="v_faq" placeholder="Q: Do you offer free assessments? A: Yes, the first walkthrough is free."></textarea></div>
-      <div class="field"><label>Voicemail pitch — for calls <b>you</b> make</label>
-        <div class="hint">This is what the AI leaves on a <b>prospect's</b> answering machine when it cold-calls them. It is not a greeting for people who ring you. Say who's calling, why it's worth two minutes, and the number to call back. Leave it blank and one is written from your business profile automatically.</div>
+      <div class="field"><label>Voicemail message — for call-backs</label>
+        <div class="hint">What the AI leaves if a <b>call-back</b> hits someone's voicemail. It is not a greeting for people who ring you. Say who's calling and the number to reach you. Leave it blank and the AI says: who it is, that it's returning their request, and your number.</div>
         <input id="v_voicemail" placeholder="Leave blank to use a pitch built from your business profile">
         <div class="muted" id="v_voicemailWarn" style="display:none;color:var(--red);font-size:12.5px;margin-top:4px">⚠ This reads like a greeting for <b>incoming</b> calls. The person hearing it never called you — they'd have no idea who rang or why. Clear it and we'll leave a proper pitch instead.</div>
       </div>
@@ -710,25 +732,7 @@ function showTab(t){curTab=t;saveUI();
   $('tabVoiceBtn').classList.toggle('active',t==='voice');
   $('tabCalBtn').classList.toggle('active',t==='calendar');
   if(t==='desk'){const p=curProfile();$('deskProfileName').textContent=p?p.name:'—';}
-  if(t==='coldcall'){
-    // One of the two cards shows, never both: the working screen when outbound
-    // is enabled, the "why not" explanation when it isn't. An empty tab reads
-    // like a broken product.
-    const on=!!STATE.outboundCalling;
-    $('cardColdCalls').classList.toggle('hide',!on);
-    $('cardColdOff').classList.toggle('hide',on);
-    if(on){renderCallable();}
-    else{
-      // Two very different "off"s: your plan doesn't include it (sell the
-      // upgrade) versus we've paused it pending your consent setup (say so).
-      const g=STATE.outboundGate||{};
-      $('coldOffTitle').textContent=g.needUpgrade?'Not on your plan yet':'Paused on your account';
-      $('coldOffMsg').textContent=g.reason||'Cold calling is not switched on for this account.';
-      $('coldOffCta').innerHTML=g.needUpgrade
-        ? '<button class="red" onclick="showUpgrade()">Upgrade your plan to add cold calling →</button>'
-        : '<a href="mailto:support@dawnpipe.com"><button class="ghost">Email support to switch it on</button></a>';
-    }
-  }
+  if(t==='coldcall'){loadCallbacks();}
   if(t==='voice'){renderVoice();renderNumber();loadStats();loadIntegrations();loadCalls();loadAppointments();}
   if(t==='calendar'){renderCalendar();}
   if(t==='reps'){loadReps();}
@@ -1200,58 +1204,51 @@ async function releaseNumber(){
 // How many leads could actually be dialled right now. Shown up front so the
 // button never looks broken when the real answer is "none of them have a
 // phone number yet".
-function renderCallable(){
-  const el=$('callableCount'); if(!el)return;
-  const P=pid();
-  const leads=(STATE.leads||[]).filter(l=>l.profileId===P);
-  const ready=leads.filter(l=>l.phone&&!l.calledAt).length;
-  const called=leads.filter(l=>l.calledAt).length;
-  el.textContent=ready?`· ${ready} ready to call`:(called?`· all ${called} called`:'· no phone numbers yet');
-}
-async function findPhones(){
-  const b=$('vfBtn');b.disabled=true;const o=b.textContent;b.textContent='Looking…';
+// ---- CALL-BACKS ----
+let CB={};
+async function loadCallbacks(){
   try{
-    await api('/api/voice/findphones',{profileId:pid(),limit:25});
-    const poll=async()=>{
-      const s=await api('/api/voice/findphones/status');
-      if(s.status==='idle')return;
-      if(s.status==='running'){
-        $('vfProgress').textContent=`Looking up numbers — ${s.done||0} of ${s.total||0} checked, ${s.found||0} found so far…`;
-        setTimeout(poll,3000);return;
-      }
-      $('vfProgress').textContent=s.note||'Done.';
-      toast(s.note||'Finished');
-      await load();renderCallable();
-      b.disabled=false;b.textContent=o;
-    };
-    poll();
-  }catch(e){toast(e.message);$('vfProgress').textContent=e.message;b.disabled=false;b.textContent=o;}
+    CB=await api('/api/callbacks');
+    $('cbFormUrl').textContent=CB.formUrl;
+    $('cbFormOpen').href=CB.formUrl;
+    $('cbEmbedCode').value=CB.embed;
+    $('cbMissed').checked=!!CB.callBackMissed;
+    const tzShort=(()=>{try{return new Intl.DateTimeFormat('en-US',{timeZone:CB.tz,timeZoneName:'short'}).formatToParts(new Date()).find(x=>x.type==='timeZoneName').value;}catch(e){return CB.tz;}})();
+    $('cbHours').innerHTML=`Call-backs go out between <b>${CB.hours.from}am and ${CB.hours.to-12}pm</b> (${esc(tzShort)}), never to a number on your do-not-call list, and at most once a day per number. Requests outside those hours are queued for the morning.`;
+    // Gate: needs a voice plan and a number. Say which, with the fix.
+    let gate='';
+    if(!CB.voiceOk.ok)gate=`<div class="warnbox" style="margin-bottom:12px">${esc(CB.voiceOk.reason)} <button class="sm red" onclick="showUpgrade()">See plans →</button></div>`;
+    else if(!CB.hasNumber)gate=`<div class="warnbox" style="margin-bottom:12px">Call-backs go out from your Dawnpipe number, and you don't have one yet. <a href="#" onclick="showTab('voice');return false"><b>Get your number on the AI Answering tab →</b></a> Requests are saved meanwhile and go out once you do.</div>`;
+    $('cbGate').innerHTML=gate;
+    const rows=CB.rows||[];
+    const badge=st=>({called:'<span class="pill drafted" style="background:#eaf5ee;color:#1f5c39">called</span>',queued:'<span class="pill">queued</span>',offered:'<span class="pill">offered by text</span>',blocked:'<span class="pill" style="background:#fbeceb;color:#8a1f15">not allowed</span>',failed:'<span class="pill" style="background:#fbeceb;color:#8a1f15">failed</span>',skipped:'<span class="pill">skipped</span>',new:'<span class="pill">new</span>'}[st]||`<span class="pill">${esc(st)}</span>`);
+    const src=x=>({form:'request form','missed-call':'missed call',owner:'you'}[x]||x);
+    $('cbLog').innerHTML=rows.length?rows.map(r=>`<div style="border-top:1px dashed var(--line);padding:8px 0;font-size:13.5px">
+        <div class="row" style="justify-content:space-between"><span><b>${esc(r.name||r.phone)}</b>${r.name?` <span class="muted">${esc(r.phone)}</span>`:''} <span class="muted">· via ${src(r.source)} · ${new Date(r.at).toLocaleString()}</span></span>${badge(r.status)}</div>
+        ${r.need?`<div style="margin-top:2px">${esc(r.need)}</div>`:''}
+        <div class="muted" style="font-size:12px;margin-top:2px">${r.status==='queued'&&r.dueAt?`Will call ${new Date(r.dueAt).toLocaleString()}. `:''}${r.basis?`Basis: ${esc(r.basis)}. `:''}${r.note?esc(r.note):''}
+          ${(r.status==='queued'||r.status==='failed'||r.status==='skipped')&&r.source!=='missed-call'?` <button class="sm ghost" onclick="cbCallId('${r.id}')">Call now</button>`:''}</div>
+      </div>`).join(''):'<div class="empty">No call-back requests yet. Share your form link to start.</div>';
+  }catch(e){$('cbGate').innerHTML=`<div class="warnbox">${esc(e.message)}</div>`;}
 }
-async function startCallRun(){
-  const n=Number($('vc_count').value)||5;
-  if(!confirm(`Start calling ${n} lead(s)?\n\nThese are real phone calls to real people, spaced about 20 seconds apart, and they use your plan minutes.`))return;
-  const b=$('vcBtn');b.disabled=true;const o=b.textContent;b.textContent='Starting…';
+function cbShowEmbed(){const e=$('cbEmbed');e.style.display=e.style.display==='none'?'':'none';}
+async function cbSaveSettings(){
+  try{await api('/api/callbacks/settings',{callBackMissed:$('cbMissed').checked});toast($('cbMissed').checked?'Missed callers will be offered a call-back by text':'Missed-call offer switched off');}
+  catch(e){toast(e.message);}
+}
+async function cbCallNow(){
+  const name=$('cbName').value.trim(),phone=$('cbPhone').value.trim(),need=$('cbNeed').value.trim();
+  if(!phone)return toast('Their number, please');
+  if(!confirm(`Have the AI call ${name||phone} now about ${need||'their enquiry'}?
+
+Only do this for someone who contacted you and left this number in the last 90 days.`))return;
   try{
-    const r=await api('/api/voice/callrun',{count:n,profileId:pid()});
-    if(!r.started){toast(r.note||'Nothing to call');$('vcProgress').textContent=r.note||'';return;}
-    const sk=r.skipped||{};
-    const skipNote=[sk.noPhone?`${sk.noPhone} without a number`:'',sk.alreadyCalled?`${sk.alreadyCalled} already called`:'',sk.onDnc?`${sk.onDnc} on do-not-call`:'']
-      .filter(Boolean).join(', ');
-    toast(`Calling ${r.started} lead(s)…`);
-    const poll=async()=>{
-      const s=await api('/api/voice/callrun/status');
-      if(s.status==='idle')return;
-      $('vcProgress').innerHTML=`📞 <b>${s.done||0}</b> of ${s.total||0} called`
-        +(s.failed?` · ${s.failed} failed`:'')
-        +(skipNote?`<br><span class="muted">Skipped: ${esc(skipNote)}</span>`:'');
-      if(s.status==='running'){setTimeout(poll,4000);return;}
-      $('vcProgress').innerHTML=esc(s.note||'Done.')+(skipNote?`<br><span class="muted">Skipped: ${esc(skipNote)}</span>`:'');
-      toast(s.note||'Calling finished');
-      await load();loadCalls();loadAppointments();
-    };
-    poll();
-  }catch(e){toast(e.message);$('vcProgress').textContent=e.message;}
-  finally{b.disabled=false;b.textContent=o;}
+    const r=await api('/api/callbacks/call',{name,phone,need,basis:'Owner confirmed: this person contacted the business and left this number'});
+    toast('Calling them now');$('cbName').value='';$('cbPhone').value='';$('cbNeed').value='';await loadCallbacks();
+  }catch(e){toast(e.message);await loadCallbacks();}
+}
+async function cbCallId(id){
+  try{await api('/api/callbacks/call',{id});toast('Calling now');await loadCallbacks();}catch(e){toast(e.message);await loadCallbacks();}
 }
 async function testCall(){
   const to=$('v_testTo').value.trim();

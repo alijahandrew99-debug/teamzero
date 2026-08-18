@@ -293,6 +293,71 @@ function jobView(job) {
 // Sending is deliberately throttled: blasting 50 cold emails back-to-back from a
 // fresh mailbox is the fastest way to get spam-filtered. Spacing + a daily cap
 // protect the user's sending reputation.
+// ================= CALL-BACKS =================
+// The AI rings back people who ASKED -- see lib/callback.js for the why. This
+// is the one place a call-back is actually dialled, so every legal check
+// lives here and nothing else can place one.
+const callback = require('./lib/callback');
+async function placeCallback(rec, { by = 'system' } = {}) {
+  const account = db.getAccount(rec.accountId);
+  if (!account) return { ok: false, reason: 'No account.' };
+  const vc = account.voice || {};
+  const owner = stripe.isOwner(account);
+  // 1. Consent / basis.
+  const allowed = callback.callbackAllowed(rec);
+  if (!allowed.ok) { db.updateCallback(rec.accountId, rec.id, { status: 'blocked', note: allowed.reason }); return allowed; }
+  // 2. Do-not-call is absolute.
+  const to = voice.toE164(rec.phone || '');
+  if (!to) { db.updateCallback(rec.accountId, rec.id, { status: 'blocked', note: 'Not a valid phone number.' }); return { ok: false, reason: 'Not a valid phone number.' }; }
+  const dnc = suppress.isPhoneSuppressed(rec.accountId, to);
+  if (dnc.blocked) { db.updateCallback(rec.accountId, rec.id, { status: 'blocked', note: 'On the do-not-call list.' }); return { ok: false, reason: 'That number asked not to be contacted.' }; }
+  // 3. Once a day per number, whatever the source.
+  if (callback.calledToday(rec.accountId, suppress.phoneKey(to)) && by !== 'owner') {
+    db.updateCallback(rec.accountId, rec.id, { status: 'skipped', note: 'Already called today.' }); return { ok: false, reason: 'Already called this number today.' };
+  }
+  // 4. Plan, line, and configuration.
+  const plan = plans.voiceAllowed(account, owner);
+  if (!plan.ok) { db.updateCallback(rec.accountId, rec.id, { status: 'queued', note: plan.reason }); return { ok: false, reason: plan.reason }; }
+  const from = vc.number || (owner ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
+  if (!voice.configured() || !from) { db.updateCallback(rec.accountId, rec.id, { status: 'queued', note: 'No phone line yet — get a number on the AI Answering tab.' }); return { ok: false, reason: 'No phone line yet.' }; }
+  const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+  // 5. Quiet hours: queue for the morning rather than ring at 11pm.
+  const hours = callback.withinCallingHours(voice.tzFor(account));
+  if (!hours.ok && by !== 'owner') {
+    const dueAt = callback.nextCallingWindow(voice.tzFor(account));
+    db.updateCallback(rec.accountId, rec.id, { status: 'queued', dueAt, note: hours.reason });
+    return { ok: false, queued: true, dueAt, reason: hours.reason };
+  }
+  const profile = db.getProfile(rec.accountId, vc.profileId) || db.getProfiles(rec.accountId)[0];
+  if (!profile) { db.updateCallback(rec.accountId, rec.id, { status: 'queued', note: 'No business profile yet.' }); return { ok: false, reason: 'No business profile yet.' }; }
+  try {
+    const call = await voice.placeCall({ to, from, answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
+    const agoMin = Math.max(0, Math.round((Date.now() - Date.parse(rec.at)) / 60000));
+    voice.startCall(call.sid, { accountId: rec.accountId, account, profile, direction: 'outbound', to, from,
+      lead: { callback: true, callbackId: rec.id, name: rec.name || '', need: rec.need || '', callbackSource: rec.source,
+              when: agoMin < 2 ? 'just now' : agoMin < 60 ? `${agoMin} minutes ago` : agoMin < 1440 ? `${Math.round(agoMin / 60)} hours ago` : 'recently' } });
+    db.saveCall(rec.accountId, { sid: call.sid, direction: 'outbound', to, from, profileId: profile.id, status: call.status || 'queued', transcript: [], callbackId: rec.id });
+    db.updateCallback(rec.accountId, rec.id, { status: 'called', calledAt: db.nowISO(), callSid: call.sid, basis: allowed.basis, note: '' });
+    db.logActivity(rec.accountId, { agent: 'VOICE', msg: `Call-back placed to ${to}${rec.name ? ' (' + rec.name + ')' : ''} — ${allowed.basis}` });
+    return { ok: true, sid: call.sid };
+  } catch (e) {
+    db.updateCallback(rec.accountId, rec.id, { status: 'failed', note: e.message });
+    return { ok: false, reason: e.message };
+  }
+}
+// Every minute: anything queued whose time has come.
+async function runCallbackQueue() {
+  let due = [];
+  try { due = db.readCollection('callbacks').filter((c) => c.status === 'queued' && (!c.dueAt || Date.parse(c.dueAt) <= Date.now())); } catch { return; }
+  for (const rec of due.slice(0, 20)) {
+    // Re-read: it may have been cancelled or called by hand since.
+    const fresh = db.getCallbacks(rec.accountId, 500).find((c) => c.id === rec.id);
+    if (!fresh || fresh.status !== 'queued') continue;
+    await placeCallback(fresh).catch(() => {});
+  }
+}
+setInterval(() => { runCallbackQueue().catch(() => {}); }, 60 * 1000);
+
 // ---- who may run automated outbound calling ----
 // Two separate questions, and conflating them produced a dead tab with no way
 // forward: (1) is the feature switched on at all on this server — a compliance
@@ -302,16 +367,15 @@ function jobView(job) {
 // wrote the script and owns the consent process, so the owner is not gated by
 // the server switch — everyone else needs both.
 function outboundGate(account) {
+  // Cold-list dialling is OFF for everyone, owner included, unless the server
+  // switch is thrown. The call-back feature is the supported way to have the
+  // AI dial out: it only calls people who asked, with the consent on file.
+  if (process.env.OUTBOUND_CALLING !== 'on') {
+    return { ok: false, paused: true, reason: 'Automated cold calling is off. Use Call-backs — the AI rings back anyone who asks, legally, in about a minute.' };
+  }
   if (stripe.isOwner(account)) return { ok: true };
   const u = plans.usage(account, false);
-  if (!u.isPro) return { ok: false, needUpgrade: true, reason: 'Cold calling is part of the Front Desk plan. Pick a plan to switch it on.' };
-  if (!u.voice || !u.voice.included) {
-    return { ok: false, needUpgrade: true,
-      reason: `Cold calling isn't part of ${u.tierName}. Upgrade to Front Desk ($${plans.TIERS.frontdesk.price}/mo) — it answers your phone, books jobs, and can work a call list for you.` };
-  }
-  if (process.env.OUTBOUND_CALLING !== 'on') {
-    return { ok: false, paused: true, reason: 'Automated outbound calling is paused on this account pending your consent setup. Email support@dawnpipe.com and we will switch it on. Inbound answering is unaffected.' };
-  }
+  if (!u.isPro || !u.voice || !u.voice.included) return { ok: false, needUpgrade: true, reason: 'Outbound calling needs a plan with phone minutes.' };
   return { ok: true };
 }
 
@@ -770,6 +834,65 @@ const server = http.createServer(async (req, res) => {
         return res.end(img);
       } catch { res.writeHead(404); return res.end(); }
     }
+    // ---- CALL-BACK REQUEST FORM: /f/SLUG ----
+    // Public, per business, embeddable. This is how a stranger becomes someone
+    // who ASKED: name, number, what they need, and an unticked consent box.
+    // The exact wording they ticked is stored with the record, immutably.
+    if (/^\/f\/[a-z0-9]{4,24}$/i.test(p) && (req.method === 'GET' || req.method === 'POST')) {
+      const slug = p.slice(3).toLowerCase();
+      const acct = callback.accountByFormSlug(slug);
+      if (!acct) return html(res, '<p style="font-family:system-ui;padding:40px">This request form is not active.</p>', 404);
+      const vcfg = acct.voice || {};
+      const prof = db.getProfile(acct.id, vcfg.profileId) || db.getProfiles(acct.id)[0] || {};
+      const biz = prof.name || 'us';
+      const agentName = vcfg.agentName || 'Our assistant';
+      const tz = voice.tzFor(acct);
+      const tzLabel = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find((x) => x.type === 'timeZoneName').value; } catch { return ''; } })();
+      const render = ({ err = '', done = '', name = '', phone = '', need = '' } = {}) => {
+        const consent = callback.consentText(biz, phone);
+        let page = view('callback-form.html');
+        page = page.split('__BIZ__').join(voice.esc(biz)).split('__WHO__').join(voice.esc(agentName) + ' (our AI assistant)')
+          .split('__ACTION__').join(`/f/${slug}`)
+          .split('__NAME__').join(voice.esc(name)).split('__PHONE__').join(voice.esc(phone)).split('__NEED__').join(voice.esc(need))
+          .split('__CONSENT__').join(voice.esc(consent)).split('__CONSENT_ATTR__').join(voice.esc(consent))
+          .split('__EARLIEST__').join(String(callback.EARLIEST_HOUR)).split('__LATEST__').join(String(callback.LATEST_HOUR - 12))
+          .split('__TZ_LABEL__').join(tzLabel ? `(${voice.esc(tzLabel)})` : '')
+          .replace('<!--ERR-->', err ? `<div class="err">${voice.esc(err)}</div>` : '')
+          .replace('<!--DONE-->', done ? `<div class="done"><div class="big">✓ Got it${name ? ', ' + voice.esc(name.split(' ')[0]) : ''}.</div><div>${done}</div></div>` : '')
+          .split('__HIDE_FORM__').join(done ? 'style="display:none"' : '');
+        return page;
+      };
+      if (req.method === 'GET') return html(res, render());
+      // POST
+      if (rateLimited(req, 'cbform:' + slug, 20, 60 * 60 * 1000)) return html(res, render({ err: 'Too many requests from here just now. Please call us instead.' }), 429);
+      const f = parseForm(await readBody(req));
+      if (String(f.website || '').trim()) return html(res, render({ done: 'Thanks.' })); // honeypot: bots fill it, people never see it
+      const name = String(f.name || '').trim().slice(0, 80);
+      const phone = String(f.phone || '').trim().slice(0, 24);
+      const need = String(f.need || '').trim().slice(0, 400);
+      const digits = phone.replace(/\D/g, '');
+      const e164 = (digits.length === 10 || (digits.length === 11 && digits[0] === '1')) ? voice.toE164(phone) : '';
+      if (!name) return html(res, render({ err: 'Please tell us your name.', phone, need }), 400);
+      if (!e164) return html(res, render({ err: 'That phone number does not look right — please include the area code.', name, need }), 400);
+      if (f.consent !== '1') return html(res, render({ err: 'Please tick the box so we are allowed to call you.', name, phone, need }), 400);
+      const consentShown = String(f.consentText || '').trim() || callback.consentText(biz, phone);
+      const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+      const rec = db.addCallback(acct.id, {
+        source: 'form', name, phone: e164, phoneKey: suppress.phoneKey(e164), need,
+        consent: true, consentText: consentShown, consentAt: db.nowISO(), consentIp: ip, consentUa: String(req.headers['user-agent'] || '').slice(0, 200),
+        formSlug: slug, profileId: prof.id || '',
+      });
+      db.logActivity(acct.id, { agent: 'VOICE', msg: `Call-back requested by ${name} (${e164})${need ? ': ' + need.slice(0, 80) : ''}` });
+      try { const h = hooks.emit(acct, 'lead.captured', { source: 'callback-form', name, phone: e164, need, at: rec.at }); if (h && typeof h.catch === 'function') h.catch(() => {}); } catch {}
+      // Ring them now (or queue for the morning). Reply to the person first —
+      // the dial happens in the background so the page never hangs on Twilio.
+      let done = `${voice.esc(agentName)} will ring you in the next minute or so.`;
+      const hours = callback.withinCallingHours(tz);
+      if (!hours.ok) done = `It's after hours, so ${voice.esc(agentName)} will ring you first thing — from ${callback.EARLIEST_HOUR}am ${tzLabel ? '(' + voice.esc(tzLabel) + ')' : ''}.`;
+      setTimeout(() => { placeCallback(rec).catch(() => {}); }, 1500);
+      return html(res, render({ done, name }));
+    }
+
     // ---- referral link: /r/CODE ----
     // A rep's link. Sets a first-party cookie so the credit survives the
     // prospect wandering the site, sleeping on it, and signing up two days
@@ -862,6 +985,24 @@ const server = http.createServer(async (req, res) => {
       if (!vAllow.ok || account.subStatus === 'canceled') return twimlReply('');
       const profile = db.getProfile(account.id, (account.voice || {}).profileId) || db.getProfiles(account.id)[0];
       if (!profile) return twimlReply('');
+      // "YES" to a call-back offer. The missed-call text says "reply YES and I
+      // will call you right back"; this reply IS the consent -- their own words,
+      // from their own number, in response to a plain offer -- and it is stored
+      // verbatim as the basis for the AI call. This is what makes a missed-call
+      // call-back defensible: a number captured off caller ID with no notice is
+      // not consent to an artificial-voice call, but "YES, call me" is.
+      if (/^\s*(yes|yeah|yep|y|call me|please call|ok call me|sure)\s*[.!]*\s*$/i.test(body) && (account.voice || {}).callBackMissed === true) {
+        const offered = db.getCallbacks(account.id, 200).find((c) => c.phoneKey === suppress.phoneKey(from) && c.source === 'missed-call' && c.status === 'offered');
+        if (offered) {
+          db.updateCallback(account.id, offered.id, { status: 'queued', consent: true, consentAt: db.nowISO(),
+            consentText: `Replied "${body}" by SMS to: "${offered.offerText || 'reply YES and I will call you right back'}"`, consentVia: 'sms-reply' });
+          const rec = db.getCallbacks(account.id, 200).find((c) => c.id === offered.id);
+          const agentName = (account.voice || {}).agentName || 'our assistant';
+          const hours = callback.withinCallingHours(voice.tzFor(account));
+          setTimeout(() => { placeCallback(rec).catch(() => {}); }, 1500);
+          return twimlReply(hours.ok ? `Great — ${agentName} is ringing you now.` : `Great — it's after hours here, so ${agentName} will ring you first thing from ${callback.EARLIEST_HOUR}am. Reply STOP any time to cancel.`);
+        }
+      }
       // Build the thread as a pseudo-call so think() and the booking path just work.
       const thread = db.getThread(account.id, from);
       const turns = (thread && thread.turns) || [];
@@ -1039,7 +1180,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // with a real pitch built from the business profile.
           const saved = (call && call.account.voice && call.account.voice.voicemail) || '';
           const usable = saved && !voice.looksInbound(saved);
-          const vm = usable ? saved
+          const cbLead = call && call.lead && call.lead.callback ? call.lead : null;
+          const vm = cbLead
+            // A call-back that hits voicemail says exactly what it is: you asked,
+            // we rang, here is the number. Never the sales pitch.
+            ? `Hi${cbLead.name ? ' ' + cbLead.name : ''}, it's ${(call.account.voice && call.account.voice.agentName) || 'the assistant'} from ${call.profile.name}, returning your ${cbLead.callbackSource === 'missed-call' ? 'call' : 'request'}${cbLead.need ? ' about ' + cbLead.need : ''}. Sorry I missed you — call us back any time on ${String((call.account.voice || {}).number || call.from || '').replace(/[^\d]/g, '').replace(/^1(?=\d{10}$)/, '').split('').join(' ')} and I'll pick up. Thanks!`
+            : usable ? saved
             : (call ? voice.voicemailPitch(call.profile, call.account, (call.account.voice || {}).number)
                     : 'Sorry I missed you. I will try again another time.');
           if (call && saved && !usable) {
@@ -1051,7 +1197,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!call) return xml(res, voice.sayAndHangup("Sorry, something went wrong on my end. Bye for now.", call && call.account ? voice.voiceFor(call.account) : undefined));
         const agentName = (call.account.voice && call.account.voice.agentName) || 'Sarah';
         const who = call.lead && call.lead.name ? ' Am I speaking with ' + call.lead.name + '?' : '';
-        const opener = 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
+        // A call-back opens with WHY in the first breath: you asked us. The
+        // generic opener below is a cold-call opener and reads as one.
+        const cb = call.lead && call.lead.callback ? call.lead : null;
+        const opener = cb
+          ? 'Hi' + (cb.name ? ' ' + cb.name : '') + ', this is ' + agentName + ', the AI assistant for ' + call.profile.name
+            + '. ' + (cb.callbackSource === 'missed-call' ? 'You called us ' + (cb.when || 'a few minutes ago') + ' and we missed each other, so I am ringing you straight back.'
+                      : 'You asked us to call you back' + (cb.need ? ' about ' + cb.need : '') + ', so here I am.')
+            + ' This call may be recorded, and you can say stop calling at any time. Is now an okay time?'
+          : 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
           + call.profile.name + '. This call may be transcribed.' + who + ' Did I catch you at an okay time?';
         call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
         if ((call.account.voice || {}).record !== false) voice.startRecording(sid, base + '/voice/recording').catch(() => {});
@@ -1424,9 +1578,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
                 && vc.textBack !== false && !suppress.isPhoneSuppressed(call.accountId, from).blocked
                 && !stats.textedToday(call.accountId, from)) {
               const biz = (call.profile && call.profile.name) || 'us';
-              const body = `Hi — this is ${biz}. Looks like we just missed each other. Reply here with what you need and a good time, or call back any time and I'll pick up: ${mine}. Reply STOP to opt out.`;
+              const offerCall = vc.callBackMissed === true;
+              const body = offerCall
+                ? `Hi — this is ${biz}. Looks like we just missed each other. Reply YES and our AI assistant will call you right back, or reply here with what you need. You can also call any time and I'll pick up: ${mine}. Reply STOP to opt out.`
+                : `Hi — this is ${biz}. Looks like we just missed each other. Reply here with what you need and a good time, or call back any time and I'll pick up: ${mine}. Reply STOP to opt out.`;
+              if (offerCall) {
+                // The offer is recorded so a "YES" has something to attach to and
+                // the consent evidence names exactly what was offered.
+                db.addCallback(call.accountId, { source: 'missed-call', name: '', phone: from, phoneKey: suppress.phoneKey(from), need: '',
+                  status: 'offered', offerText: body, callSid: sid, profileId: call.profile && call.profile.id || '' });
+              }
               notify.sendSMS(from, body, mine).then((r) => {
-                if (r && r.ok) { stats.markTexted(call.accountId, from); db.logActivity(call.accountId, { agent: 'VOICE', msg: `Missed-call text sent to ${from}` }); }
+                if (r && r.ok) { stats.markTexted(call.accountId, from); db.logActivity(call.accountId, { agent: 'VOICE', msg: `Missed-call text sent to ${from}${offerCall ? ' (offered a call-back)' : ''}` }); }
                 else db.logActivity(call.accountId, { agent: 'VOICE', msg: `Missed-call text to ${from} failed: ${(r && r.error) || 'unknown'}` });
               }).catch(() => {});
             }
@@ -2407,6 +2570,43 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const est = { note: 'estimateCost() assumes: phone $0.014/min, speech recognition $0.02 per turn, TTS $0.013/100 chars generative or $0.0032 neural, AI $0.006/turn, recording $0.0025/min. Twilio\'s advertised per-minute rate is the phone line only; speech-to-text and text-to-speech are ~80% of a real call.' };
           return json(res, { start, end, ...sum, diagnostics: diag, estimateAssumptions: est, rawCategories: rows.filter((r) => r.price).map((r) => ({ category: r.category, usage: r.usage, unit: r.usageUnit, price: r.price })).sort((a, b) => b.price - a.price) });
         } catch (e) { return json(res, { error: e.message }, 502); }
+      }
+
+      // ---- CALL-BACKS (the customer's view) ----
+      if (p === '/api/callbacks' && req.method === 'GET') {
+        const slug = callback.ensureFormSlug(account);
+        const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+        const rows = db.getCallbacks(acc, 100).map((c) => ({ id: c.id, at: c.at, source: c.source, name: c.name, phone: c.phone, need: c.need,
+          status: c.status, note: c.note || '', dueAt: c.dueAt || '', calledAt: c.calledAt || '', basis: c.basis || '', consentAt: c.consentAt || '' }));
+        const vc = account.voice || {};
+        return json(res, { formUrl: `${base}/f/${slug}`, embed: `<iframe src="${base}/f/${slug}" style="width:100%;max-width:480px;height:640px;border:0" title="Request a call"></iframe>`,
+          callBackMissed: vc.callBackMissed === true, hours: { from: callback.EARLIEST_HOUR, to: callback.LATEST_HOUR }, tz: voice.tzFor(account),
+          voiceOk: plans.voiceAllowed(account, stripe.isOwner(account)), hasNumber: !!(vc.number || (stripe.isOwner(account) && process.env.TWILIO_PHONE_NUMBER)),
+          rows });
+      }
+      if (p === '/api/callbacks/settings' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const vc = account.voice || {};
+        db.updateAccount(acc, { voice: { ...vc, callBackMissed: !!f.callBackMissed } });
+        db.logActivity(acc, { agent: 'VOICE', msg: `Missed-call call-back offer ${f.callBackMissed ? 'ON' : 'off'}` });
+        return json(res, { ok: true });
+      }
+      // The owner rings back a caller who LEFT their number, about their own
+      // enquiry. Creates the record with what we rely on and dials now.
+      if (p === '/api/callbacks/call' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        let rec = null;
+        if (f.id) rec = db.getCallbacks(acc, 500).find((c) => c.id === f.id) || null;
+        if (!rec && f.phone) {
+          const e164 = voice.toE164(f.phone);
+          if (!e164) return json(res, { error: 'That is not a valid phone number.' }, 400);
+          rec = db.addCallback(acc, { source: 'owner', name: String(f.name || '').slice(0, 80), phone: e164, phoneKey: suppress.phoneKey(e164), need: String(f.need || '').slice(0, 400),
+            consent: true, consentAt: f.leftAt || db.nowISO(), consentText: String(f.basis || 'Left their number with the business and asked to be contacted').slice(0, 300), consentVia: 'owner' });
+        }
+        if (!rec) return json(res, { error: 'Nothing to call.' }, 400);
+        const r = await placeCallback(rec, { by: 'owner' });
+        if (!r.ok) return json(res, { error: r.reason, queued: !!r.queued, dueAt: r.dueAt || '' }, r.queued ? 202 : 400);
+        return json(res, { ok: true, sid: r.sid });
       }
 
       // ---- SALES REPS (owner only) ----

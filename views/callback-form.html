@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request a call from __BIZ__</title>
+<meta name="robots" content="noindex">
+<style>
+  :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b;--ok:#2f7d4f}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Iowan Old Style",Georgia,serif;background:transparent;color:var(--ink);line-height:1.5;padding:12px}
+  .card{max-width:440px;margin:0 auto;background:var(--paper2);border:1px solid var(--line);border-radius:12px;padding:22px 20px}
+  h1{font-size:21px;letter-spacing:-.3px;margin-bottom:4px}
+  .sub{color:var(--ink2);font-size:14px;margin-bottom:16px}
+  label{display:block;font-size:13px;color:var(--ink2);margin:10px 0 4px}
+  input,textarea{width:100%;font:inherit;font-size:15px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  textarea{min-height:70px;resize:vertical}
+  .consent{display:flex;gap:10px;align-items:flex-start;margin:14px 0 8px;padding:12px;background:#fff;border:1px solid var(--line);border-radius:8px;font-size:12.5px;color:var(--ink2);line-height:1.5}
+  .consent input{width:18px;height:18px;margin-top:2px;flex:none}
+  button{width:100%;margin-top:12px;font:inherit;font-size:16px;font-weight:700;padding:13px;border-radius:8px;border:1px solid var(--red);background:var(--red);color:#fff;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .fine{font-size:12px;color:var(--ink2);margin-top:10px;text-align:center}
+  .done{text-align:center;padding:14px 0}
+  .done .big{font-size:22px;font-weight:700;color:var(--ok);margin-bottom:6px}
+  .err{background:#fbeceb;border:1px solid #f0b8b3;color:#8a1f15;border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:10px}
+  .hp{position:absolute;left:-9999px;top:-9999px}
+</style>
+</head>
+<body>
+<div class="card">
+  <!--DONE-->
+  <div id="formwrap" __HIDE_FORM__>
+    <h1>Get a call from __BIZ__</h1>
+    <div class="sub">Leave your number and what you need. __WHO__ will ring you back — usually within a minute during business hours.</div>
+    <!--ERR-->
+    <form method="POST" action="__ACTION__" id="f">
+      <label for="name">Your name</label>
+      <input id="name" name="name" required maxlength="80" autocomplete="name" value="__NAME__">
+      <label for="phone">Best number to call</label>
+      <input id="phone" name="phone" type="tel" required maxlength="24" autocomplete="tel" inputmode="tel" placeholder="(555) 555-0123" value="__PHONE__">
+      <label for="need">What do you need? <span style="font-weight:400">(optional)</span></label>
+      <textarea id="need" name="need" maxlength="400" placeholder="e.g. Water heater's leaking, need someone this week">__NEED__</textarea>
+      <div class="hp" aria-hidden="true"><label>Leave this empty<input name="website" tabindex="-1" autocomplete="off"></label></div>
+      <label class="consent"><input type="checkbox" name="consent" value="1" required id="consent">
+        <span id="consentText">__CONSENT__</span></label>
+      <input type="hidden" name="consentText" id="consentTextField" value="__CONSENT_ATTR__">
+      <button type="submit" id="go">Call me back →</button>
+      <div class="fine">Calls go out between __EARLIEST__am and __LATEST__pm __TZ_LABEL__. Ask outside those hours and we'll call first thing.</div>
+    </form>
+  </div>
+</div>
+<script>
+// Keep the consent wording the user actually saw in sync with what we store,
+// including the number they typed -- the stored text names that number.
+(function(){
+  var ph=document.getElementById('phone'), ct=document.getElementById('consentText'), cf=document.getElementById('consentTextField');
+  if(!ph||!ct||!cf)return;
+  var tpl=ct.textContent;
+  function upd(){var v=ph.value.trim();var t=tpl.replace(/the number I provided|\+?[\d\s().-]{7,}/,v||'the number I provided');ct.textContent=t;cf.value=t;}
+  ph.addEventListener('input',upd);
+  document.getElementById('f').addEventListener('submit',function(){var b=document.getElementById('go');b.disabled=true;b.textContent='Sending…';});
+})();
+</script>
+</body></html>
