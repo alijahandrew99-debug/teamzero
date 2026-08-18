@@ -1406,9 +1406,18 @@ async function loadRealBill(){
     const r=await fetch('/api/admin/spend?days=30');const d=await r.json();
     if(d.error){el.textContent='Twilio ledger: '+d.error;return;}
     const top=(d.buckets||[]).slice(0,4).map(b=>`${esc(b.name)} $${b.price.toFixed(2)} (${b.share}%)`).join(' · ');
+    // The four numbers the margin model hangs on, read off the real bill.
+    const checks=((d.diagnostics||{}).checks||[]).map(c=>{
+      const mark=c.ok===false?'⚠':(c.ok===true?'✓':'·');
+      const col=c.ok===false?'var(--red)':(c.ok===true?'var(--ok)':'var(--ink2)');
+      return `<div style="margin-top:3px;color:${col}"><b>${mark} ${esc(c.q)}:</b> ${esc(c.a)}`
+        +(c.action?`<div style="color:var(--ink2);margin-left:14px">→ ${esc(c.action)}</div>`:'')+`</div>`;
+    }).join('');
     el.innerHTML=`<b>Twilio billed (last 30 days):</b> $${(d.total||0).toFixed(2)} across ${d.voiceMinutes||0} talk-min`
       +(d.perMinute!=null?` = <b>$${d.perMinute.toFixed(3)}/min all-in</b>`:'')
-      +(top?`<br><span style="font-size:12px">${top}</span>`:'');
+      +(top?`<br><span style="font-size:12px">${top}</span>`:'')
+      +(checks?`<div style="margin-top:8px;padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px;font-size:12.5px">
+          <b style="color:var(--ink)">What the bill says about our cost model</b>${checks}</div>`:'');
   }catch(e){el.textContent='Twilio ledger unavailable: '+e.message;}
 }
 async function loadCalls(){

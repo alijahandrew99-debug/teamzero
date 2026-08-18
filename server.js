@@ -1407,6 +1407,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             turns: call.turns.length,
             estCost: voice.estimateCost({ durationSec: dur, turns: call.turns.length,
               chars: call.turns.filter((t) => t.who !== 'caller').reduce((n, t) => n + (t.text || '').length, 0),
+              direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
               tier: /Generative|Chirp3/.test(voice.voiceFor(call.account)) ? 'generative' : 'neural' }) });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
           hooks.emit(call.account, 'call.completed', { callSid: sid, direction: call.direction, from: call.from || params.From || '', to: call.to || params.To || '',
@@ -2328,9 +2329,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         try {
           const rows = await spend.usageRecords({ start, end });
           const sum = spend.summarise(rows);
+          const diag = spend.diagnose(rows, sum);
           // Compare against what we THINK it costs, so the gap is visible.
           const est = { note: 'estimateCost() assumes: phone $0.014/min, speech recognition $0.02 per turn, TTS $0.013/100 chars generative or $0.0032 neural, AI $0.006/turn, recording $0.0025/min. Twilio\'s advertised per-minute rate is the phone line only; speech-to-text and text-to-speech are ~80% of a real call.' };
-          return json(res, { start, end, ...sum, estimateAssumptions: est, rawCategories: rows.filter((r) => r.price).map((r) => ({ category: r.category, usage: r.usage, unit: r.usageUnit, price: r.price })).sort((a, b) => b.price - a.price) });
+          return json(res, { start, end, ...sum, diagnostics: diag, estimateAssumptions: est, rawCategories: rows.filter((r) => r.price).map((r) => ({ category: r.category, usage: r.usage, unit: r.usageUnit, price: r.price })).sort((a, b) => b.price - a.price) });
         } catch (e) { return json(res, { error: e.message }, 502); }
       }
 
