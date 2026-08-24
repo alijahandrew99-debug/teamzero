@@ -1328,7 +1328,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // read at 7am. The on-call list falls back to transferTo so existing
           // customers keep working unchanged.
           const chain = (Array.isArray(vc.onCall) && vc.onCall.length ? vc.onCall : [vc.transferTo]).map((n) => voice.toE164(n)).filter(Boolean);
-          if (!chain.length) return xml(res, voice.sayAndGather("There's nobody free right this second, but I can take a message. What's the best number for you?", base + '/voice/turn', voice.voiceFor(call.account)));
+          if (!chain.length) {
+            // No transfer number configured. On a CUSTOMER's line that is a
+            // take-a-message moment. On the DEMO line it was the single worst
+            // moment of the whole pitch: a prospect asks for a person and the
+            // showcase says "nobody's free" — sounding exactly like the
+            // voicemail hell they're trying to escape. On the demo, the honest
+            // answer IS the sales pitch: on your line, this rings YOUR phone.
+            const line = voice.demoModeFor(call.account)
+              ? "Good question — on your business's line, this is the moment I'd patch you straight through to the owner's cell, or walk down an on-call list until a real person picks up. I'm on the demo number, so there's nobody behind me to ring — but that transfer is exactly what your customers would get. Want me to show you the booking side instead?"
+              : "There's nobody free right this second, but I can take a message and make sure it gets to them. What's the best number for you?";
+            return xml(res, voice.sayAndGather(line, base + '/voice/turn', voice.voiceFor(call.account)));
+          }
           call.dialChain = chain; call.dialIdx = 0;
           const to = chain[0];
           const isEmergency = call.urgency === 'emergency';
