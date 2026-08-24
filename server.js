@@ -1261,11 +1261,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // the agent said, with barge-in OFF so it cannot be clipped again —
           // and every later reply on this call also plays uninterruptible,
           // via the noisy flag the call now carries.
-          if (rawHeard && (call.noiseHits || 0) >= 1) {
+          // Second noise event or later ONLY. The first low-confidence hit is
+          // as likely to be the caller's own voice on a speakerphone as a TV,
+          // and replaying a sentence at someone who just spoke reads as the
+          // agent glitching. One miss gets the gentle nudge below; a PATTERN
+          // of noise gets the resume -- worded like a person picking their
+          // thread back up, never like a machine announcing a retry.
+          if (rawHeard && (call.noiseHits || 0) >= 2) {
             const lastAgent = [...call.turns].reverse().find((t) => t.who === 'agent' && !/^\[system/.test(t.text || ''));
             if (lastAgent && call.replayAt !== call.turns.length) {
               call.replayAt = call.turns.length;
-              return xml(res, voice.sayAndGather("Sorry, it's a bit loud on the line — let me say that again. " + lastAgent.text,
+              return xml(res, voice.sayAndGather("Sorry, it's a little loud — as I was saying: " + lastAgent.text,
                 base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account), { noisy: true }));
             }
           }
@@ -1338,13 +1344,23 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // is recognised by pendingThink + an empty SpeechResult, and skips the
         // guards above (its limits were checked when the real turn arrived).
         const thinkWrapped = voice.think(call, heard).then((v) => ({ v }), (err) => ({ err }));
-        const winner = await Promise.race([thinkWrapped, new Promise((r2) => setTimeout(() => r2(null), 700))]);
+        // 1200ms, raised from 700: at 700 the ack fired on nearly every turn,
+        // so every answer opened with a canned "Okay." -- and the model often
+        // opened with its own "okay", doubling up into something that sounded
+        // broken. Now only a genuinely slow turn gets bridged, the bridge
+        // SAYS something (a salesperson fills a pause with substance, not a
+        // murmur), and it lands in the transcript so the model continues the
+        // thread instead of acknowledging twice.
+        const winner = await Promise.race([thinkWrapped, new Promise((r2) => setTimeout(() => r2(null), 1200))]);
         let raced;
         if (!winner) {
           call.pendingThink = thinkWrapped;
-          const ACKS = ['Mm-hmm.', 'Okay.', 'Got it.', 'Sure.', 'Right.'];
           const ack = /book|appoint|schedul|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|available|opening|o'?clock/i.test(heard)
-            ? 'Let me check the diary.' : ACKS[call.turns.length % ACKS.length];
+            ? "Let me look at the diary for you."
+            : /price|cost|how much|charge|expensive|month/i.test(heard)
+              ? "Good question."
+              : "One sec.";
+          call.turns.push({ who: 'agent', text: ack });
           return xml(res, voice.twiml(voice.say(ack, voice.voiceFor(call.account)) + `<Redirect method="POST">${voice.esc(base + '/voice/turn')}</Redirect>`));
         }
         raced = winner;
