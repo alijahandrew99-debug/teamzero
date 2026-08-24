@@ -1221,12 +1221,29 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (p === '/voice/turn') {
         const call = voice.getCall(sid);
         if (!call) return xml(res, voice.sayAndHangup("Sorry, we got cut off there. Give us a call back?", call && call.account ? voice.voiceFor(call.account) : undefined));
+        // The ack's redirect leg: pendingThink set and no new speech means
+        // Twilio has just finished playing the acknowledgment and come back
+        // for the real answer. Skip the input guards — this request carries
+        // no input, and limits were checked when the caller's turn arrived.
+        let out = null;
+        if (call.pendingThink && !(params.SpeechResult || '').trim()) {
+          const pending = call.pendingThink; call.pendingThink = null;
+          const r = await pending;
+          if (r.err) {
+            db.logActivity(call.accountId, { agent: 'VOICE', msg: 'AI error mid-call: ' + r.err.message });
+            db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ai-error', transcript: call.turns });
+            return xml(res, voice.sayAndHangup("Something's glitching on my end - sorry. I'll get someone to call you back.", voice.voiceFor(call.account)));
+          }
+          out = r.v;
+        }
+        if (out === null) {
         // Twilio scores every transcription 0-1. Background noise — a TV, a
         // radio, traffic, someone else in the room — comes back as low-
         // confidence word salad ("um the the yeah"), and treating it the same
         // as a clear sentence made the agent answer things nobody said. Below
         // the floor it is treated as silence, so the caller gets the patient
         // "take your time" instead of a reply to the television.
+        call.pendingThink = null;
         const rawHeard = (params.SpeechResult || '').trim();
         const conf = params.Confidence !== undefined ? Number(params.Confidence) : NaN;
         const heard = voice.isNoise(rawHeard, conf) ? '' : rawHeard;
@@ -1236,6 +1253,22 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
 
         if (!heard) {
+          // Background noise doesn't just garble input — with barge-in on, it
+          // CUTS THE AGENT OFF mid-sentence, and the old response ("take your
+          // time...") abandoned the clipped sentence entirely. That is the
+          // "it stops talking when there's noise" experience. Now the first
+          // noise event on a turn finishes the thought: repeat the last thing
+          // the agent said, with barge-in OFF so it cannot be clipped again —
+          // and every later reply on this call also plays uninterruptible,
+          // via the noisy flag the call now carries.
+          if (rawHeard && (call.noiseHits || 0) >= 1) {
+            const lastAgent = [...call.turns].reverse().find((t) => t.who === 'agent' && !/^\[system/.test(t.text || ''));
+            if (lastAgent && call.replayAt !== call.turns.length) {
+              call.replayAt = call.turns.length;
+              return xml(res, voice.sayAndGather("Sorry, it's a bit loud on the line — let me say that again. " + lastAgent.text,
+                base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account), { noisy: true }));
+            }
+          }
           call.silence = (call.silence || 0) + 1;
           // Three strikes, not two: an empty gather usually means they were
           // still thinking, not that the line is dead, and hanging up on
@@ -1296,12 +1329,32 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           call.closing = true;   // tell the model: they're buying — close, don't chat
         }
 
-        let out;
-        try { out = await voice.think(call, heard); }
-        catch (e) {
+        // LATENCY: the model races a 700ms timer. A fast reply goes straight
+        // out, exactly as before. A slow one no longer means dead air — the
+        // caller hears a short human acknowledgment ("Mm-hmm." / "Let me check
+        // the diary.") IMMEDIATELY, and Twilio redirects back here while the
+        // model keeps thinking, so the thinking overlaps the acknowledgment
+        // and the round-trip instead of stacking after them. The redirect leg
+        // is recognised by pendingThink + an empty SpeechResult, and skips the
+        // guards above (its limits were checked when the real turn arrived).
+        const thinkWrapped = voice.think(call, heard).then((v) => ({ v }), (err) => ({ err }));
+        const winner = await Promise.race([thinkWrapped, new Promise((r2) => setTimeout(() => r2(null), 700))]);
+        let raced;
+        if (!winner) {
+          call.pendingThink = thinkWrapped;
+          const ACKS = ['Mm-hmm.', 'Okay.', 'Got it.', 'Sure.', 'Right.'];
+          const ack = /book|appoint|schedul|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|available|opening|o'?clock/i.test(heard)
+            ? 'Let me check the diary.' : ACKS[call.turns.length % ACKS.length];
+          return xml(res, voice.twiml(voice.say(ack, voice.voiceFor(call.account)) + `<Redirect method="POST">${voice.esc(base + '/voice/turn')}</Redirect>`));
+        }
+        raced = winner;
+        if (raced.err) {
+          const e = raced.err;
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'AI error mid-call: ' + e.message });
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'ai-error', transcript: call.turns });
           return xml(res, voice.sayAndHangup("Something's glitching on my end - sorry. I'll get someone to call you back.", call && call.account ? voice.voiceFor(call.account) : undefined));
+        }
+        out = raced.v;
         }
         call.turns.push({ who: 'agent', text: out.say });
         db.saveCall(call.accountId, { sid, transcript: call.turns });
@@ -1338,7 +1391,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             const line = voice.demoModeFor(call.account)
               ? "Good question — on your business's line, this is the moment I'd patch you straight through to the owner's cell, or walk down an on-call list until a real person picks up. I'm on the demo number, so there's nobody behind me to ring — but that transfer is exactly what your customers would get. Want me to show you the booking side instead?"
               : "There's nobody free right this second, but I can take a message and make sure it gets to them. What's the best number for you?";
-            return xml(res, voice.sayAndGather(line, base + '/voice/turn', voice.voiceFor(call.account)));
+            return xml(res, voice.sayAndGather(line, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account), { noisy: (call.noiseHits || 0) >= 1 }));
           }
           call.dialChain = chain; call.dialIdx = 0;
           const to = chain[0];
@@ -1375,6 +1428,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
               return xml(res, voice.sayAndGather(
                 `Ah — that slot's actually just been taken. What else works for you? I can look at either side of it.`,
                 base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account),
+                { noisy: (call.noiseHits || 0) >= 1 },
               ));
             }
           }
@@ -1548,6 +1602,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             : "Sorry — couldn't get hold of anyone just then. Let me take your number and what it's about, and I'll have someone call you straight back.",
           base + '/voice/turn',
           call && call.account ? voice.voiceFor(call.account) : undefined,
+          call ? voice.hintsFor(call.profile, call.account) : '',
+          { noisy: !!(call && (call.noiseHits || 0) >= 1) },
         ));
       }
 
