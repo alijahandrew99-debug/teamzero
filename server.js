@@ -2821,6 +2821,13 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (f.agreementSigned !== undefined) patch.agreementSignedAt = f.agreementSigned ? db.nowISO() : '';
         if (f.w9Received !== undefined) patch.w9ReceivedAt = f.w9Received ? db.nowISO() : '';
         if (f.payoutMethod !== undefined) patch.payoutMethod = String(f.payoutMethod || '');
+        // Per-rep commission rate, as a percentage. Bounded hard: below 5% is
+        // a typo, above 70% is a mistake you would not survive.
+        if (f.ratePct !== undefined) {
+          const v = Number(f.ratePct);
+          if (!(v >= 5 && v <= 70)) return json(res, { error: 'Rate must be between 5 and 70 percent.' }, 400);
+          patch.rateBps = Math.round(v * 100);
+        }
         if (f.notes !== undefined) patch.notes = String(f.notes || '');
         const r = reps.updateRep(f.id, patch);
         if (!r) return json(res, { error: 'No such rep.' }, 404);

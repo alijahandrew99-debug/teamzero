@@ -1656,6 +1656,7 @@ async function loadReps(){
           <label class="muted" style="font-size:12.5px"><input type="checkbox" ${r.agreementSignedAt?'checked':''} onchange="repSet('${r.id}','agreementSigned',this.checked)" style="width:auto"> agreement signed</label>
           <label class="muted" style="font-size:12.5px"><input type="checkbox" ${r.w9ReceivedAt?'checked':''} onchange="repSet('${r.id}','w9Received',this.checked)" style="width:auto"> W-9 on file</label>
           <input placeholder="payout method" value="${esc(r.payoutMethod||'')}" onchange="repSet('${r.id}','payoutMethod',this.value)" style="max-width:150px;margin:0;font-size:12.5px">
+          <label class="muted" style="font-size:12.5px">rate % <input type="number" min="5" max="70" value="${(r.rateBps||3000)/100}" onchange="repSet('${r.id}','ratePct',this.value)" style="width:64px;margin:0 0 0 4px;font-size:12.5px" title="This rep's commission on collected revenue for an account's first 24 months. Default 30."></label>
           <button class="sm ${r.blocked||r.payableCents<=0?'ghost':'red'}" ${r.blocked||r.payableCents<=0?'disabled':''} onclick="repPay('${r.id}')">Mark $${(r.payableCents/100).toFixed(2)} paid</button>
           ${r.status==='active'?`<button class="sm ghost" onclick="repSet('${r.id}','status','inactive')">Deactivate</button>`:`<button class="sm ghost" onclick="repSet('${r.id}','status','active')">Reactivate</button>`}
           <button class="sm ghost" style="color:var(--red)" onclick="repDelete('${r.id}')">Delete</button>
