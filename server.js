@@ -1356,7 +1356,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const elapsedSec = Math.round((Date.now() - call.startedAt) / 1000);
         if (elapsedSec > LIM.seconds) {
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'time-limit', transcript: call.turns,
-            durationSec: elapsedSec, estCost: voice.estimateCost({ durationSec: elapsedSec, turns: call.turns.length }) });
+            durationSec: elapsedSec, estCost: voice.estimateCost({ durationSec: elapsedSec, turns: call.turns.filter((t) => t.who === 'caller').length }) });
           return xml(res, voice.sayAndHangup("I've got to run, but someone will follow up with you. Thanks for your time.", call && call.account ? voice.voiceFor(call.account) : undefined));
         }
         // Count the caller's turns, not every utterance — an exchange is a
@@ -1750,11 +1750,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
               }).catch(() => {});
             }
           } catch (e) { db.logActivity(call.accountId, { agent: 'VOICE', msg: `Text-back error: ${e.message}` }); }
+          // Twilio bills ONE speech recognition per CALLER turn. Passing
+          // call.turns.length -- caller + agent + bridge lines together --
+          // inflated the recognition and AI lines ~2x, and the owner read the
+          // inflated number as the real bill. Chars stay agent-side (that is
+          // what TTS billed) minus the [system: notes nobody ever spoke.
+          const billableTurns = call.turns.filter((t) => t.who === 'caller').length;
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
-            turns: call.turns.length,
-            estCost: voice.estimateCost({ durationSec: dur, turns: call.turns.length,
-              chars: call.turns.filter((t) => t.who !== 'caller').reduce((n, t) => n + (t.text || '').length, 0),
+            turns: billableTurns,
+            estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns,
+              chars: call.turns.filter((t) => t.who !== 'caller' && !/^\[system/.test(t.text || '')).reduce((n, t) => n + (t.text || '').length, 0),
               direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
               tier: /Generative|Chirp3/.test(voice.voiceFor(call.account)) ? 'generative' : 'neural' }) });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'Call ' + params.CallStatus + ' (' + (params.CallDuration || 0) + 's)' });
@@ -2378,6 +2384,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         } catch (e) { return json(res, { error: e.message }, 502); }
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
+        // A call can be orphaned mid-flight -- a deploy restarts the process,
+        // the in-memory call map empties, and the status callback finds
+        // nothing to complete -- leaving a row frozen at "in-progress"
+        // forever. Twilio ended the real call long ago; only our label is
+        // stuck. Sweep anything still "live" after 2 hours.
+        const LIVE = ['queued', 'ringing', 'initiated', 'in-progress'];
+        for (const c of db.getCalls(acc, 50)) {
+          if (LIVE.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
+            db.saveCall(acc, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
+          }
+        }
         const rows = db.getCalls(acc, 50);
         // estCost is OUR cost of goods, not the customer's. Someone paying
         // $399 who can see a call cost us 62 cents will price the product for
