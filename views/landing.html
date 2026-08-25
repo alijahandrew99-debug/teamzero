@@ -21,7 +21,12 @@
 <meta name="twitter:image" content="https://dawnpipe.com/og.png?v=6">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#c02a1b">
+<!-- The .ico fallback matters beyond old browsers: Google's favicon crawler
+     and Safari don't take the animated/SVG icon, and the search-results logo
+     comes from exactly this 48x48 file. -->
+<link rel="icon" href="/favicon.ico" sizes="48x48">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
+__GSC_META__
 <link rel="shortcut icon" href="/favicon.ico?v=3">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Dawnpipe",
@@ -29,6 +34,19 @@
  "description":"AI receptionist and sales team for small businesses: answers missed calls, books appointments, finds verified leads and writes follow-up outreach.",
  "url":"https://dawnpipe.com/",
  "offers":{"@type":"AggregateOffer","priceCurrency":"USD","lowPrice":"99","highPrice":"1499","offerCount":"5"}}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Organization","name":"Dawnpipe",
+ "url":"https://dawnpipe.com/",
+ "logo":"https://dawnpipe.com/apple-touch-icon.png",
+ "email":"support@dawnpipe.com",
+ "founder":{"@type":"Person","name":"Alijah Skinner"},
+ "address":{"@type":"PostalAddress","addressRegion":"IL","addressCountry":"US"},
+ "sameAs":[]}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","name":"Dawnpipe",
+ "url":"https://dawnpipe.com/"}
 </script>
 <style>
   :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b}
@@ -289,7 +307,7 @@ __PHONE_TIER_BLOCK__
   <b>Dawnpipe</b> — wake up to a full pipeline.<br>
   Built and run by Alijah Skinner · Illinois, USA<br>
   Questions? Email <a href="mailto:support@dawnpipe.com">support@dawnpipe.com</a> or call <a href="tel:__DEMO_TEL__">__DEMO_NUM__</a> — yes, the AI answers.<br>
-  <a href="/login">Log in</a> · <a href="/signup">Get started</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a><br>
+  <a href="/login">Log in</a> · <a href="/signup">Get started</a> · <a href="/about">About</a> · <a href="/automate-your-business-with-ai">Guide: automating your business with AI</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a><br>
   <span style="font-size:12px">© 2026 Dawnpipe · Payments processed by Stripe · Every email verified before it is saved</span>
 </div></footer>
 </body>

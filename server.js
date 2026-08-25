@@ -789,6 +789,14 @@ function canManageBilling(account) {
   return stripe.isPaid(account) || stripe.DUNNING.includes(account.subStatus);
 }
 
+// Google Search Console ownership tag. Set GOOGLE_SITE_VERIFICATION in the
+// environment to the content value GSC gives you ("google-site-verification:
+// <value>" — just the value part) and every marketing page carries the meta
+// tag. No env var, no tag — the placeholder is stripped either way.
+function gscMeta(page) {
+  const v = (process.env.GOOGLE_SITE_VERIFICATION || '').trim();
+  return page.split('__GSC_META__').join(v ? `<meta name="google-site-verification" content="${voice.esc(v)}">` : '');
+}
 function withDemoTel(page) {
   const { tel, pretty } = demoTel();
   // No line provisioned (or mid-swap): point the phone CTAs at signup instead
@@ -969,9 +977,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/sitemap.xml') {
       const site = 'https://dawnpipe.com';
+      // lastmod from the deploy: any page can have changed with a release, and
+      // a moving lastmod nudges recrawls without lying about specific pages.
+      const mod = new Date().toISOString().slice(0, 10);
       res.writeHead(200, { 'Content-Type': 'application/xml' });
       return res.end('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-        + ['/', '/signup', '/terms', '/privacy'].map((u) => `<url><loc>${site}${u}</loc></url>`).join('')
+        + ['/', '/about', '/automate-your-business-with-ai', '/signup', '/terms', '/privacy']
+          .map((u) => `<url><loc>${site}${u}</loc><lastmod>${mod}</lastmod></url>`).join('')
         + '</urlset>');
     }
 
@@ -2009,7 +2021,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         .split('__COMPLETE_MINUTES__').join(COMP.voiceMinutes.toLocaleString())
         .split('__COMPLETE_LEADS__').join(COMP.leads.toLocaleString());
       page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom).split('__ALLOWANCE_LINE__').join(allowance);
-      return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
+      return html(res, gscMeta(page).split('__FROM_PRICE__').join(plans.fromPrice()));
+    }
+    // About + the SEO guide: public trust pages. Same placeholder treatment as
+    // the landing page (demo number + Search Console tag).
+    if (req.method === 'GET' && (p === '/about' || p === '/automate-your-business-with-ai')) {
+      return html(res, gscMeta(withDemoTel(view(p === '/about' ? 'about.html' : 'guide-automate.html'))));
     }
     // Legal pages — public, and required before Stripe will approve billing.
     if (req.method === 'GET' && (p === '/terms' || p === '/privacy')) {
