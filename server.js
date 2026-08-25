@@ -871,9 +871,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/favicon.svg') {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
-      // Static fallback of the moon/sleeper/ringing-phone scene (favicon.js is
-      // the animated version) for contexts that can't run JS.
-      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="13" fill="#151228"/><circle cx="46" cy="17" r="10" fill="#f0c860"/><circle cx="41.5" cy="14" r="9.5" fill="#151228"/><rect x="6" y="42" width="52" height="17" rx="5" fill="#2a2547"/><rect x="9" y="40" width="15" height="10" rx="4" fill="#f4f1ea"/><circle cx="21" cy="44" r="6.2" fill="#e8b48f"/><rect x="26" y="43" width="31" height="13" rx="5" fill="#6b5ea8"/><g transform="rotate(12 45 34)"><rect x="37.5" y="28.5" width="15" height="11" rx="3.5" fill="#c02a1b"/><rect x="39.5" y="30.5" width="11" height="7" rx="2" fill="#ffe9a8"/></g></svg>`);
+      // Static brand mark: the red dawn (rising sun on the horizon), matching
+      // favicon.ico and the apple-touch-icon. favicon.js still animates the
+      // moon/sleeper scene in browser tabs; this is what no-JS contexts,
+      // search engines and link previews see.
+      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#c02a1b"/><path d="M138 298a118 118 0 0 1 236 0z" fill="#fbfaf6"/><rect x="85" y="298" width="342" height="44" rx="22" fill="#fbfaf6"/></svg>`);
     }
     if (req.method === 'GET' && (p === '/og.png' || p === '/apple-touch-icon.png')) {
       try {

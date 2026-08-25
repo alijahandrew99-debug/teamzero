@@ -73,7 +73,7 @@ async function get(path, type) {
     }
     if (path === '/' || path === '/about' || path === '/automate-your-business-with-ai') {
       ok(`${path} canonical present`, new RegExp('<link rel="canonical" href="https://dawnpipe\\.com' + (path === '/' ? '/' : path) + '"').test(body));
-      ok(`${path} favicon.ico linked for crawlers`, /rel="icon" href="\/favicon\.ico"/.test(body));
+      ok(`${path} favicon.ico linked for crawlers`, /rel="icon" href="\/favicon\.ico(\?[^"]*)?"/.test(body));
       ok(`${path} no leaked placeholders`, !/__[A-Z_]+__/.test(body), (body.match(/__[A-Z_]+__/) || [])[0]);
     }
     // every JSON-LD block must parse, and the expected types must be present
