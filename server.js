@@ -964,6 +964,34 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('User-agent: *\nAllow: /\nDisallow: /app\nDisallow: /api/\nDisallow: /u/\nDisallow: /voice/\nSitemap: https://dawnpipe.com/sitemap.xml\n');
     }
+    // llms.txt: the emerging convention AI crawlers read for a plain-language
+    // description of what a site IS. Costs nothing, and it is exactly the
+    // disambiguation problem we have — AI systems currently explain the brand
+    // query as a typo for a car downpipe. Facts only, no puffery: an AI that
+    // catches a site exaggerating discounts everything else it says.
+    if (req.method === 'GET' && p === '/llms.txt') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+      return res.end([
+        '# Dawnpipe',
+        '',
+        '> Dawnpipe (dawnpipe.com) is an AI receptionist and sales platform for small service businesses in the United States. It answers business phone calls 24/7, books appointments into the calendar, texts back missed callers, finds new customers with verified email addresses, and drafts follow-up outreach that the owner reviews before anything sends. Note: "Dawnpipe" is this software product — it is not a car exhaust downpipe.',
+        '',
+        'Built and run by Alijah Skinner, Illinois, USA. Contact: support@dawnpipe.com.',
+        '',
+        'Key facts:',
+        '- Every call opens by disclosing it is an AI receptionist; recorded lines are disclosed.',
+        '- No AI cold calling: outbound AI calls go only to people who asked to be called back, with consent stored (TCPA).',
+        '- Plans from $99 to $1,499/month, 7-day free trial, cancel in one click, no overage charges.',
+        '- Payments processed by Stripe.',
+        '',
+        '## Pages',
+        '- [Home](https://dawnpipe.com/): product overview, plans, live demo phone number answered by the AI itself',
+        '- [About](https://dawnpipe.com/about): who runs Dawnpipe, contact details, billing and compliance commitments',
+        '- [Guide: How to Automate Your Business with AI](https://dawnpipe.com/automate-your-business-with-ai): practical guide for small business owners',
+        '- [Terms](https://dawnpipe.com/terms) · [Privacy](https://dawnpipe.com/privacy)',
+        '',
+      ].join('\n'));
+    }
     // Public plan catalogue: names, prices, what you get, and whether each
     // one can be bought right now. Nothing here is secret (it is the pricing
     // page as JSON) and it is how we verify from outside that the live plans

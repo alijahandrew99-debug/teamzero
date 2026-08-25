@@ -89,6 +89,9 @@ async function get(path, type) {
     }
   }
 
+  const llms = await get('/llms.txt');
+  ok('llms.txt serves the AI-crawler brand description', llms.status === 200 && /AI receptionist/.test(llms.body) && /not a car exhaust downpipe/.test(llms.body));
+
   const robots = await get('/robots.txt');
   ok('robots.txt serves and allows crawling', robots.status === 200 && /Allow: \//.test(robots.body) && /Sitemap:/.test(robots.body));
   ok('robots.txt still protects the app + API', /Disallow: \/app/.test(robots.body) && /Disallow: \/api\//.test(robots.body));
