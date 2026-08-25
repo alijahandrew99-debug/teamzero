@@ -2306,7 +2306,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // Onboarding: paste a website URL → AI drafts the whole profile.
       if (p === '/api/profile/autofill' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const fields = await agents.autofillFromWebsite(f.url);
+        // f.text: the paste-it-yourself fallback for sites we cannot fetch.
+        const fields = await agents.autofillFromWebsite(f.url, f.text);
         return json(res, { fields });
       }
 

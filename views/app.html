@@ -260,6 +260,13 @@
             <button onclick="autofill()" id="autoBtn">✨ Fill it in for me</button>
           </div>
           <span class="muted" id="autoMsg"></span>
+          <!-- Last-resort import: some sites cannot be fetched at all (hard
+               firewalls, JS-only pages). Pasting beats an error every time. -->
+          <div id="autoPaste" class="hide" style="margin-top:10px">
+            <div class="muted" style="margin-bottom:6px"><b>Plan B:</b> open your website, select the text on your homepage, copy it, and paste it here — the AI drafts everything from that instead.</div>
+            <textarea id="autoPasteText" rows="4" placeholder="Paste anything about your business — your homepage text, an about page, even a flyer." style="width:100%"></textarea>
+            <button class="sm" onclick="autofillFromText()" id="autoPasteBtn" style="margin-top:6px">✨ Use this text</button>
+          </div>
         </div>
         <!-- Thirteen empty boxes is what makes this look like work. The AI can
              fill every one of them from a website, so that is the path we put
@@ -1918,8 +1925,23 @@ async function autofill(){
   if(!url)return toast('Paste your website first');
   const b=$('autoBtn');b.disabled=true;const o=b.textContent;b.textContent='Reading your site…';
   $('autoMsg').textContent='';
-  try{
-    const r=await api('/api/profile/autofill',{url});
+  try{ await runAutofill({url}); }
+  catch(e){
+    toast(e.message);$('autoMsg').textContent=e.message;
+    $('autoPaste').classList.remove('hide');   // the fetch failed — offer plan B
+  }
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function autofillFromText(){
+  const text=$('autoPasteText').value.trim();
+  if(text.length<80)return toast('Paste a bit more — a few sentences is plenty');
+  const b=$('autoPasteBtn');b.disabled=true;const o=b.textContent;b.textContent='Drafting…';
+  try{ await runAutofill({url:$('autoUrl').value.trim(),text}); $('autoPaste').classList.add('hide'); }
+  catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function runAutofill(body){
+    const r=await api('/api/profile/autofill',body);
     const f=r.fields||{};
     ['name','senderName','offer','icp','valueProp','proof','tone','cta','website','pricing','mailingAddress']
       .forEach(k=>{ const el=$('f_'+k); if(el&&f[k])el.value=f[k]; });
@@ -1935,8 +1957,6 @@ async function autofill(){
     $('autoMsg').innerHTML='Done — read it over below and change anything that isn\'t right, then hit Save.'
       +(voiceFilled?' Your phone agent\'s script was written too: <a href="#" onclick="showTab(\'voice\');return false"><b>check it on AI Answering →</b></a>':'');
     toast(voiceFilled?'Your profile and phone script are drafted — review & save':'Profile drafted from your website — review & save');
-  }catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
-  finally{b.disabled=false;b.textContent=o;}
 }
 async function saveProfile(){
   const b=$('saveBtn');b.disabled=true;
