@@ -14,6 +14,7 @@ const emailApi = require('./lib/emailapi');
 const dnsauth = require('./lib/dnsauth');
 const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
+const spam = require('./lib/spam');
 const voice = require('./lib/voice');
 const numbers = require('./lib/numbers');
 const stats = require('./lib/stats');
@@ -1139,6 +1140,33 @@ const server = http.createServer(async (req, res) => {
           ));
         }
         const agentName = vcfg.agentName || 'Sarah';
+        // SPAM SCREEN. Suspicious signals — no caller ID, a caller ID the
+        // carrier says failed verification, or a number already on a strike —
+        // get one question before the real conversation starts. A human
+        // answers it and flows straight into the normal call; a robocall
+        // plays a recording or dead air and gets hung up on in /voice/turn.
+        // Known callers (history or an existing lead) are never screened:
+        // being established outranks any signal.
+        if (vcfg.spamFilter !== false) {
+          const sig = spam.signalCheck(params);
+          const priorStrikes = spam.strikes(account.id, params.From || '');
+          const known = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
+          if ((sig.suspect || priorStrikes > 0) && !known) {
+            const esScr = voice.langFor(account) === 'es-US';
+            const scrProfile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
+            const scrLine = spam.screenLine((scrProfile && scrProfile.name) || 'us', agentName, esScr, vcfg.record !== false);
+            const scrCall = voice.startCall(sid, { accountId: account.id, account, profile: scrProfile, direction: 'inbound',
+              from: params.From || '', to: params.To || '', lead: null, leadBrief: '', callerName: '' });
+            scrCall.screening = sig.suspect ? sig.reason : 'prior spam strike';
+            scrCall.turns.push({ who: 'agent', text: scrLine });
+            voice.warmCache(scrCall).catch(() => {});
+            db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
+              profileId: (scrProfile && scrProfile.id) || '', status: 'in-progress', transcript: [] });
+            db.logActivity(account.id, { agent: 'VOICE', msg: `Screening call from ${params.From || 'unknown'} (${scrCall.screening}) before connecting` });
+            if (vcfg.record !== false) voice.startRecording(sid, base + '/voice/recording').catch(() => {});
+            return xml(res, voice.sayAndGather(scrLine, base + '/voice/turn', voice.voiceFor(account), voice.hintsFor(scrProfile, account)));
+          }
+        }
         // Transparency is mandatory: the caller is told it is an AI up front.
         // The AI + transcription disclosure is a fixed prefix the customer
         // CANNOT remove. A custom greeting used to replace the whole line and
@@ -1327,6 +1355,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             }
           }
           call.silence = (call.silence || 0) + 1;
+          // A call still in SCREENING gets a shorter leash: the question was
+          // "what's this call about?", and two silent gathers after it is a
+          // recording that already finished, or dead air. One strike; three
+          // strikes and the number is rejected before it can ring again.
+          // Real humans hesitate once — they get the same gentle nudge below.
+          if (call.screening && call.silence >= 2) {
+            call.spamCall = true;   // already struck here — /voice/status must not strike it again as dead air
+            spam.strike(call.accountId, call.from, 1, 'failed screening: ' + call.screening);
+            db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'screened-out', transcript: call.turns });
+            db.logActivity(call.accountId, { agent: 'VOICE', msg: `Screened out ${call.from || 'unknown caller'} (${call.screening}, never spoke) — not billed` });
+            return xml(res, voice.sayAndHangup("I'll let you go. Call back anytime.", voice.voiceFor(call.account)));
+          }
           // Three strikes, not two: an empty gather usually means they were
           // still thinking, not that the line is dead, and hanging up on
           // someone mid-thought is worse than waiting one more beat.
@@ -1344,6 +1384,24 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
+        // ROBOCALL TRIPWIRE. Unambiguous recorded-pitch phrases ("press 1",
+        // "your car warranty", "final notice") hang up right here, before a
+        // single AI token is spent. Two points: one detected robocall plus
+        // any other strike blocks the number outright. The call is flagged so
+        // /voice/status does not bill the customer's minutes for it — the
+        // recording "spoke", but nobody real did.
+        if (call.direction === 'inbound' && (call.account.voice || {}).spamFilter !== false
+            && spam.looksLikeRobocall(heard)) {
+          call.spamCall = true;
+          spam.strike(call.accountId, call.from, 2, 'robocall phrases: "' + heard.slice(0, 60) + '"');
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'spam', transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `Hung up on a robocall from ${call.from || 'unknown'} ("${heard.slice(0, 80)}") — not billed` });
+          return xml(res, voice.sayAndHangup("This line doesn't take solicitations. Bye now.", voice.voiceFor(call.account)));
+        }
+        // They answered the screening question like a person — screening over,
+        // and the conversation continues as if it never happened: their answer
+        // is already the first caller turn, so the AI just responds to it.
+        if (call.screening) call.screening = null;
         // They engaged. That outranks anything a drip campaign can tell us.
         if (!call.markedWarm && call.lead) {
           call.markedWarm = true;
@@ -1444,6 +1502,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         call.turns.push({ who: 'agent', text: out.say });
         db.saveCall(call.accountId, { sid, transcript: call.turns });
 
+        if (out.action === 'spam' && call.direction === 'inbound') {
+          // The model judged this a robocall or cold solicitation — it has the
+          // whole conversation, so it catches the pitches the phrase list
+          // can't. Same consequences as the tripwire: strike, no billing.
+          call.spamCall = true;
+          spam.strike(call.accountId, call.from, 2, 'AI judged it spam');
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'spam', transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `AI hung up on spam from ${call.from || 'unknown'} — not billed` });
+          return xml(res, voice.sayAndHangup(out.say || "This line doesn't take solicitations. Bye now.", voice.voiceFor(call.account)));
+        }
         if (out.action === 'dnc') {
           const num = call.direction === 'inbound' ? params.From : call.to;
           suppress.suppressPhone(call.accountId, num, 'unsubscribe', { note: 'do-not-call, asked on a call' });
@@ -1567,6 +1635,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             voice.voiceFor(call.account),
             'Someone will be in touch. Thanks for your time, and have a good one. Bye now.'));
         }
+        // "spam" on a call WE placed makes no sense — treat it as a normal end
+        // so the model can never leave an outbound call hanging in continue.
+        if (out.action === 'spam') out.action = 'end';
         if (out.action === 'end') {
           // A call that ended without a slot being agreed is NOT nothing. The
           // agent routinely takes a name and a number and says "someone will
@@ -1720,8 +1791,20 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // spam from billing, and it is the right thing to do regardless.
           const callerSpoke = (call.turns || []).some((t) => t.who === 'caller' && String(t.text || '').trim());
           const acctForBill = db.getAccount(call.accountId);
-          if (acctForBill && callerSpoke) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          // A call flagged spam had "speech" — the robocall's recording — but
+          // nobody real. It is never billed against the plan.
+          if (acctForBill && callerSpoke && !call.spamCall) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
           if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
+          // Dead air on an inbound call is a spam signal: robocall dialers
+          // probe lines and hang up. One point (block needs three) so a real
+          // customer who hung up on the greeting once or twice is never
+          // touched, and their missed-call text still goes out below.
+          if (call.direction === 'inbound' && !callerSpoke && dur >= 5 && !call.spamCall
+              && (call.account.voice || {}).spamFilter !== false) {
+            const ownLine = [(call.account.voice || {}).transferTo, ...(Array.isArray((call.account.voice || {}).onCall) ? (call.account.voice || {}).onCall : [])]
+              .some((n) => n && suppress.phoneKey(n) === suppress.phoneKey(params.From || call.from || ''));
+            if (!ownLine) spam.strike(call.accountId, params.From || call.from || '', 1, `dead air (${dur}s, no speech)`);
+          }
           // MISSED-CALL TEXT-BACK. A real person who hung up before the agent
           // got a word in -- gave up on the greeting, bad signal, changed their
           // mind -- is still a lead, and the highest-ROI capture in trades is
@@ -1736,7 +1819,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             const mine = vc.number || (stripe.isOwner(call.account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
             const isOwnLine = [vc.transferTo, ...(Array.isArray(vc.onCall) ? vc.onCall : [])].some((n) => n && suppress.phoneKey(n) === suppress.phoneKey(from));
             const bookedOrCallback = ['booked', 'callback', 'transferred'].includes(((db.getCalls(call.accountId, 50).find((c) => c.sid === sid) || {}).outcome) || '');
+            // call.screening still set means they never answered the screen —
+            // a suspected spoofed or anonymous number gets no text from us.
             if (call.direction === 'inbound' && !callerSpoke && dur >= 5 && mine && from && !isOwnLine && !bookedOrCallback
+                && !call.screening && !call.spamCall
                 && vc.textBack !== false && !suppress.isPhoneSuppressed(call.accountId, from).blocked
                 && !stats.textedToday(call.accountId, from)) {
               const biz = (call.profile && call.profile.name) || 'us';
@@ -2337,6 +2423,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           ...cur,
           enabled: f.enabled !== false,
           record: f.record !== undefined ? !!f.record : (cur.record !== undefined ? cur.record : true),
+          // Spam filter defaults ON — screening suspicious callers and hanging
+          // up on robocalls protects the customer's minutes and their patience.
+          spamFilter: f.spamFilter !== undefined ? !!f.spamFilter : (cur.spamFilter !== undefined ? cur.spamFilter : true),
           language: ['en-US', 'es-US'].includes(f.language ?? cur.language) ? (f.language ?? cur.language) : 'en-US',
           // Play-along mode for a line whose callers are prospects testing it.
           // Defaults ON for the owner's line — that IS the demo number on the
