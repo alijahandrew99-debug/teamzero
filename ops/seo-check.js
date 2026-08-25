@@ -30,6 +30,31 @@ async function get(path, type) {
 
 (async () => {
   console.log('SEO check against ' + BASE);
+
+  // DNS first — the whole site rides on the apex record, and it has already
+  // vanished once (2026-08-25: a Google Workspace setup in Namecheap knocked
+  // out the apex ALIAS; the site died by resolver-cache expiry while /health
+  // kept passing through cached DNS). Ask two public resolvers via DoH so a
+  // poisoned local cache can neither hide an outage nor fake one.
+  if (BASE.includes('dawnpipe.com')) {
+    for (const [label, url] of [
+      ['Google DNS', 'https://dns.google/resolve?name=dawnpipe.com&type=A'],
+      ['Cloudflare DNS', 'https://cloudflare-dns.com/dns-query?name=dawnpipe.com&type=A'],
+    ]) {
+      try {
+        const r = await fetch(url, { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(10000) });
+        const j = await r.json();
+        ok(`apex dawnpipe.com resolves via ${label}`, Array.isArray(j.Answer) && j.Answer.length > 0,
+          'EMPTY ANSWER — the apex DNS record is missing at Namecheap. Fix: Advanced DNS, ALIAS @ -> teamzero-2fpd.onrender.com. Site + Twilio calls die as caches expire.');
+      } catch (e) { note(`${label} DoH unreachable (${e.message}) — could not verify apex DNS`); }
+    }
+    try {
+      const r = await fetch('https://dns.google/resolve?name=www.dawnpipe.com&type=A', { signal: AbortSignal.timeout(10000) });
+      const j = await r.json();
+      ok('www.dawnpipe.com resolves', Array.isArray(j.Answer) && j.Answer.length > 0);
+    } catch (e) { note('www DNS check unreachable: ' + e.message); }
+  }
+
   const titles = new Map(), descs = new Map();
 
   for (const [path, spec] of Object.entries(PAGES)) {
