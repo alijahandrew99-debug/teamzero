@@ -3226,6 +3226,10 @@ async function refreshPrices(tag) {
         const r = await stripe.createMissingPrices();
         if (r.created.length) console.log(`  Created Stripe prices: ${r.created.map((c) => `${c.tier}=${c.priceId}`).join(', ')}${r.live ? ' (LIVE)' : ' (test)'}`);
       }
+      // Same self-heal for the dashboard's "Needs info" badge: any Dawnpipe
+      // product without a tax category gets the SaaS business-use code.
+      const taxed = await stripe.ensureTaxCodes();
+      if (taxed.length) console.log(`  Set SaaS tax category on ${taxed.length} product(s)`);
     }
   } catch (e) { console.error(`  Stripe price sync failed (${tag}): ${e.message}`); }
 }
