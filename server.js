@@ -3046,6 +3046,35 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         return json(res, { ok: true, warmup: sending.warmupStatus(warmup) });
       }
 
+      // ---- adjust every draft to one instruction ----
+      // "Make them all shorter." One click, every queued draft rewritten, and
+      // every rewritten draft goes BACK TO PENDING -- including ones already
+      // approved -- because nothing a human has not read may ever send.
+      if (p === '/api/queue/adjust' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const instruction = String(f.instruction || '').trim().slice(0, 300);
+        if (!instruction) return json(res, { error: 'Tell the team what to change first — e.g. "shorter, and lead with the free estimate".' }, 400);
+        // Bounds the spend: each rewrite is ~half a cent, so a hostile loop is
+        // the only way this costs real money, and the rate limit closes it.
+        if (rateLimited(req, 'adjust', 20, 60 * 60 * 1000)) return json(res, { error: 'That is a lot of rewriting in one hour — give it a few minutes and try again.' }, 429);
+        const prof = db.getProfile(acc, f.profileId);
+        if (!prof) return json(res, { error: 'Pick a business first.' }, 400);
+        const items = db.getQueue(acc, f.profileId).filter((q) => ['pending', 'approved'].includes(q.status)).slice(0, 60);
+        if (!items.length) return json(res, { error: 'Nothing in the queue to adjust.' }, 400);
+        let done = 0, failed = 0;
+        for (let i = 0; i < items.length; i += 6) {
+          await Promise.all(items.slice(i, i + 6).map(async (it) => {
+            try {
+              const r = await agents.adjustDraft(prof, it, instruction);
+              if (r) { db.updateQueueItem(acc, it.id, { subject: r.subject, body: r.body, status: 'pending', adjusted: instruction.slice(0, 120) }); done++; }
+              else failed++;
+            } catch { failed++; }
+          }));
+        }
+        db.logActivity(acc, { agent: 'DRAFT', profileId: prof.id, msg: `Rewrote ${done} draft(s) to: "${instruction.slice(0, 80)}"${failed ? ` (${failed} failed, left unchanged)` : ''}` });
+        return json(res, { ok: true, done, failed, total: items.length });
+      }
+
       // ---- bulk approve ----
       if (p === '/api/queue/approve-all' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));

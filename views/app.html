@@ -417,6 +417,8 @@
           <div class="body">
             <div class="row" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px dashed var(--line)">
               <button class="sm ok" onclick="approveAll()" id="apprAllBtn">✓ Approve all</button>
+              <input id="adjInstr" placeholder="Change every draft at once — e.g. shorter, friendlier, mention the fall special" style="min-width:250px;margin:0;font-size:13px">
+              <button class="sm ghost" onclick="adjustAll()" id="adjBtn">✏️ Adjust all drafts</button>
               <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✓✉ Approve &amp; send all</button>
               <span class="muted" id="sendInfo"></span>
             </div>
@@ -2030,6 +2032,18 @@ async function saveSmtp(){
   }catch(e){$('smMsg').textContent='';toast(e.message);}finally{b.disabled=false;b.textContent=o;}
 }
 // ---- bulk approve / send ----
+async function adjustAll(){
+  const instruction=$('adjInstr').value.trim();
+  if(!instruction)return toast('Tell the team what to change first — e.g. "shorter, and lead with the free estimate"');
+  const n=STATE.queue.filter(q=>q.profileId===pid()&&(q.status==='pending'||q.status==='approved')).length;
+  if(!n)return toast('Nothing in the queue to adjust.');
+  const b=$('adjBtn');b.disabled=true;const o=b.textContent;b.textContent='Rewriting '+n+'…';
+  try{
+    const r=await api('/api/queue/adjust',{profileId:pid(),instruction});
+    toast('Rewrote '+r.done+' of '+r.total+' drafts'+(r.failed?' ('+r.failed+' left unchanged)':'')+'. All back in the queue for your approval — read the new wording before sending.');
+    $('adjInstr').value='';await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+}
 async function approveAll(){
   const b=$('apprAllBtn');b.disabled=true;
   try{const r=await api('/api/queue/approve-all',{profileId:pid()});toast(`Approved ${r.approved}`);await load();}
