@@ -554,15 +554,14 @@
   <div class="card">
     <h2><span class="agent">YOUR NUMBER</span> The line your AI answers</h2>
     <div class="body">
-      <!-- Which business this phone line answers AS, front and center. It was
-           only settable via a dropdown buried in the script card below, so
-           adding a second business looked like the phone was stuck on the
-           first one. Saves the moment you pick — no separate save button. -->
+      <!-- The tab follows the business selected in the header, exactly like
+           the Sales Desk: its own number, script and settings. No second
+           dropdown to disagree with the first. -->
       <div class="row" style="align-items:center;gap:8px;margin-bottom:10px">
-        <b>This line answers for:</b>
-        <select id="v_profileTop" onchange="switchVoiceBusiness()" style="max-width:280px;margin:0"></select>
-        <span class="muted">Greeting, script and facts all come from this business.</span>
+        <b>📞 Phone setup for: <span id="vBizName">—</span></b>
+        <span class="muted">Switch businesses with the dropdown at the top — each one has its own line and script.</span>
       </div>
+      <div id="vMoveNum"></div>
       <div id="vStatus"></div>
       <!-- This card used to be Twilio setup instructions. Nobody buying an AI
            receptionist should be told to open a telephony console and paste
@@ -639,7 +638,6 @@
         <div class="field"><label>Language</label><div class="hint">Spanish lines answer in Spanish from the first word — greeting, disclosure, the whole conversation — with a Spanish voice. English lines will still switch to Spanish if a caller opens in it.</div>
           <select id="v_language"><option value="en-US">English</option><option value="es-US">Español</option></select></div>
         <div class="field"><label>Voice</label><div class="hint">This is the voice your callers hear. Pick the one that sounds like your business — you can change it any time, and the change takes effect on the very next call.</div><select id="v_ttsVoice"></select></div>
-        <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
       </div>
       <div class="field"><label>After the intro <span class="muted">(optional)</span></label><div class="hint">Every call opens with "Hi, this is [name], an AI assistant for [business]. Just so you know, this call may be transcribed." — that part is fixed, it's what keeps you on the right side of call-recording law. Whatever you type here is said right after it. Leave blank for "What can I do for you?"</div><input id="v_greeting" placeholder="e.g. Thanks for calling — what's going on?"></div>
       <div class="two">
@@ -843,8 +841,20 @@ function checkoutReturn(){
     }
   },2000);
 }
+// Voice config is PER BUSINESS: each profile carries its own resolved voice
+// object from the server. STATE.voice is the working copy for the business
+// currently selected in the header — recomputed here on every load and every
+// business switch, so the AI Answering tab always shows the business you are
+// looking at, exactly like the Sales Desk does.
+function syncVoiceState(){
+  const meta=STATE.voiceMeta||{};
+  const p=curProfile()||{};
+  STATE.voice={...(p.voice||{}),configured:meta.configured,catalogue:meta.catalogue,defaultVoice:meta.defaultVoice,envNumber:meta.envNumber,webhookBase:meta.webhookBase};
+}
 async function load(){
   STATE=await api('/api/state');
+  STATE.voiceMeta=STATE.voice||{};   // server sends account-level meta under .voice
+  syncVoiceState();
   $('lockbar').style.display=STATE.locked?'':'none';
   $('ownerBadge').style.display=STATE.isOwner?'':'none';
   $('tabRepsBtn').classList.toggle('hide',!STATE.isOwner);
@@ -903,6 +913,7 @@ function applyLockbar(){
   const cur=sel.value||readUI().profileId||'';
   sel.innerHTML=STATE.profiles.map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
   if(cur&&STATE.profiles.some(p=>p.id===cur))sel.value=cur;
+  syncVoiceState();   // the select is now populated — resolve THIS business's phone config
   // nudge new users to fill in their business
   $('bizDot').classList.toggle('hide',!isStarter(curProfile()));
   fillForm();
@@ -1012,7 +1023,7 @@ const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta'
 // AI-autofilled fields before they could be saved. Once anything is edited we
 // leave the forms alone until it is saved.
 let _dirty=false;
-const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_language','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_language','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice'];
 // The SENDING/schedule/data-key forms suffered the same poll-wipe as the
 // profile form: type your email, tab to the password box, and 20s later the
 // email field snapped back to the saved value — so Connect verified the new
@@ -1136,27 +1147,24 @@ function renderVoiceChrome(v){
   // them to the cheap one. Our own cost lives on the owner's spend line.
   vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}</option>`).join('');
   if(!_dirty)vs.value=v.ttsVoice||v.defaultVoice||'';
-  const sel=$('v_profileId');
-  sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
-  if(v.profileId&&!_dirty)sel.value=v.profileId;
-  // The prominent switcher at the top of the tab mirrors the same saved
-  // profileId. It reflects SAVED state always — even mid-edit — because it
-  // saves instantly itself and must never show a business the line is not
-  // actually answering for.
-  const top=$('v_profileTop');
-  if(top){
-    top.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
-    top.value=v.profileId||((STATE.profiles||[])[0]||{}).id||'';
+  if($('vBizName'))$('vBizName').textContent=(curProfile()||{}).name||'your business';
+  // No number on THIS business but another one holds a line? Offer the free
+  // move before the paid buy — most owners want their one line to follow the
+  // business they are setting up, not a second monthly rental.
+  const mv=$('vMoveNum');
+  if(mv){
+    const other=(STATE.profiles||[]).find(p=>p.id!==pid()&&p.voice&&p.voice.number);
+    mv.innerHTML=(!v.number&&other)
+      ?`<div class="okbox" style="margin-bottom:10px">${esc(other.name||'Another business')} has the number <b>${esc(other.voice.number)}</b>. <a href="#" onclick="moveNumberHere('${esc(other.id)}');return false"><b>Move it to this business</b></a> (free) — or get this business its own number below.</div>`
+      :'';
   }
 }
-async function switchVoiceBusiness(){
-  const id=$('v_profileTop').value;
+async function moveNumberHere(fromId){
   try{
-    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),profileId:id});
-    const nm=((STATE.profiles||[]).find(p=>p.id===id)||{}).name||'that business';
-    toast('The phone now answers for '+nm);
-    clearDirty();await load();renderVoice();renderNumber();
-  }catch(e){toast(e.message);renderVoiceChrome(STATE.voice||{});}
+    const r=await api('/api/voice/numbers/reassign',{toProfileId:pid(),fromProfileId:fromId||''});
+    toast('Done — '+r.number+' now answers as '+((curProfile()||{}).name||'this business'));
+    await load();renderVoice();renderNumber();
+  }catch(e){toast(e.message);}
 }
 async function saveVoice(){
   const b=$('vSaveBtn');b.disabled=true;
@@ -1165,7 +1173,7 @@ async function saveVoice(){
     // enabled:true from here meant an owner who turned answering off for a
     // shutdown, then fixed a typo in the greeting, silently had the AI start
     // taking live calls again — and the toggle still read OFF.
-    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:$('v_profileId').value,
+    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:pid(),
       greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,onCall:$('v_onCall').value,hours:$('v_hours').value,slotMinutes:$('v_slotMinutes').value,timezone:$('v_timezone').value,language:$('v_language').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
@@ -1174,13 +1182,9 @@ async function saveVoice(){
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
-// Which business the PHONE answers as — deliberately not the tab's dropdown,
-// which is a different selection and can disagree with it.
-function curProfileForVoice(){
-  const v=STATE.voice||{};
-  const ps=STATE.profiles||[];
-  return ps.find(p=>p.id===v.profileId)||ps[0]||null;
-}
+// The phone tab always shows the business selected in the header — one
+// selection, one truth, same as the Sales Desk.
+function curProfileForVoice(){return curProfile()||null;}
 // ---- your own phone line ----
 function renderNumber(){
   const v=STATE.voice||{};
@@ -1238,12 +1242,12 @@ function showFwd(k){
 }
 async function toggleRecording(){
   const on=$('v_record').checked;
-  try{await api('/api/voice/save',{record:on,enabled:((STATE.voice||{}).enabled!==false),profileId:(STATE.voice||{}).profileId||''});toast(on?'Recording on':'Recording off — transcripts only');await load();renderNumber();}
+  try{await api('/api/voice/save',{record:on,enabled:((STATE.voice||{}).enabled!==false),profileId:pid()});toast(on?'Recording on':'Recording off — transcripts only');await load();renderNumber();}
   catch(e){toast(e.message);$('v_record').checked=!on;}
 }
 async function toggleSpamFilter(){
   const on=$('v_spam').checked;
-  try{await api('/api/voice/save',{spamFilter:on,enabled:((STATE.voice||{}).enabled!==false),profileId:(STATE.voice||{}).profileId||''});toast(on?'Spam filter on — robocalls get hung up on':'Spam filter off — every call is answered normally');}
+  try{await api('/api/voice/save',{spamFilter:on,enabled:((STATE.voice||{}).enabled!==false),profileId:pid()});toast(on?'Spam filter on — robocalls get hung up on':'Spam filter off — every call is answered normally');}
   catch(e){toast(e.message);$('v_spam').checked=!on;}
 }
 async function toggleAnswering(){
@@ -1251,7 +1255,7 @@ async function toggleAnswering(){
   if(!on&&!confirm('Turn answering off?\n\nCallers will get your voicemail instead of the AI until you switch it back on.'))
     { $('v_enabled').checked=true; return; }
   try{
-    await api('/api/voice/save',{enabled:on,profileId:(STATE.voice||{}).profileId||''});
+    await api('/api/voice/save',{enabled:on,profileId:pid()});
     toast(on?'Answering is on':'Answering is off — callers get voicemail');
     await load();renderVoice();renderNumber();
   }catch(e){toast(e.message);$('v_enabled').checked=!on;}
@@ -1274,7 +1278,7 @@ async function findNumbers(){
 async function buyNumber(phoneNumber){
   if(!confirm(`Make ${phoneNumber} your business line?\n\nYour AI answers it from the moment you confirm.`))return;
   try{
-    const r=await api('/api/voice/numbers/buy',{phoneNumber});
+    const r=await api('/api/voice/numbers/buy',{phoneNumber,profileId:pid()});
     toast('Your number is live: '+r.number);
     await load();renderVoice();renderNumber();
   }catch(e){toast(e.message);}
@@ -1282,7 +1286,7 @@ async function buyNumber(phoneNumber){
 async function releaseNumber(){
   if(!confirm('Give up this number?\n\nCalls to it will stop reaching you, and you cannot get the same one back.'))return;
   const b=$('numRelBtn');b.disabled=true;
-  try{await api('/api/voice/numbers/release',{});toast('Number released');await load();renderVoice();renderNumber();}
+  try{await api('/api/voice/numbers/release',{profileId:pid()});toast('Number released');await load();renderVoice();renderNumber();}
   catch(e){toast(e.message);}
   finally{b.disabled=false;}
 }
@@ -1484,7 +1488,7 @@ async function blockCaller(num){
 async function loadStats(){
   const box=$('statTiles'); if(!box)return;
   try{
-    const s=await api('/api/voice/stats');
+    const s=await api('/api/voice/stats?profileId='+encodeURIComponent(pid()));
     const m=s.thisMonth||{}, w=s.last7||{};
     const tile=(n,label,sub,accent)=>`<div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:${accent?'#eaf5ee':'var(--paper2)'}">
       <div style="font-size:28px;font-weight:800;line-height:1;color:${accent?'#1f5c39':'var(--ink)'}">${n}</div>
@@ -1962,7 +1966,15 @@ async function saveProfile(){
   const b=$('saveBtn');b.disabled=true;
   const data={id:window._editId||undefined};FIELDS.forEach(k=>data[k]=$('f_'+k).value);
   if(!data.name){toast('Give the business a name');b.disabled=false;return;}
-  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');clearDirty();await load();$('profileSel').value=r.profile.id;render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
+  // The autofill drafted a phone script too — save it WITH the business, so
+  // the AI Answering tab is already populated for review. Before this the
+  // draft quietly evaporated unless the voice tab was saved separately first.
+  if(window._voiceDrafted){
+    data.voiceDraft={};
+    ['agentName','greeting','hours','objective','qualifying','objections','faq','voicemail']
+      .forEach(k=>{const el=$('v_'+k);if(el&&el.value.trim())data.voiceDraft[k]=el.value.trim();});
+  }
+  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');window._voiceDrafted=false;clearDirty();await load();$('profileSel').value=r.profile.id;syncVoiceState();render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 // ---- busy manager: progress bar, staged messages, running timer, button lock ----
 let _busyTimer=null,_stageTimer=null,_busyStart=0;
@@ -2240,7 +2252,10 @@ function watchSend(jobId){
 async function approve(id){try{await api('/api/queue/approve',{id});await load();}catch(e){toast(e.message);}}
 async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'reject'),{id});toast(kind==='sent'?'Logged as sent':'Rejected');await load();}catch(e){toast(e.message);}}
 function copyBody(id){const q=STATE.queue.find(x=>x.id===id);if(!q)return;navigator.clipboard.writeText(`Subject: ${q.subject}\n\n${q.body}`);toast('Copied');}
-$('profileSel').addEventListener('change',()=>{clearDirty();saveUI();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
+$('profileSel').addEventListener('change',()=>{clearDirty();saveUI();syncVoiceState();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();
+  // The phone tab follows the business you picked, same as the Sales Desk —
+  // its script, its number (or its "get a number" card), its stats.
+  if(curTab==='voice'){renderVoice();renderNumber();loadStats();loadCalls();}});
 load().then(()=>{
   // A half-finished business profile still wins — there is nothing useful to
   // do on the other tabs until it is filled in. Otherwise honour where you were.

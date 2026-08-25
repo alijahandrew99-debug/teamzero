@@ -301,9 +301,13 @@ function jobView(job) {
 // lives here and nothing else can place one.
 const callback = require('./lib/callback');
 async function placeCallback(rec, { by = 'system' } = {}) {
-  const account = db.getAccount(rec.accountId);
+  let account = db.getAccount(rec.accountId);
   if (!account) return { ok: false, reason: 'No account.' };
-  const vc = account.voice || {};
+  // The call-back belongs to a BUSINESS: dial from that business's number
+  // with that business's script, not whichever config the account had first.
+  const cbProfile = db.getProfile(rec.accountId, rec.profileId) || db.getProfiles(rec.accountId)[0];
+  const vc = db.profileVoice(account, cbProfile);
+  account = { ...account, voice: vc };
   const owner = stripe.isOwner(account);
   // 1. Consent / basis.
   const allowed = callback.callbackAllowed(rec);
@@ -330,7 +334,7 @@ async function placeCallback(rec, { by = 'system' } = {}) {
     db.updateCallback(rec.accountId, rec.id, { status: 'queued', dueAt, note: hours.reason });
     return { ok: false, queued: true, dueAt, reason: hours.reason };
   }
-  const profile = db.getProfile(rec.accountId, vc.profileId) || db.getProfiles(rec.accountId)[0];
+  const profile = cbProfile;
   if (!profile) { db.updateCallback(rec.accountId, rec.id, { status: 'queued', note: 'No business profile yet.' }); return { ok: false, reason: 'No business profile yet.' }; }
   try {
     const call = await voice.placeCall({ to, from, answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
@@ -696,9 +700,14 @@ setInterval(checkSchedules, 60 * 1000);
 const RECLAIM_AFTER_DAYS = 21;
 async function reclaimCancelledNumbers() {
   for (const a of db.allAccounts()) {
-    const v = a.voice || {};
-    if (!v.numberSid) continue;
     if (a.subStatus !== 'canceled' && a.subStatus !== 'incomplete_expired') continue;
+    // Numbers live per business now, plus the possible legacy account-level
+    // one. A cancelled account gives back every line it rents.
+    const held = [];
+    const av = a.voice || {};
+    if (av.numberSid) held.push({ kind: 'account', v: av });
+    for (const pr of db.getProfiles(a.id)) if (pr.voice && pr.voice.numberSid) held.push({ kind: 'profile', profileId: pr.id, v: pr.voice });
+    if (!held.length) continue;
     const since = Date.parse(a.canceledAt || '') || 0;
     if (!since) { db.updateAccount(a.id, { canceledAt: new Date().toISOString() }); continue; }
     // A trial that never converted gets its number back fast: they never paid,
@@ -706,12 +715,15 @@ async function reclaimCancelledNumbers() {
     // A real customer who cancels keeps the grace period in case they return.
     const graceDays = a.everPaid ? RECLAIM_AFTER_DAYS : 2;
     if (Date.now() - since < graceDays * 24 * 60 * 60 * 1000) continue;
-    try {
-      await numbers.release(v.numberSid);
-      db.updateAccount(a.id, { voice: { ...v, number: '', numberSid: '', enabled: false } });
-      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Phone number ${v.number} released after ${RECLAIM_AFTER_DAYS} days cancelled` });
-    } catch (e) {
-      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Could not release ${v.number}: ${e.message}` });
+    for (const h of held) {
+      try {
+        await numbers.release(h.v.numberSid);
+        if (h.kind === 'account') db.updateAccount(a.id, { voice: { ...h.v, number: '', numberSid: '', enabled: false } });
+        else db.saveProfileVoice(a.id, h.profileId, { number: '', numberSid: '', enabled: false });
+        db.logActivity(a.id, { agent: 'SYSTEM', msg: `Phone number ${h.v.number} released after ${RECLAIM_AFTER_DAYS} days cancelled` });
+      } catch (e) {
+        db.logActivity(a.id, { agent: 'SYSTEM', msg: `Could not release ${h.v.number}: ${e.message}` });
+      }
     }
   }
 }
@@ -733,7 +745,7 @@ async function sendMonthlyRecaps() {
     if (!['active', 'trialing', 'past_due'].includes(a.subStatus) && !stripe.isOwner(a)) continue;
     try {
       const prof = db.getProfile(a.id, (a.voice || {}).profileId) || db.getProfiles(a.id)[0];
-      const s = stats.summary(a, voice.tzFor(a)).lastMonth;
+      const s = stats.summary({ ...a, voice: db.profileVoice(a, prof) }, voice.tzFor({ ...a, voice: db.profileVoice(a, prof) })).lastMonth;
       const tier = plans.TIERS[a.tier];
       const body = stats.recapEmail(a, (prof && prof.name) || 'your business', s, tier ? tier.price : 0);
       const monthName = new Date(now.getFullYear(), now.getMonth() - 1, 1).toLocaleString('en-US', { month: 'long' });
@@ -870,11 +882,11 @@ const server = http.createServer(async (req, res) => {
       const slug = p.slice(3).toLowerCase();
       const acct = callback.accountByFormSlug(slug);
       if (!acct) return html(res, '<p style="font-family:system-ui;padding:40px">This request form is not active.</p>', 404);
-      const vcfg = acct.voice || {};
-      const prof = db.getProfile(acct.id, vcfg.profileId) || db.getProfiles(acct.id)[0] || {};
+      const prof = db.getProfile(acct.id, (acct.voice || {}).profileId) || db.getProfiles(acct.id)[0] || {};
+      const vcfg = db.profileVoice(acct, prof.id ? prof : null);
       const biz = prof.name || 'us';
       const agentName = vcfg.agentName || 'Our assistant';
-      const tz = voice.tzFor(acct);
+      const tz = voice.tzFor({ ...acct, voice: vcfg });
       const tzLabel = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find((x) => x.type === 'timeZoneName').value; } catch { return ''; } })();
       const render = ({ err = '', done = '', name = '', phone = '', need = '' } = {}) => {
         const consent = callback.consentText(biz, phone);
@@ -996,7 +1008,10 @@ const server = http.createServer(async (req, res) => {
       }
       const twimlReply = (text) => { res.writeHead(200, { 'Content-Type': 'text/xml' }); return res.end(`<?xml version="1.0" encoding="UTF-8"?><Response>${text ? `<Message>${voice.esc(text)}</Message>` : ''}</Response>`); };
       const from = params.From || '', to = params.To || '', body = String(params.Body || '').trim();
-      const account = db.accountByVoiceNumber(to);
+      // The texted number tells us which BUSINESS this is — script, agent name
+      // and booking slots all come from that business, not the account default.
+      const route = db.routeByVoiceNumber(to);
+      const account = route ? { ...route.account, voice: db.profileVoice(route.account, route.profile) } : null;
       if (!account || !from) return twimlReply('');
       // Opt-out words are law, not a preference. Handle before anything else.
       if (/^\s*(stop|stopall|unsubscribe|cancel|end|quit)\s*$/i.test(body)) {
@@ -1011,7 +1026,7 @@ const server = http.createServer(async (req, res) => {
       if (suppress.isPhoneSuppressed(account.id, from).blocked) return twimlReply('');
       const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
       if (!vAllow.ok || account.subStatus === 'canceled') return twimlReply('');
-      const profile = db.getProfile(account.id, (account.voice || {}).profileId) || db.getProfiles(account.id)[0];
+      const profile = route.profile || db.getProfiles(account.id)[0];
       if (!profile) return twimlReply('');
       // "YES" to a call-back offer. The missed-call text says "reply YES and I
       // will call you right back"; this reply IS the consent -- their own words,
@@ -1087,9 +1102,15 @@ const server = http.createServer(async (req, res) => {
 
       // ---- inbound: someone rang the number ----
       if (p === '/voice/incoming') {
-        const account = db.accountByVoiceNumber(params.To || '');
-        if (!account) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
-        const vcfg = account.voice || {};
+        // The dialled number resolves to a BUSINESS, not just an account —
+        // each business has its own line, script and settings. The account
+        // object is re-pointed at that business's voice config so everything
+        // downstream (call handlers, billing, transfer chains) reads the
+        // right one without knowing the difference.
+        const route = db.routeByVoiceNumber(params.To || '');
+        if (!route) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
+        const vcfg = db.profileVoice(route.account, route.profile);
+        const account = { ...route.account, voice: vcfg };
         // Blocked callers (the owner's own list, plus anyone who told us to
         // stop) are rejected before a single AI token or plan minute is spent.
         // <Reject> costs nothing and hangs up without answering.
@@ -1114,7 +1135,7 @@ const server = http.createServer(async (req, res) => {
           res.writeHead(200, { 'Content-Type': 'text/xml' });
           return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>');
         }
-        const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
+        const profile = route.profile || db.getProfiles(account.id)[0];
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
         // A cancelled account is not the same as one over its limit. Taking a
         // message for a company that is no longer a customer promises a
@@ -1153,7 +1174,7 @@ const server = http.createServer(async (req, res) => {
           const known = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
           if ((sig.suspect || priorStrikes > 0) && !known) {
             const esScr = voice.langFor(account) === 'es-US';
-            const scrProfile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
+            const scrProfile = route.profile || db.getProfiles(account.id)[0];
             const scrLine = spam.screenLine((scrProfile && scrProfile.name) || 'us', agentName, esScr, vcfg.record !== false);
             const scrCall = voice.startCall(sid, { accountId: account.id, account, profile: scrProfile, direction: 'inbound',
               from: params.From || '', to: params.To || '', lead: null, leadBrief: '', callerName: '' });
@@ -1692,10 +1713,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // emailed — including WHY, so they can top up instead of quietly
       // bleeding jobs.
       if (p === '/voice/msg') {
-        const acct = db.accountByVoiceNumber(params.To || '');
+        const msgRoute = db.routeByVoiceNumber(params.To || '');
+        const acct = msgRoute && msgRoute.account;
         const heard = String(params.SpeechResult || params.Digits || '').trim();
         if (acct) {
-          const prof = db.getProfile(acct.id, (acct.voice || {}).profileId) || db.getProfiles(acct.id)[0];
+          const prof = msgRoute.profile || db.getProfiles(acct.id)[0];
           const from = params.From || '';
           try {
             db.addAppointment(acct.id, {
@@ -2293,11 +2315,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // key itself is never echoed back — connected flag only
           emailData: { connected: !!account.emailApiKey, fallback: !!process.env.HUNTER_API_KEY },
           warmup: sending.warmupStatus(account.warmup),
-          voice: { ...(account.voice || {}), configured: voice.configured(), catalogue: voice.VOICES, defaultVoice: voice.DEFAULT_VOICE,
+          // Account-level voice meta only; the per-BUSINESS config rides on
+          // each profile below (resolved, so legacy account-level setups
+          // still show on the business they were bound to). The client
+          // recomputes its working voice state whenever the business switches.
+          voice: { configured: voice.configured(), catalogue: voice.VOICES, defaultVoice: voice.DEFAULT_VOICE,
             envNumber: process.env.TWILIO_PHONE_NUMBER || '',
             webhookBase: (process.env.PUBLIC_URL || '').replace(/\/$/, '') },
           sendDomain: dnsauth.domainOfEmail((account.smtp || {}).fromEmail || (account.smtp || {}).user || ''),
-          profiles: db.getProfiles(acc),
+          profiles: db.getProfiles(acc).map((pr) => ({ ...pr, voice: db.profileVoice(account, pr) })),
           leads: db.getLeads(acc),
           queue: db.getQueue(acc),
           activity: db.getActivity(acc, 40),
@@ -2324,6 +2350,19 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           'mailingAddress', 'website', 'pricing'];
         const data = {}; fields.forEach((k) => { if (f[k] !== undefined) data[k] = f[k]; });
         const saved = f.id ? db.updateProfile(acc, f.id, data) : db.createProfile(acc, data);
+        // The website autofill drafts the PHONE script too. Saving the
+        // business saves that draft with it — before this, the drafted script
+        // silently evaporated unless the owner visited AI Answering and hit
+        // its separate save first, which nobody knew to do.
+        if (saved && f.voiceDraft && typeof f.voiceDraft === 'object') {
+          const draft = {};
+          ['agentName', 'greeting', 'hours', 'objective', 'qualifying', 'objections', 'faq', 'voicemail']
+            .forEach((k) => { const val = String(f.voiceDraft[k] || '').trim(); if (val) draft[k] = val.slice(0, 4000); });
+          if (Object.keys(draft).length) {
+            db.saveProfileVoice(acc, saved.id, draft);
+            db.logActivity(acc, { agent: 'SYSTEM', msg: `Phone script drafted for ${saved.name || 'your business'} — review it on AI Answering` });
+          }
+        }
         return json(res, { profile: saved });
       }
       // Start a background prospecting job and return immediately — long runs
@@ -2419,7 +2458,13 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ---- voice settings + calls ----
       if (p === '/api/voice/save' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const cur = account.voice || {};
+        // Saves apply to ONE business: the profile named in the request (the
+        // business selected in the app). The current config resolves through
+        // profile.voice with legacy account-level fallback, so the first save
+        // after this change carries an existing setup forward untouched.
+        const vProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        if (!vProfile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const cur = db.profileVoice(account, vProfile);
         const v = {
           ...cur,
           enabled: f.enabled !== false,
@@ -2440,7 +2485,6 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // signed up first. It is now only ever written by provisioning.
           number: (cur.number || '').trim(),
           numberSid: cur.numberSid || '',
-          profileId: f.profileId || cur.profileId || '',
           agentName: (f.agentName ?? cur.agentName ?? 'Sarah').trim(),
           greeting: (f.greeting ?? cur.greeting ?? '').trim(),
           transferTo: voice.toE164((f.transferTo ?? cur.transferTo ?? '')),
@@ -2466,13 +2510,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           timezone: (() => { const z = String(f.timezone ?? cur.timezone ?? '').trim();
             try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return z; } catch { return cur.timezone || ''; } })(),
         };
-        db.updateAccount(acc, { voice: v });
+        db.saveProfileVoice(acc, vProfile.id, v);
         return json(res, { ok: true, voice: v });
       }
       // What the AI actually did: this month, last month, last 7 days. Feeds the
       // dashboard; the same numbers go out in the monthly recap email.
       if (p === '/api/voice/stats' && req.method === 'GET') {
-        return json(res, stats.summary(account, voice.tzFor(account)));
+        const sProf = db.getProfile(acc, url.searchParams.get('profileId') || '') || db.getProfiles(acc)[0];
+        const sAcct = { ...account, voice: db.profileVoice(account, sProf) };
+        return json(res, stats.summary(sAcct, voice.tzFor(sAcct)));
       }
       // Stream a recording to the owner's browser. Proxied with our Twilio
       // credentials so recordings are never public URLs, and scoped to the
@@ -2519,7 +2565,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
-        const vcfg = account.voice || {};
+        const tcProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        const vcfg = db.profileVoice(account, tcProfile);
         // Only the owner account may fall back to the shared server number.
         // For a customer, dialling out from a line they do not own means any
         // callback rings a different company — so they use their own or none.
@@ -2533,7 +2580,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
-        const profile = db.getProfile(acc, vcfg.profileId) || db.getProfiles(acc)[0];
+        const profile = tcProfile;
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
         // DO NOT CALL is absolute and legally binding. Checked at the dial
         // boundary so no route can place a call to someone who opted out.
@@ -2542,7 +2589,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         try {
           const call = await voice.placeCall({ to, from,
             answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
-          voice.startCall(call.sid, { accountId: acc, account, profile, direction: 'outbound', to, from,
+          voice.startCall(call.sid, { accountId: acc, account: { ...account, voice: vcfg }, profile, direction: 'outbound', to, from,
             lead: f.leadName ? { name: f.leadName, company: f.leadCompany || '' } : null });
           db.saveCall(acc, { sid: call.sid, direction: 'outbound', to, from, profileId: profile.id,
             status: call.status || 'queued', transcript: [] });
@@ -2570,35 +2617,82 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!voice.configured()) return json(res, { error: 'Twilio is not configured on the server yet.' }, 400);
         const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!vAllow.ok) return json(res, { error: vAllow.reason, needUpgrade: true }, 402);
-        const vcfg = account.voice || {};
-        // Renting a second number for an account that already has one is money
+        // Numbers belong to a BUSINESS now. The buy goes to the profile named
+        // in the request (the business selected in the app).
+        const buyProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        if (!buyProfile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const vcfg = db.profileVoice(account, buyProfile);
+        // Renting a second number for a business that already has one is money
         // burnt every month for a line nobody answers.
         if (vcfg.numberSid) return json(res, { error: 'This business already has a number. Release it first if you want a different one.' }, 400);
+        // Every rented line costs real money monthly. One number per business
+        // is the product; a small account-wide cap stops a runaway account
+        // from renting lines on our dime. Owner exempt.
+        const linesHeld = ((account.voice || {}).numberSid ? 1 : 0)
+          + db.getProfiles(acc).filter((pr) => pr.voice && pr.voice.numberSid).length;
+        if (!stripe.isOwner(account) && linesHeld >= 2) {
+          return json(res, { error: 'Your account already rents 2 phone lines. Need more? Email support@dawnpipe.com and we will set it up.' }, 400);
+        }
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         try {
           const got = await numbers.buy({ phoneNumber: f.phoneNumber, base,
-            friendlyName: `Dawnpipe — ${account.email}` });
+            friendlyName: `Dawnpipe — ${account.email} — ${buyProfile.name || buyProfile.id}` });
           // Claimed by another account = a double-buy race. Hand it straight
           // back rather than leave two accounts fighting over one line.
-          const clash = db.accountByVoiceNumber(got.phoneNumber);
-          if (clash && clash.id !== acc) {
+          const clash = db.routeByVoiceNumber(got.phoneNumber);
+          if (clash && clash.account.id !== acc) {
             await numbers.release(got.sid).catch(() => {});
             return json(res, { error: 'That number was just taken. Try another.' }, 409);
           }
-          db.updateAccount(acc, { voice: { ...vcfg, number: got.phoneNumber, numberSid: got.sid, enabled: true } });
-          db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${got.phoneNumber} provisioned and pointed at Dawnpipe` });
+          db.saveProfileVoice(acc, buyProfile.id, { number: got.phoneNumber, numberSid: got.sid, enabled: true });
+          db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${got.phoneNumber} provisioned for ${buyProfile.name || 'your business'}` });
           return json(res, { ok: true, number: got.phoneNumber });
         } catch (e) { return json(res, { error: e.message }, 400); }
       }
       if (p === '/api/voice/numbers/release' && req.method === 'POST') {
-        const vcfg = account.voice || {};
+        const f = parseJSON(await readBody(req));
+        const relProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        const vcfg = db.profileVoice(account, relProfile);
         if (!vcfg.numberSid) return json(res, { error: 'No number to release.' }, 400);
         try {
           await numbers.release(vcfg.numberSid);
-          db.updateAccount(acc, { voice: { ...vcfg, number: '', numberSid: '', enabled: false } });
+          // Clear wherever the number actually lives — the profile, and the
+          // legacy account-level slot if that is where it still sits.
+          if (relProfile) db.saveProfileVoice(acc, relProfile.id, { number: '', numberSid: '', enabled: false });
+          if ((account.voice || {}).numberSid === vcfg.numberSid) {
+            db.updateAccount(acc, { voice: { ...account.voice, number: '', numberSid: '', enabled: false } });
+          }
           db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${vcfg.number} released` });
           return json(res, { ok: true });
         } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      // Move a business's number to another business — the "I set the line up
+      // on the wrong company" fix, and the cheap path when a second business
+      // should take over the existing line instead of renting a new one.
+      if (p === '/api/voice/numbers/reassign' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const target = db.getProfile(acc, f.toProfileId);
+        if (!target) return json(res, { error: 'Pick which business gets the number.' }, 400);
+        if (db.profileVoice(account, target).number) return json(res, { error: (target.name || 'That business') + ' already has a number.' }, 400);
+        // Find who currently holds a line: a profile, or the legacy account
+        // slot. With more than one line held, the request must SAY which one
+        // moves — guessing would silently unplug the wrong business.
+        const holders = db.getProfiles(acc).filter((pr) => pr.voice && pr.voice.number);
+        let holder = null;
+        if (f.fromProfileId) {
+          holder = holders.find((pr) => pr.id === f.fromProfileId);
+          if (!holder) return json(res, { error: 'That business has no number to move.' }, 400);
+        } else if (holders.length > 1) {
+          return json(res, { error: 'More than one business has a number — say which one to move it from.' }, 400);
+        } else holder = holders[0] || null;
+        const legacyHeld = !holder && (account.voice || {}).number ? account.voice : null;
+        const src = holder ? holder.voice : legacyHeld;
+        if (!src || !src.number) return json(res, { error: 'No number to move — get one first.' }, 400);
+        db.saveProfileVoice(acc, target.id, { number: src.number, numberSid: src.numberSid || '', enabled: true });
+        if (holder) db.saveProfileVoice(acc, holder.id, { number: '', numberSid: '' });
+        else db.updateAccount(acc, { voice: { ...account.voice, number: '', numberSid: '' } });
+        db.logActivity(acc, { agent: 'VOICE', msg: `Number ${src.number} moved to ${target.name || 'another business'} — it now answers with that business's script` });
+        return json(res, { ok: true, number: src.number });
       }
 
       // ---- backfill phone numbers for leads that predate phone capture ----
@@ -2664,15 +2758,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
-        const vcfg = account.voice || {};
+        const profile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const vcfg = db.profileVoice(account, profile);
         // Only the owner account may fall back to the shared server number.
         // For a customer, dialling out from a line they do not own means any
         // callback rings a different company — so they use their own or none.
         const from = vcfg.number || (stripe.isOwner(account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
         if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
-        const profileId = f.profileId || vcfg.profileId || '';
-        const profile = db.getProfile(acc, profileId) || db.getProfiles(acc)[0];
-        if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
         const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         if (callJobs.get(acc) && callJobs.get(acc).status === 'running') {
@@ -2737,7 +2830,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             try {
               const call = await voice.placeCall({ to: item.to, from,
                 answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
-              voice.startCall(call.sid, { accountId: acc, account: fresh, profile, direction: 'outbound',
+              voice.startCall(call.sid, { accountId: acc, account: { ...fresh, voice: db.profileVoice(fresh, profile) }, profile, direction: 'outbound',
                 to: item.to, from, lead: { name: item.lead.name, company: item.lead.company, email: item.lead.email } });
               db.saveCall(acc, { sid: call.sid, direction: 'outbound', to: item.to, from, profileId: profile.id,
                 status: call.status || 'queued', transcript: [] });
@@ -2878,16 +2971,22 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         const rows = db.getCallbacks(acc, 100).map((c) => ({ id: c.id, at: c.at, source: c.source, name: c.name, phone: c.phone, need: c.need,
           status: c.status, note: c.note || '', dueAt: c.dueAt || '', calledAt: c.calledAt || '', basis: c.basis || '', consentAt: c.consentAt || '' }));
-        const vc = account.voice || {};
+        // Call-back plumbing follows the business that OWNS a line: any
+        // profile with a number, else the legacy account slot.
+        const cbProf = db.getProfiles(acc).find((pr) => pr.voice && pr.voice.number) || db.getProfiles(acc)[0];
+        const vc = db.profileVoice(account, cbProf);
         return json(res, { formUrl: `${base}/f/${slug}`, embed: `<iframe src="${base}/f/${slug}" style="width:100%;max-width:480px;height:640px;border:0" title="Request a call"></iframe>`,
-          callBackMissed: vc.callBackMissed === true, hours: { from: callback.EARLIEST_HOUR, to: callback.LATEST_HOUR }, tz: voice.tzFor(account),
+          callBackMissed: vc.callBackMissed === true, hours: { from: callback.EARLIEST_HOUR, to: callback.LATEST_HOUR }, tz: voice.tzFor({ ...account, voice: vc }),
           voiceOk: plans.voiceAllowed(account, stripe.isOwner(account)), hasNumber: !!(vc.number || (stripe.isOwner(account) && process.env.TWILIO_PHONE_NUMBER)),
           rows });
       }
       if (p === '/api/callbacks/settings' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const vc = account.voice || {};
-        db.updateAccount(acc, { voice: { ...vc, callBackMissed: !!f.callBackMissed } });
+        // The toggle belongs to whichever business owns a line (that is the
+        // line missed calls come in on).
+        const cbProf = db.getProfiles(acc).find((pr) => pr.voice && pr.voice.number) || db.getProfiles(acc)[0];
+        if (cbProf) db.saveProfileVoice(acc, cbProf.id, { callBackMissed: !!f.callBackMissed });
+        else db.updateAccount(acc, { voice: { ...(account.voice || {}), callBackMissed: !!f.callBackMissed } });
         db.logActivity(acc, { agent: 'VOICE', msg: `Missed-call call-back offer ${f.callBackMissed ? 'ON' : 'off'}` });
         return json(res, { ok: true });
       }
