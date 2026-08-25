@@ -20,6 +20,7 @@ const stats = require('./lib/stats');
 const hooks = require('./lib/hooks');
 const spend = require('./lib/spend');
 const reps = require('./lib/reps');
+const assistant = require('./lib/assistant');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -2149,6 +2150,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // their cap who cannot reach the cancel button is a chargeback and a
         // scam claim; the door out must always open.
         '/api/billing/cancel', '/api/billing/resume',
+        // The help bubble works for a LOCKED account on purpose: someone who
+        // has not picked a plan yet is exactly who has setup questions, and
+        // sending them to email support is the thing this exists to prevent.
+        '/api/assistant',
         '/api/profile/save', '/api/profile/delete', '/api/pipeline',
         // Handing a rented number BACK must never be paywalled. It was, so a
         // cancelled customer had no way to release it and we kept paying the
@@ -2756,6 +2761,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const est = { note: 'estimateCost() assumes: phone $0.014/min, speech recognition $0.02 per turn, TTS $0.013/100 chars generative or $0.0032 neural, AI $0.006/turn, recording $0.0025/min. Twilio\'s advertised per-minute rate is the phone line only; speech-to-text and text-to-speech are ~80% of a real call.' };
           return json(res, { start, end, ...sum, diagnostics: diag, estimateAssumptions: est, rawCategories: rows.filter((r) => r.price).map((r) => ({ category: r.category, usage: r.usage, unit: r.usageUnit, price: r.price })).sort((a, b) => b.price - a.price) });
         } catch (e) { return json(res, { error: e.message }, 502); }
+      }
+
+      // ---- the in-app assistant (the help bubble) ----
+      if (p === '/api/assistant' && req.method === 'POST') {
+        // Bounds cost to pennies a day even if hammered: each turn is a Haiku
+        // call at ~a fifth of a cent.
+        if (rateLimited(req, 'assistant', 40, 6 * 60 * 60 * 1000)) {
+          return json(res, { text: 'I have to catch my breath — that is a lot of questions in a short time. Try again in a little while, or email support@dawnpipe.com and a human will pick it up.', go: '' });
+        }
+        const f = parseJSON(await readBody(req));
+        const msg = String(f.message || '').trim();
+        if (!msg) return json(res, { error: 'Say something first.' }, 400);
+        try {
+          const r = await assistant.answer(account, stripe.isOwner(account), f.history, msg);
+          return json(res, r);
+        } catch (e) {
+          db.logActivity(acc, { agent: 'SYSTEM', msg: 'Assistant error: ' + e.message });
+          return json(res, { text: 'Something glitched on my end. Try once more — or email support@dawnpipe.com and a human will sort it.', go: '' });
+        }
       }
 
       // ---- CALL-BACKS (the customer's view) ----
