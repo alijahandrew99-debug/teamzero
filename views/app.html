@@ -547,6 +547,15 @@
   <div class="card">
     <h2><span class="agent">YOUR NUMBER</span> The line your AI answers</h2>
     <div class="body">
+      <!-- Which business this phone line answers AS, front and center. It was
+           only settable via a dropdown buried in the script card below, so
+           adding a second business looked like the phone was stuck on the
+           first one. Saves the moment you pick — no separate save button. -->
+      <div class="row" style="align-items:center;gap:8px;margin-bottom:10px">
+        <b>This line answers for:</b>
+        <select id="v_profileTop" onchange="switchVoiceBusiness()" style="max-width:280px;margin:0"></select>
+        <span class="muted">Greeting, script and facts all come from this business.</span>
+      </div>
       <div id="vStatus"></div>
       <!-- This card used to be Twilio setup instructions. Nobody buying an AI
            receptionist should be told to open a telephony console and paste
@@ -1031,6 +1040,10 @@ function fillForm(force){
   if(_dirty&&!force)return;                      // never clobber unsaved edits
   const p=curProfile()||{};
   FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});
+  // The paste-your-website box belongs to the business you were LOOKING at.
+  // Left as-is on a switch, the old URL sits there implying it describes the
+  // business now on screen. Show this business's own site instead (or empty).
+  if($('autoUrl')&&document.activeElement!==$('autoUrl')){$('autoUrl').value=p.website||'';if($('autoMsg'))$('autoMsg').textContent='';}
   window._editId=(p&&p.id)||'';
   // Only a brand-new, still-empty business gets the collapsed view. Once there
   // is real content it stays open, so nobody has to hunt for their own details
@@ -1038,7 +1051,7 @@ function fillForm(force){
   const mf=$('manualFields');
   if(mf&&!mf.open&&!isStarter(p))mf.open=true;
 }
-function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');markDirty();showTab('business');toast('Fill in the new business, then Save');}
+function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');if($('autoUrl'))$('autoUrl').value='';if($('autoMsg'))$('autoMsg').textContent='';markDirty();showTab('business');toast('Fill in the new business, then Save');}
 async function deleteProfile(){
   const p=curProfile();if(!p)return;
   if(STATE.profiles.length<=1)return toast('You need at least one business');
@@ -1119,6 +1132,24 @@ function renderVoiceChrome(v){
   const sel=$('v_profileId');
   sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
   if(v.profileId&&!_dirty)sel.value=v.profileId;
+  // The prominent switcher at the top of the tab mirrors the same saved
+  // profileId. It reflects SAVED state always — even mid-edit — because it
+  // saves instantly itself and must never show a business the line is not
+  // actually answering for.
+  const top=$('v_profileTop');
+  if(top){
+    top.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
+    top.value=v.profileId||((STATE.profiles||[])[0]||{}).id||'';
+  }
+}
+async function switchVoiceBusiness(){
+  const id=$('v_profileTop').value;
+  try{
+    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),profileId:id});
+    const nm=((STATE.profiles||[]).find(p=>p.id===id)||{}).name||'that business';
+    toast('The phone now answers for '+nm);
+    clearDirty();await load();renderVoice();renderNumber();
+  }catch(e){toast(e.message);renderVoiceChrome(STATE.voice||{});}
 }
 async function saveVoice(){
   const b=$('vSaveBtn');b.disabled=true;
