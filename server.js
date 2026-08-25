@@ -1464,7 +1464,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // with the phone in the truck, a $1,500 emergency became a message
           // read at 7am. The on-call list falls back to transferTo so existing
           // customers keep working unchanged.
-          const chain = (Array.isArray(vc.onCall) && vc.onCall.length ? vc.onCall : [vc.transferTo]).map((n) => voice.toE164(n)).filter(Boolean);
+          // Night flips the order: the on-call list rings before the owner's
+          // number between 8pm and 8am, so the 2am burst pipe wakes the tech
+          // who is on duty instead of ringing out on a sleeping owner.
+          const night = voice.isNightFor(call.account);
+          const chain = voice.transferChain(vc, night);
+          if (night && chain.length > 1) db.logActivity(call.accountId, { agent: 'VOICE', msg: 'After-hours: trying the on-call list before the main transfer number' });
           if (!chain.length) {
             // No transfer number configured. On a CUSTOMER's line that is a
             // take-a-message moment. On the DEMO line it was the single worst

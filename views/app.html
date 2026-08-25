@@ -602,7 +602,7 @@
       <div class="field"><label>After the intro <span class="muted">(optional)</span></label><div class="hint">Every call opens with "Hi, this is [name], an AI assistant for [business]. Just so you know, this call may be transcribed." — that part is fixed, it's what keeps you on the right side of call-recording law. Whatever you type here is said right after it. Leave blank for "What can I do for you?"</div><input id="v_greeting" placeholder="e.g. Thanks for calling — what's going on?"></div>
       <div class="two">
         <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
-        <div class="field"><label>On-call list for emergencies <span class="muted">(optional)</span></label><div class="hint">One number per line, in the order to try. When a caller has an <b>emergency</b> — burst pipe, no heat in a freeze, a gas smell — the AI texts every number here with the details, then rings them in order until someone picks up. Blank = uses the transfer number above.</div><textarea id="v_onCall" rows="3" placeholder="+13125550101&#10;+13125550102"></textarea></div>
+        <div class="field"><label>On-call list for emergencies <span class="muted">(optional)</span></label><div class="hint">One number per line, in the order to try. When a caller has an <b>emergency</b> — burst pipe, no heat in a freeze, a gas smell — the AI texts every number here with the details, then rings until someone picks up. <b>Days</b> (8am–8pm): your transfer number rings first, then this list. <b>Nights</b>: this list rings <b>first</b> and your number last — put the on-call tech here and sleep. Blank = just the transfer number.</div><textarea id="v_onCall" rows="3" placeholder="+13125550101&#10;+13125550102"></textarea></div>
         <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
         <div class="field"><label>How long is a typical job?</label><div class="hint">The AI blocks this much time per booking and won't book anyone into it. It also refuses to double-book — if a slot is taken it says so and offers the nearest open times.</div>
           <select id="v_slotMinutes">
@@ -1786,20 +1786,26 @@ function showUpgrade(){
     html+=`<div class="tsec"><h3>✉️ Lead finding</h3><p><b>Want new customers?</b> Describe who you sell to. It finds them, verifies the email, and writes each one a personal message. <b>You approve every send</b>; nothing goes out without you.</p></div>
       <div class="tiergrid">${leads.map(card).join('')}</div>`;
   }
+  // Top-up packs get their OWN section, not a line buried in billing fine
+  // print at the bottom of a 5,000px modal — that is where they went to die.
+  const T=STATE.topups||{};
+  const packBtns=['minutes250','leads500','leads2000'].filter(k=>T[k]).map(k=>
+    isPro?`<button class="sm ghost" onclick="buyTopup('${k}')" style="font-size:14px;padding:8px 14px">${esc(T[k].name)} · <b>$${T[k].price}</b></button>`
+         :`<button class="sm ghost" disabled style="font-size:14px;padding:8px 14px;opacity:.55">${esc(T[k].name)} · $${T[k].price}</button>`).join(' ');
+  if(packBtns){
+    html+=`<div class="tsec" style="margin-top:18px"><h3>➕ Top-up packs</h3>
+      <p>Plans don't stack — <b>packs do</b>. A one-time boost on top of your plan for a heavy month: never automatic, never recurring, and unused balance rolls over to next month.${isPro?'':' <b>Pick a plan first</b> — packs add to an active plan.'}</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${packBtns}</div>
+      ${(isPro&&(STATE.usage.topupLeads||STATE.usage.topupMinutes))?`<div class="muted" style="font-size:12.5px;margin-bottom:8px">Your balance right now: <b>${STATE.usage.topupLeads||0}</b> extra leads · <b>${STATE.usage.topupMinutes||0}</b> extra minutes</div>`:''}`;
+  }
   $('tierCards').innerHTML=html||'<div class="muted">Plans are being set up. Email support@dawnpipe.com and we will get you started by hand.</div>';
   $('trustStrip').innerHTML=(STATE.trust||[]).map((x,i)=>`<div class="${i%2?'ok':''}"><b>${esc(x.k)}</b>${esc(x.v)}</div>`).join('');
   let note='';
   if(isPro){
-    const t=STATE.topups||{};
     const cancelBits=STATE.cancelAt
       ? `<div style="margin-top:8px;padding:10px 12px;background:#fbeceb;border:1px solid #f0b8b3;border-radius:8px">Your plan is set to end on <b>${new Date(STATE.cancelAt).toLocaleDateString()}</b> — nothing more will be charged. Changed your mind? <button class="sm ghost" onclick="resumePlan()">Resume my plan</button></div>`
       : `<button class="sm ghost" style="color:var(--red)" onclick="cancelPlan()">Cancel plan</button>`;
-    note=`You're on <b>${esc(STATE.usage.tierName||'')}</b>. Switching plans opens your billing portal so your existing plan is <b>changed</b>, not doubled up — plans don't stack, and upgrading is prorated by Stripe so you never pay twice for the same days. You keep every lead, call and booking when you switch. <a href="/billing">Manage billing →</a> ${cancelBits}
-    <div style="margin-top:10px;padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px">
-      <b>Heavy month?</b> Top-up packs add to this plan — one-time, never automatic, unused balance rolls over:
-      ${['minutes250','leads500','leads2000'].filter(k=>t[k]).map(k=>`<button class="sm ghost" onclick="buyTopup('${k}')">${esc(t[k].name)} · $${t[k].price}</button>`).join(' ')}
-      ${(STATE.usage.topupLeads||STATE.usage.topupMinutes)?`<div class="muted" style="margin-top:4px;font-size:12px">Balance: ${STATE.usage.topupLeads||0} extra leads · ${STATE.usage.topupMinutes||0} extra minutes</div>`:''}
-    </div>`;
+    note=`You're on <b>${esc(STATE.usage.tierName||'')}</b>. Switching plans opens your billing portal so your existing plan is <b>changed</b>, not doubled up — plans don't stack, and upgrading is prorated by Stripe so you never pay twice for the same days. You keep every lead, call and booking when you switch. <a href="/billing">Manage billing →</a> ${cancelBits}`;
   }
   if(STATE.isOwner){
     const missing=all.filter(t=>!t.available).map(t=>t.name);
