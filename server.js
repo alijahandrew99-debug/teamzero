@@ -1132,7 +1132,7 @@ const server = http.createServer(async (req, res) => {
           // Take the message instead; the lead survives and the owner gets told.
           db.logActivity(account.id, { agent: 'VOICE', msg: `Over plan limit (${vAllow.reason}) - taking a message instead of hanging up` });
           return xml(res, voice.sayAndGather(
-            `Thanks for calling ${profile.name} — this is an AI assistant, and this call may be transcribed. I can't put you through this second, but tell me your name, your number and what you need, and I'll make sure someone calls you straight back.`,
+            `Thanks for calling ${profile.name} — I'm their AI receptionist, on a recorded line. I can't put you through this second, but tell me your name, your number and what you need, and I'll make sure someone calls you straight back.`,
             base + '/voice/msg',
             voice.voiceFor(account),
           ));
@@ -1146,9 +1146,16 @@ const server = http.createServer(async (req, res) => {
         // homepage promises the disclosure happens on every call. Their own
         // greeting still plays; it just comes after the part the law needs.
         const es = voice.langFor(account) === 'es-US';
+        // "On a recorded line" is how a PERSON discloses recording -- four
+        // words, standard phone English, and it covers the transcript too.
+        // "Just so you know, this call may be transcribed" was a legal notice
+        // wearing a headset, and it was the second sentence every caller ever
+        // heard. Business name FIRST (a caller's real first question is "did I
+        // reach the right place"), then the AI identity, which never comes out.
+        const recOn = vcfg.record !== false;
         const disclosure = es
-          ? 'Hola, habla ' + agentName + ', asistente de inteligencia artificial de ' + profile.name + '. Le aviso que esta llamada puede ser transcrita.'
-          : 'Hi, this is ' + agentName + ', an AI assistant for ' + profile.name + '. Just so you know, this call may be transcribed.';
+          ? 'Hola, se ha comunicado con ' + profile.name + ' — le habla ' + agentName + ', su recepcionista de inteligencia artificial' + (recOn ? ', en una línea grabada' : '') + '.'
+          : "Hi, you've reached " + profile.name + ' — this is ' + agentName + ', their AI receptionist' + (recOn ? ', on a recorded line' : '') + '.';
         // Greet returning callers by name. The legal disclosure is unchanged and
         // still comes first; only the friendly part personalises.
         const histEarly = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
@@ -1232,8 +1239,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             + '. ' + (cb.callbackSource === 'missed-call' ? 'You called us ' + (cb.when || 'a few minutes ago') + ' and we missed each other, so I am ringing you straight back.'
                       : 'You asked us to call you back' + (cb.need ? ' about ' + cb.need : '') + ', so here I am.')
             + ' This call may be recorded, and you can say stop calling at any time. Is now an okay time?'
-          : 'Hi, this is ' + agentName + ', an AI assistant calling on behalf of '
-          + call.profile.name + '. This call may be transcribed.' + who + ' Did I catch you at an okay time?';
+          : 'Hi, this is ' + agentName + ', the AI receptionist calling on behalf of '
+          + call.profile.name + ', on a recorded line.' + who + ' Did I catch you at an okay time?';
         call.turns.push({ who: 'agent', text: opener });   // so it never re-asks the opener
         // Same trick as inbound: warm the prompt cache while the opener plays,
         // so the first real reply — the one that decides whether this call-back
