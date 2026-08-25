@@ -2103,6 +2103,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // rather than waiting on a webhook that may never arrive. Without this a
       // charged customer could sit locked out permanently with nothing in the
       // product able to fix it.
+      const topupSession = url.searchParams.get('topup_session') || '';
+      if (topupSession) { try { await stripe.reconcileTopup(account, topupSession); account = db.getAccount(account.id) || account; } catch (e) { console.error('topup reconcile failed:', e.message); } }
       const sessionId = url.searchParams.get('session_id') || '';
       // 'none' | 'ok' | 'pending' — the page must not congratulate someone on a
       // payment that did not actually switch their account on.
@@ -2138,6 +2140,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // STOPPING a send is never paywalled. If a plan lapses mid-run the one
         // thing the user must still be able to do is halt their own mail.
         '/api/send/stop',
+        // CANCELLING is never paywalled either. A customer in dunning or past
+        // their cap who cannot reach the cancel button is a chargeback and a
+        // scam claim; the door out must always open.
+        '/api/billing/cancel', '/api/billing/resume',
         '/api/profile/save', '/api/profile/delete', '/api/pipeline',
         // Handing a rented number BACK must never be paywalled. It was, so a
         // cancelled customer had no way to release it and we kept paying the
@@ -2173,6 +2179,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // into buying a duplicate subscription.
           dunning: stripe.DUNNING.includes(account.subStatus) ? { since: account.dunningSince || '', inGrace: stripe.inGrace(account) } : null,
           tiers: plans.catalogue().map(({ priceEnvKey, ...t }) => t),
+          topups: plans.TOPUPS,
+          cancelAt: account.cancelAt || '',
           trust: plans.TRUST,
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
@@ -2895,6 +2903,27 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       }
 
       // ---- billing setup diagnostic (owner only; reports names, never values) ----
+      // ---- cancel / resume, portal-independent ----
+      if (p === '/api/billing/cancel' && req.method === 'POST') {
+        try {
+          const r = await stripe.cancelAtPeriodEnd(account);
+          const when = r.endsAt ? new Date(r.endsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) : 'the end of your period';
+          return json(res, { ok: true, endsAt: r.endsAt,
+            note: r.trialing ? `Done — your trial is cancelled and your card will not be charged. Everything stays available until ${when}.`
+                             : `Done — nothing further will be charged. Your plan keeps working until ${when}, and you can resume any time before then.` });
+        } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      if (p === '/api/billing/resume' && req.method === 'POST') {
+        try { await stripe.resumeSubscription(account); return json(res, { ok: true, note: 'Welcome back — your plan continues as before.' }); }
+        catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      // ---- one-time top-up packs ----
+      if (p === '/api/topup' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!plans.isPro(account) && !stripe.isOwner(account)) return json(res, { error: 'Top-ups need an active plan — they add to your plan allowance.' }, 400);
+        try { const u2 = await stripe.createTopupCheckout(account, String(f.kind || '')); return json(res, { ok: true, url: u2 }); }
+        catch (e) { return json(res, { error: e.message }, 400); }
+      }
       if (p === '/api/billing/diag' && req.method === 'GET') {
         if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
         return json(res, stripe.configReport());

@@ -1788,9 +1788,19 @@ function showUpgrade(){
   }
   $('tierCards').innerHTML=html||'<div class="muted">Plans are being set up. Email support@dawnpipe.com and we will get you started by hand.</div>';
   $('trustStrip').innerHTML=(STATE.trust||[]).map((x,i)=>`<div class="${i%2?'ok':''}"><b>${esc(x.k)}</b>${esc(x.v)}</div>`).join('');
-  let note=isPro
-    ? `You're on <b>${esc(STATE.usage.tierName||'')}</b>. Switching opens your billing portal so your existing plan is <b>changed</b>, not doubled up. <a href="/billing">Manage billing →</a>`
-    : '';
+  let note='';
+  if(isPro){
+    const t=STATE.topups||{};
+    const cancelBits=STATE.cancelAt
+      ? `<div style="margin-top:8px;padding:10px 12px;background:#fbeceb;border:1px solid #f0b8b3;border-radius:8px">Your plan is set to end on <b>${new Date(STATE.cancelAt).toLocaleDateString()}</b> — nothing more will be charged. Changed your mind? <button class="sm ghost" onclick="resumePlan()">Resume my plan</button></div>`
+      : `<button class="sm ghost" style="color:var(--red)" onclick="cancelPlan()">Cancel plan</button>`;
+    note=`You're on <b>${esc(STATE.usage.tierName||'')}</b>. Switching plans opens your billing portal so your existing plan is <b>changed</b>, not doubled up — plans don't stack, and upgrading is prorated by Stripe so you never pay twice for the same days. You keep every lead, call and booking when you switch. <a href="/billing">Manage billing →</a> ${cancelBits}
+    <div style="margin-top:10px;padding:10px 12px;background:var(--paper2);border:1px solid var(--line);border-radius:8px">
+      <b>Heavy month?</b> Top-up packs add to this plan — one-time, never automatic, unused balance rolls over:
+      ${['minutes250','leads500','leads2000'].filter(k=>t[k]).map(k=>`<button class="sm ghost" onclick="buyTopup('${k}')">${esc(t[k].name)} · $${t[k].price}</button>`).join(' ')}
+      ${(STATE.usage.topupLeads||STATE.usage.topupMinutes)?`<div class="muted" style="margin-top:4px;font-size:12px">Balance: ${STATE.usage.topupLeads||0} extra leads · ${STATE.usage.topupMinutes||0} extra minutes</div>`:''}
+    </div>`;
+  }
   if(STATE.isOwner){
     const missing=all.filter(t=>!t.available).map(t=>t.name);
     const stale=all.filter(t=>t.available&&t.priceCurrent===false).map(t=>t.name);
@@ -1803,6 +1813,21 @@ function showUpgrade(){
   $('billingNote').innerHTML=note;
   $('upgradePanel').style.display='';
   $('upgradePanel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function cancelPlan(){
+  if(!confirm(`Cancel your plan?
+
+Nothing more will be charged. Everything keeps working until the end of what you've already paid for (on a trial: until the trial ends, and your card is never charged). You can resume any time before then with one click.`))return;
+  try{const r=await api('/api/billing/cancel',{});toast(r.note);await load();showUpgrade();}
+  catch(e){toast('Could not cancel automatically: '+e.message+' — email support@dawnpipe.com and we will do it by hand today.');}
+}
+async function resumePlan(){
+  try{const r=await api('/api/billing/resume',{});toast(r.note);await load();showUpgrade();}
+  catch(e){toast(e.message);}
+}
+async function buyTopup(kind){
+  try{const r=await api('/api/topup',{kind});location.href=r.url;}
+  catch(e){toast(e.message);}
 }
 async function syncPrices(){
   if(!confirm('Create a Stripe price (in the mode of the server\'s Stripe key) for every plan that does not have one? Existing prices are never changed.'))return;
