@@ -1789,12 +1789,14 @@ function showUpgrade(){
   // Top-up packs get their OWN section, not a line buried in billing fine
   // print at the bottom of a 5,000px modal — that is where they went to die.
   const T=STATE.topups||{};
+  // Always clickable. A disabled button answers a click with a busy cursor
+  // and no explanation -- which reads as broken. Clicking without a plan gets
+  // told WHY, out loud, and shown the plans.
   const packBtns=['minutes250','leads500','leads2000'].filter(k=>T[k]).map(k=>
-    isPro?`<button class="sm ghost" onclick="buyTopup('${k}')" style="font-size:14px;padding:8px 14px">${esc(T[k].name)} · <b>$${T[k].price}</b></button>`
-         :`<button class="sm ghost" disabled style="font-size:14px;padding:8px 14px;opacity:.55">${esc(T[k].name)} · $${T[k].price}</button>`).join(' ');
+    `<button class="sm ghost" onclick="buyTopup('${k}')" style="font-size:14px;padding:8px 14px">${esc(T[k].name)} · <b>$${T[k].price}</b></button>`).join(' ');
   if(packBtns){
     html+=`<div class="tsec" style="margin-top:18px"><h3>➕ Top-up packs</h3>
-      <p>Plans don't stack — <b>packs do</b>. A one-time boost on top of your plan for a heavy month: never automatic, never recurring, and unused balance rolls over to next month.${isPro?'':' <b>Pick a plan first</b> — packs add to an active plan.'}</p></div>
+      <p>Plans don't stack — <b>packs do</b>. A one-time boost on top of your plan for a heavy month: never automatic, never recurring, and unused balance rolls over to next month.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${packBtns}</div>
       ${(isPro&&(STATE.usage.topupLeads||STATE.usage.topupMinutes))?`<div class="muted" style="font-size:12.5px;margin-bottom:8px">Your balance right now: <b>${STATE.usage.topupLeads||0}</b> extra leads · <b>${STATE.usage.topupMinutes||0}</b> extra minutes</div>`:''}`;
   }
@@ -1832,6 +1834,11 @@ async function resumePlan(){
   catch(e){toast(e.message);}
 }
 async function buyTopup(kind){
+  if(!(STATE.usage&&STATE.usage.isPro)){
+    alert('Pick a plan first.' + String.fromCharCode(10, 10) + 'Top-up packs add extra minutes or leads ON TOP of an active plan — they need a plan to add to. Choose a plan above, then come back for the pack.');
+    const first=document.querySelector('.tcard'); if(first)first.scrollIntoView({behavior:'smooth',block:'center'});
+    return;
+  }
   try{const r=await api('/api/topup',{kind});location.href=r.url;}
   catch(e){toast(e.message);}
 }
