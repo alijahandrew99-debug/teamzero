@@ -385,6 +385,32 @@ function outboundGate(account) {
 const REF_COOKIE = 'dp_ref';
 const REF_COOKIE_DAYS = 90;
 
+// ---- speculative thinking on partial speech ----
+// Twilio streams partial transcripts while the caller is still talking. After
+// 600ms with no newer partial (the caller has likely stopped; Twilio is now
+// sitting out its 2-second end-of-speech window), the model starts thinking
+// on the text so far. If the FINAL transcript matches (ignoring casing and
+// punctuation), the answer is already cooked and the reply is near-instant;
+// if it differs, the speculation is discarded and the turn thinks fresh --
+// exactly today's path, so quality cannot regress. ONE speculation per turn,
+// so the worst case is one wasted model call (~half a cent) on a mismatch.
+// VOICE_SPECULATE=off disables the whole thing.
+function launchSpeculation(sid) {
+  const call = voice.getCall(sid);
+  if (!call) return;
+  const text = String(call.partialLatest || '').trim();
+  if (!text || text.length < 3) return;
+  const norm = voice.normSpeech(text);
+  if (!norm || (call.spec && call.spec.norm === norm)) return;
+  if ((call.specCount || 0) >= 1) return;
+  call.specCount = (call.specCount || 0) + 1;
+  // A shallow view with the caller's line appended, so the speculative prompt
+  // is byte-identical to what the real turn would build -- without mutating
+  // the real transcript before the final result confirms the words.
+  const view = { ...call, turns: [...call.turns, { who: 'caller', text }] };
+  call.spec = { norm, promise: voice.think(view, text).then((v) => ({ v }), (err) => ({ err })) };
+}
+
 const sendJobs = new Map();
 
 // One send job per account at a time. Without this, a second click or a page
@@ -1217,6 +1243,23 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         return xml(res, voice.sayAndGather(opener, base + '/voice/turn', voice.voiceFor(call.account), voice.hintsFor(call.profile, call.account)));
       }
 
+      // ---- partial speech results (speculation feed) ----
+      // Answer instantly; Twilio fires these rapidly mid-utterance and they
+      // must never slow the call. The debounce timer restarts on every
+      // partial, so speculation launches only once the stream goes quiet.
+      if (p === '/voice/partial') {
+        const call = voice.getCall(sid);
+        if (call && process.env.VOICE_SPECULATE !== 'off') {
+          const t = String(params.UnstableSpeechResult || params.SpeechResult || '').trim();
+          if (t) {
+            call.partialLatest = t;
+            clearTimeout(call.specTimer);
+            call.specTimer = setTimeout(() => { try { launchSpeculation(sid); } catch {} }, 600);
+          }
+        }
+        res.writeHead(204); return res.end();
+      }
+
       // ---- one conversational turn ----
       if (p === '/voice/turn') {
         const call = voice.getCall(sid);
@@ -1343,7 +1386,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // and the round-trip instead of stacking after them. The redirect leg
         // is recognised by pendingThink + an empty SpeechResult, and skips the
         // guards above (its limits were checked when the real turn arrived).
-        const thinkWrapped = voice.think(call, heard).then((v) => ({ v }), (err) => ({ err }));
+        // A speculation launched off the partials may already hold this very
+        // answer. Reuse it ONLY when the final transcript matches what was
+        // speculated on; otherwise think fresh, exactly as if speculation had
+        // never existed. Either way the per-turn spec state resets here.
+        clearTimeout(call.specTimer);
+        const spec = call.spec; call.spec = null; call.specCount = 0; call.partialLatest = '';
+        const specHit = spec && spec.norm === voice.normSpeech(heard);
+        let thinkWrapped = specHit ? spec.promise : voice.think(call, heard).then((v) => ({ v }), (err) => ({ err }));
         // 1200ms, raised from 700: at 700 the ack fired on nearly every turn,
         // so every answer opened with a canned "Okay." -- and the model often
         // opened with its own "okay", doubling up into something that sounded
@@ -1364,6 +1414,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           return xml(res, voice.twiml(voice.say(ack, voice.voiceFor(call.account)) + `<Redirect method="POST">${voice.esc(base + '/voice/turn')}</Redirect>`));
         }
         raced = winner;
+        // A speculative call that errored must not end the call: it was a
+        // bonus attempt, so fall back to a fresh think with its own race.
+        if (raced && raced.err && specHit) {
+          thinkWrapped = voice.think(call, heard).then((v) => ({ v }), (err) => ({ err }));
+          raced = await Promise.race([thinkWrapped, new Promise((r2) => setTimeout(() => r2(null), 1200))]);
+          if (!raced) {
+            call.pendingThink = thinkWrapped;
+            call.turns.push({ who: 'agent', text: 'One sec.' });
+            return xml(res, voice.twiml(voice.say('One sec.', voice.voiceFor(call.account)) + `<Redirect method="POST">${voice.esc(base + '/voice/turn')}</Redirect>`));
+          }
+        }
         if (raced.err) {
           const e = raced.err;
           db.logActivity(call.accountId, { agent: 'VOICE', msg: 'AI error mid-call: ' + e.message });
