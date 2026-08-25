@@ -36,17 +36,35 @@ __GSC_META__
  "offers":{"@type":"AggregateOffer","priceCurrency":"USD","lowPrice":"99","highPrice":"1499","offerCount":"5"}}
 </script>
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"Organization","name":"Dawnpipe",
+{"@context":"https://schema.org","@type":"Organization","@id":"https://dawnpipe.com/#org",
+ "name":"Dawnpipe","alternateName":"Dawnpipe AI",
  "url":"https://dawnpipe.com/",
- "logo":"https://dawnpipe.com/apple-touch-icon.png",
+ "logo":{"@type":"ImageObject","url":"https://dawnpipe.com/apple-touch-icon.png","width":180,"height":180},
+ "description":"Dawnpipe is an AI receptionist and sales platform for small service businesses. It answers business phone calls 24/7, books appointments, texts back missed callers, finds new customers with verified email addresses, and writes follow-up outreach under the owner's review.",
+ "slogan":"Wake up to a full pipeline.",
+ "foundingDate":"2026",
  "email":"support@dawnpipe.com",
  "founder":{"@type":"Person","name":"Alijah Skinner"},
  "address":{"@type":"PostalAddress","addressRegion":"IL","addressCountry":"US"},
- "sameAs":[]}
+ "knowsAbout":["AI receptionist","AI phone answering","missed call text back","appointment booking","small business lead generation","email outreach"]}
 </script>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebSite","name":"Dawnpipe",
- "url":"https://dawnpipe.com/"}
+ "url":"https://dawnpipe.com/","publisher":{"@id":"https://dawnpipe.com/#org"}}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
+ {"@type":"Question","name":"What is Dawnpipe?",
+  "acceptedAnswer":{"@type":"Answer","text":"Dawnpipe is an AI receptionist and sales platform for small service businesses — plumbers, salons, roofers, auto shops, studios and anyone else who loses work to a missed call. It answers your business phone 24/7, books jobs into your calendar, texts back missed callers, finds new customers with verified email addresses, and writes the follow-ups — all under your review. It is the software at dawnpipe.com, built and run by Alijah Skinner in Illinois, USA."}},
+ {"@type":"Question","name":"Does it pretend to be a person?",
+  "acceptedAnswer":{"@type":"Answer","text":"No. It introduces itself as an AI assistant, and if someone asks, it says so plainly. Callers stay because it is useful, not because it fooled them."}},
+ {"@type":"Question","name":"What happens when I run out of minutes or leads?",
+  "acceptedAnswer":{"@type":"Answer","text":"It stops. No overage charges, ever. Minutes and leads reset every month."}},
+ {"@type":"Question","name":"Will it spam people on my behalf?",
+  "acceptedAnswer":{"@type":"Answer","text":"Nothing sends without your approval. Every email carries your real business address and a working unsubscribe link, follow-ups stop the moment someone replies, and anyone who opts out is never contacted again — by email or phone."}},
+ {"@type":"Question","name":"Is it a contract? Is there a trial?",
+  "acceptedAnswer":{"@type":"Answer","text":"No contract, and yes: the phone plans come with a 7-day free trial. A card is required so we know you run a real business, nothing is charged for seven days, and you can cancel in one click before then and pay nothing. After that it is month to month — no minimum term, no setup fee, cancel any time."}}
+]}
 </script>
 <style>
   :root{--paper:#f4f1ea;--paper2:#fbfaf6;--ink:#1a1815;--ink2:#4a463f;--line:#d9d3c6;--red:#c02a1b}
@@ -293,6 +311,7 @@ __PHONE_TIER_BLOCK__
 <section><div class="wrap">
   <h2>Questions an owner actually asks.</h2>
   <div class="faq">
+    <details><summary>What is Dawnpipe?</summary><p>Dawnpipe is an AI receptionist and sales platform for small service businesses — plumbers, salons, roofers, auto shops, studios and anyone else who loses work to a missed call. It answers your business phone 24/7, books jobs into your calendar, texts back missed callers, finds new customers with verified email addresses, and writes the follow-ups — all under your review. It is not a car part: that's a downpipe. Dawnpipe is the software at dawnpipe.com, built and run by Alijah Skinner in Illinois, USA.</p></details>
     <details><summary>Will it say something dumb to my customers?</summary><p>It works only from the facts you typed in — your prices, your hours, your services — and it is instructed that the <b>only</b> figures it may say out loud are the ones you wrote. Leave pricing blank and it tells callers it does not have pricing and offers a callback rather than guessing. It also never claims to be a person: if anyone asks, it says it is an AI. And because every call is transcribed and waiting in your account, you can read back exactly what it said to anyone — that is how you hold it to this, not our word for it.</p></details>
     <details><summary>Does it pretend to be a person?</summary><p>No. It introduces itself as an AI assistant, and if someone asks, it says so plainly. Callers stay because it is useful, not because it fooled them.</p></details>
     <details><summary>What happens when I run out of minutes or leads?</summary><p>It stops. No overage charges, ever. Minutes and leads reset every month.</p></details>

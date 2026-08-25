@@ -13,7 +13,7 @@ const ok = (l, c, extra) => { c ? pass++ : fail++; console.log((c ? '  PASS  ' :
 const note = (l) => { warn++; console.log('  NOTE  ' + l); };
 
 const PAGES = {
-  '/': { title: /Dawnpipe/, mustHave: ['SoftwareApplication', 'Organization', 'WebSite'] },
+  '/': { title: /Dawnpipe/, mustHave: ['SoftwareApplication', 'Organization', 'WebSite', 'FAQPage'] },
   '/about': { title: /About Dawnpipe/, mustHave: ['AboutPage'] },
   '/automate-your-business-with-ai': { title: /Automate Your Business with AI/i, mustHave: ['Article', 'FAQPage'] },
   '/signup': { title: /Dawnpipe/ },
