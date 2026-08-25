@@ -1213,7 +1213,8 @@ const FWD={
     s:['On the phone with your business line, dial:',
        'NOANSWER — forward after it rings',
        'BUSY — forward when you are already on a call',
-       'Press call after each. You will hear a short confirmation tone.']},
+       'UNREACHABLE — forward when your phone is off or out of signal',
+       'Press call after each. You will hear a short confirmation tone. With all three set, no caller can ever reach your voicemail — the AI answers instead.']},
   vz:{t:'Verizon',
     s:['On the phone with your business line, dial:',
        'VZ — forwards when busy or unanswered',
@@ -1234,6 +1235,7 @@ function showFwd(k){
   const body=f.s.map(line=>{
     if(line.startsWith('NOANSWER'))return '&bull; '+code('*61*'+mine+'#')+' — forward after it rings out';
     if(line.startsWith('BUSY'))return '&bull; '+code('*67*'+mine+'#')+' — forward when you are already on a call';
+    if(line.startsWith('UNREACHABLE'))return '&bull; '+code('*62*'+mine+'#')+' — forward when your phone is off or has no signal';
     if(line.startsWith('VZ'))return '&bull; '+code('*71'+mine)+' — forwards when busy or unanswered';
     return '&bull; '+esc(line);
   }).join('<br>');
