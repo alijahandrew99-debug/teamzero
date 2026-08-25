@@ -1,6 +1,7 @@
-// Animated browser-tab icon: a crescent moon over someone asleep while the
-// phone rings — the whole product promise in 32 pixels. ("Your pipeline works
-// the night shift; you wake up to it.")
+// Animated browser-tab icon: the Dawnpipe brand mark, alive — the sun rises
+// over the horizon when the tab opens, then settles into the logo with a
+// gentle shimmer. Same red dawn as /favicon.ico and the search-results icon,
+// so the brand is one mark everywhere.
 //
 // Browsers don't animate SVG favicons, so we draw frames to a canvas and swap
 // the icon href on a timer. Zero dependencies, ~2KB, pauses when the tab is
@@ -32,7 +33,7 @@
     document.head.appendChild(l);
   }
 
-  var INK = '#151228', PAPER = '#f4f1ea', RED = '#c02a1b', GOLD = '#f0c860';
+  var RED = '#c02a1b', CREAM = '#fbfaf6';
   var t = 0, timer = null;
 
   function rr(px, py, w, h, r) {           // rounded rect path
@@ -45,72 +46,44 @@
     x.closePath();
   }
 
+  // Geometry mirrors the static mark: sun r=15 centered x=32 sitting on a
+  // rounded horizon bar at y=37.
+  var BAR_Y = 37, BAR_H = 5.5, SUN_R = 15, SUN_X = 32;
+  var RISE_FRAMES = 26;             // ~3.4s sunrise on tab open
+
   function frame() {
-    // ring cadence: two quick rings, then a rest — like a real phone
-    var cyc = t % 20;
-    var ringing = cyc < 3 || (cyc >= 5 && cyc < 8);
-    var wob = ringing ? Math.sin(t * 2.4) * 0.30 : 0;   // handset rock
-    var pulse = ringing ? (cyc % 3) / 3 : 0;
+    // Ease-out rise from fully below the horizon to the logo position, then
+    // hold there — dawn happens once; it does not undo itself.
+    var p = Math.min(t / RISE_FRAMES, 1);
+    p = 1 - (1 - p) * (1 - p);      // easeOutQuad
+    var cy = BAR_Y + (SUN_R + 2) * (1 - p);
 
-    // --- night sky ---
     x.clearRect(0, 0, S, S);
-    x.fillStyle = INK; rr(0, 0, S, S, 13); x.fill();
+    x.fillStyle = RED; rr(0, 0, S, S, 13); x.fill();
 
-    // --- stars ---
-    x.fillStyle = 'rgba(244,241,234,.55)';
-    [[13, 13, 1.3], [52, 20, 1], [43, 9, 1.1], [9, 30, 1]].forEach(function (s) {
-      x.beginPath(); x.arc(s[0], s[1], s[2], 0, 6.284); x.fill();
-    });
-
-    // --- crescent moon (top-right): full disc minus an offset disc ---
-    x.save();
-    x.fillStyle = GOLD;
-    x.beginPath(); x.arc(46, 17, 10, 0, 6.284); x.fill();
-    x.globalCompositeOperation = 'destination-out';
-    x.beginPath(); x.arc(41.5, 14, 9.5, 0, 6.284); x.fill();
-    x.restore();
-
-    // --- sleeper: pillow, head, blanket ---
-    x.fillStyle = '#2a2547';                       // bed shadow
-    rr(6, 42, 52, 17, 5); x.fill();
-    x.fillStyle = PAPER;                           // pillow
-    rr(9, 40, 15, 10, 4); x.fill();
-    x.fillStyle = '#e8b48f';                       // head
-    x.beginPath(); x.arc(21, 44, 6.2, 0, 6.284); x.fill();
-    x.fillStyle = '#6b5ea8';                       // blanket
-    rr(26, 43, 31, 13, 5); x.fill();
-    // closed eye
-    x.strokeStyle = '#3a2f2a'; x.lineWidth = 1.4; x.lineCap = 'round';
-    x.beginPath(); x.arc(23, 43.5, 2.2, 0.15, 2.9); x.stroke();
-
-    // --- zzz drifting up from the sleeper ---
-    var zf = (t % 12) / 12;
-    x.fillStyle = 'rgba(244,241,234,' + (0.75 - zf * 0.6).toFixed(2) + ')';
-    x.font = 'bold 9px system-ui,sans-serif';
-    x.fillText('z', 15, 34 - zf * 6);
-    x.font = 'bold 7px system-ui,sans-serif';
-    x.fillText('z', 10, 29 - zf * 5);
-
-    // --- the phone, ringing on the nightstand ---
-    x.save();
-    x.translate(45, 34);
-    x.rotate(wob);
-    // handset body
+    // sun disc...
+    x.fillStyle = CREAM;
+    x.beginPath(); x.arc(SUN_X, cy, SUN_R, 0, 6.284); x.fill();
+    // ...hidden below the horizon line (the ground swallows it)
     x.fillStyle = RED;
-    rr(-7.5, -5.5, 15, 11, 3.5); x.fill();
-    // screen glow when it rings
-    x.fillStyle = ringing ? '#ffe9a8' : '#7a1b12';
-    rr(-5.5, -3.5, 11, 7, 2); x.fill();
-    x.restore();
+    x.fillRect(0, BAR_Y, S, S - BAR_Y);
+    // the horizon bar itself
+    x.fillStyle = CREAM;
+    rr(10, BAR_Y, 44, BAR_H, BAR_H / 2); x.fill();
 
-    // ring arcs radiating out
-    if (ringing) {
-      x.strokeStyle = 'rgba(240,200,96,' + (0.95 - pulse * 0.65).toFixed(2) + ')';
-      x.lineWidth = 2;
-      for (var i = 1; i <= 2; i++) {
-        var r = 10 + i * 4.5 + pulse * 3;
-        x.beginPath(); x.arc(45, 34, r, -1.15, 1.15); x.stroke();          // right
-        x.beginPath(); x.arc(45, 34, r, Math.PI - 1.15, Math.PI + 1.15); x.stroke(); // left
+    // Once risen: a slow shimmer of rays, breathing on a ~4s cycle. Subtle on
+    // purpose — the tab should read as the logo, not as an alert.
+    if (p >= 1) {
+      var breathe = (Math.sin((t - RISE_FRAMES) / 15 * Math.PI) + 1) / 2;   // 0..1
+      x.strokeStyle = 'rgba(251,250,246,' + (0.25 + breathe * 0.45).toFixed(2) + ')';
+      x.lineWidth = 2; x.lineCap = 'round';
+      for (var a = -150; a <= -30; a += 30) {
+        var rad = a * Math.PI / 180;
+        var r0 = SUN_R + 3 + breathe * 1.5, r1 = r0 + 4;
+        x.beginPath();
+        x.moveTo(SUN_X + Math.cos(rad) * r0, BAR_Y + Math.sin(rad) * r0);
+        x.lineTo(SUN_X + Math.cos(rad) * r1, BAR_Y + Math.sin(rad) * r1);
+        x.stroke();
       }
     }
 
