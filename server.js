@@ -1841,8 +1841,21 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const owner2 = db.accountByCallSid(sid);
           if (owner2) {
             const dur0 = Number(params.CallDuration || 0);
+            // Same rule the live path below applies: a call nobody real spoke
+            // on is never billed against the plan. This fallback used to bill
+            // unconditionally, so a robocall or a pocket dial that happened to
+            // span a deploy was charged in full while the identical call a
+            // minute later was not. The persisted record is the only witness
+            // left once the in-memory one is gone -- every turn writes the
+            // transcript, and the spam paths stamp their outcome, so both
+            // signals are already on disk by the time we get here.
+            const prior = db.getCalls(owner2.id, 500).find((c) => c.sid === sid) || {};
+            const spokeBefore = Array.isArray(prior.transcript)
+              && prior.transcript.some((t) => t && t.who === 'caller' && String(t.text || '').trim());
+            const wasSpam = prior.outcome === 'spam' || prior.outcome === 'screened-out';
             db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0 });
-            plans.consumeVoiceMinutes(owner2, Math.ceil(dur0 / 60), stripe.isOwner(owner2));
+            if (spokeBefore && !wasSpam) plans.consumeVoiceMinutes(owner2, Math.ceil(dur0 / 60), stripe.isOwner(owner2));
+            else if (dur0 > 0) db.logActivity(owner2.id, { agent: 'VOICE', msg: `Not billed: ${wasSpam ? 'screened as spam' : 'nobody spoke'} (${dur0}s, recovered after a restart)` });
           }
           res.writeHead(204); return res.end();
         }
