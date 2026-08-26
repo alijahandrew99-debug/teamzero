@@ -24,6 +24,14 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    `lib/agents.js:524` also writes directly but it's a per-account/profile/
    day markdown brief file, not shared JSON state — low stakes, left as is)
    rather than building a queue for a race that doesn't exist yet.
+   **Status (2026-08-26):** branch `keeper/2026-08-25-atomic-rep-delete`
+   is still open, not yet merged. Re-checked it merges cleanly against
+   current main (`git merge-tree`, no conflicts) despite 19 commits of
+   drift on main since it was cut. Re-ran the bypass audit against
+   everything main gained since (`lib/spam.js`, `lib/assistant.js`,
+   `lib/stripe.js`, `lib/plans.js`, the new per-profile voice config,
+   per-rep commission rates) — no new raw `writeFileSync`/`fs.write` sites
+   found. Nothing further to do here until the branch merges.
 
 2. **Email verification on signup** — stops trial-farming. Not yet verified
    against current code.
@@ -31,11 +39,40 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
 3. **Stuck-call / webhook failure audit** — look for siblings of the fixed
    "stuck calls" bug (timeouts, orphaned voice sessions). One instance
    (calls frozen at "in-progress" after a deploy mid-call) was fixed in
-   `df0d31f` (2026-08-24). Audit for other timeout/orphan patterns not yet
-   done.
+   `df0d31f` (2026-08-24).
+   **Status (2026-08-26): audited, no siblings found.** The fixed bug's
+   shape is specific: a status persisted to a JSON file, transitioned only
+   by a callback/event that can be lost (process restart, deploy). Checked
+   every other stateful in-flight tracker:
+   - `df0d31f`'s sweep (`LIVE = [queued, ringing, initiated, in-progress]`,
+     2h threshold, in the `/api/voice/calls` handler) already covers both
+     inbound and outbound calls — both go through `db.saveCall`, so no
+     separate fix was needed for outbound.
+   - `jobs`, `sendJobs`, `callJobs`, `phoneJobs`, `activeSends` (server.js)
+     are all in-memory `Map`s with no persisted "running" row — a restart
+     empties them and the frontend sees "idle"/not-found, not a stuck
+     record. `sendJobs` also self-clears a job idle >30 min.
+   - Queue items (`db.updateQueueItem`) only get a persisted status of
+     `held`/`rejected`/`sent`, never a transient "sending" state written
+     before the send completes — a crash mid-loop leaves the item
+     `approved` (safe, retried next run).
+   - Appointments are written `status: 'booked'` atomically at creation.
+   Recommend closing this item unless a new failure mode shows up live.
 
 4. **Prompt-caching discipline on live-call Claude turns** ($0.006 ->
-   ~$0.002/turn). Not yet verified against current code.
+   ~$0.002/turn).
+   **Status (2026-08-26): already done, since `fa07426` (2026-08-17).**
+   `lib/ai.js` `callAPI()` sends the system block with
+   `cache_control: { type: 'ephemeral' }`; `lib/voice.js` `warmCache()`
+   primes it before the caller's first real turn; `think()` caps
+   conversation history at the last 16 turns so the uncached part of the
+   prompt stays bounded instead of growing with call length. `COST.md`
+   still listed this as an open lever — corrected there today, with a note
+   that the $0.006/turn baseline itself is stale (voice turns moved from
+   Haiku to Sonnet in `695a9aa`, 2026-08-24, a deliberate quality
+   tradeoff — new per-turn cost not re-measured). Recommend closing this
+   item; re-open only if a fresh `/api/admin/spend` read shows caching
+   isn't actually landing.
 
 5. **ConversationRelay migration design** (arch C in COST.md, ~half the
    per-minute cost) — design doc + branch, not a live-code change.
