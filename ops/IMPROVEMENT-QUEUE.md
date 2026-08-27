@@ -33,8 +33,14 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    per-rep commission rates) — no new raw `writeFileSync`/`fs.write` sites
    found. Nothing further to do here until the branch merges.
 
-2. **Email verification on signup** — stops trial-farming. Not yet verified
-   against current code.
+2. **Email verification on signup** — stops trial-farming.
+   **Status (2026-08-27): verified still open.** `lib/auth.js` has no
+   verification concept; `POST /signup` (`server.js:1969`) calls
+   `db.createAccount()` directly and the account is immediately fully
+   active — no unverified state, no confirmation email, no gate.
+   Customer-facing (changes what every new signup experiences), so per
+   the keeper's standing rule this is proposed, not implemented — see
+   today's report (`ops/reports/2026-08-27.md`) for the proposed shape.
 
 3. **Stuck-call / webhook failure audit** — look for siblings of the fixed
    "stuck calls" bug (timeouts, orphaned voice sessions). One instance
@@ -76,6 +82,15 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
 
 5. **ConversationRelay migration design** (arch C in COST.md, ~half the
    per-minute cost) — design doc + branch, not a live-code change.
+   **Status (2026-08-27): design doc written**, `ops/design/conversationrelay-migration.md`
+   (branch `keeper/2026-08-27-conversationrelay-design`). Covers what
+   ports cleanly (`think()`, prompt caching, call state) vs. what needs a
+   spike first (partial-result speculation, noise-driven barge-in
+   control, hints, machine detection, recording, auth — all currently
+   implemented against the `<Gather>`/webhook transport specifically).
+   Recommends a half-day spike before any implementation branch, since
+   several tuned-live call-quality features may not have a direct
+   ConversationRelay equivalent. Not started as code.
 
 6. **Media Streams + Deepgram + Polly-direct design** (arch D, the end
    state) — design doc, largest lift.
