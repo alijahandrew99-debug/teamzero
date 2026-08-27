@@ -839,8 +839,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && p === '/health') {
     let ai = 'unknown';
     try { ai = aiMode(); } catch {}
+    // `mail` = is the SYSTEM mailbox configured (password resets, digests).
+    // Configured-or-not only, never credentials — without this flag, a dead
+    // reset-email path is invisible from outside: /forgot shows the same
+    // "link is on its way" either way (deliberately, so it can't be used to
+    // probe which emails have accounts).
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ ok: true, ai, uptime: Math.round(process.uptime()), build: BUILD_ID }));
+    return res.end(JSON.stringify({ ok: true, ai, mail: mailer.enabled(), uptime: Math.round(process.uptime()), build: BUILD_ID }));
   }
 
   if (process.env.MAINTENANCE === '1'
@@ -2093,12 +2098,26 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (rateLimited(req, 'forgot', 5, 15 * 60 * 1000)) {
         return html(res, view('forgot.html').replace('__MSGCLASS__', 'err').replace('<!--MSG-->', 'Too many attempts. Try again in 15 minutes.').replace('<!--LINK-->', ''), 429);
       }
+      // No system mailbox at all is a SERVER state, not an account state —
+      // admitting it leaks nothing about who has an account, and the fake
+      // "link is on its way" left people waiting on an email that could
+      // never come. Give them the human route instead.
+      if (!mailer.enabled() && process.env.DEV_UNLOCK !== '1') {
+        return html(res, view('forgot.html')
+          .replace('__MSGCLASS__', 'err')
+          .replace('<!--MSG-->', 'Reset-by-email is not switched on yet. Email support@dawnpipe.com from your account address and a human will reset it for you.')
+          .replace('<!--LINK-->', ''));
+      }
       const f = parseForm(await readBody(req));
       const acc = db.getAccountByEmail((f.email || '').trim().toLowerCase());
       let note = '';
       if (acc) {
         const token = db.createResetToken(acc.id);
         const r = await mailer.sendPasswordReset(acc.email, token);
+        // A configured mailbox that FAILS to send (refused login, network) is
+        // invisible to the person waiting — log it where the owner and the
+        // keeper will see it, with the real error.
+        if (!r.ok) db.logActivity(acc.id, { agent: 'SYSTEM', msg: `Password reset email to ${acc.email} FAILED: ${r.error}` });
         // If no system mailbox is configured yet, surface the link so the owner
         // isn't locked out of their own product. Never do this in production.
         if (!r.ok && process.env.DEV_UNLOCK === '1') note = `${process.env.PUBLIC_URL || ''}/reset?token=${token}`;
