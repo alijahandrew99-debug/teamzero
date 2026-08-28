@@ -97,6 +97,23 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
 
 7. **Activation analytics** — count signup -> profile -> first lead -> first
    send -> upgrade into a flat JSON, no third-party tracker.
+   **Status (2026-08-28): shipped**, branch `keeper/2026-08-28-activation-funnel`.
+   Added `db.trackFunnel(accountId, step)` / `db.getFunnelSummary()` writing
+   to a new `funnel.json` (one row per account per milestone, first-crossing
+   only — repeat calls are safe no-ops, so callers don't need to check
+   "is this the first time" themselves). Hooked at the five natural points:
+   `db.createAccount` (signup), the `POST /api/profile/save` route (profile —
+   deliberately NOT hooked in `db.createProfile` itself, since signup silently
+   creates a placeholder starter profile via `seedStarterProfile` and hooking
+   there would make "profile" fire in lockstep with "signup" for every
+   account, destroying the signal), `db.addLeads` (first_lead, only when a
+   row is actually added — not on a no-op dedup call), `db.logSend`
+   (first_send), and the Stripe `checkout.session.completed` handler
+   (upgrade). Added an owner-only `GET /api/admin/funnel` returning
+   `{ steps, counts }`. No customer-facing change. Smoke-tested against an
+   isolated `DATA_DIR` (signup/profile/lead/send/upgrade each count once,
+   a duplicate lead batch and an unknown step name are both safe no-ops);
+   full `node test-reps.js` suite (37 tests) still passes.
 
 8. **Onboarding**: 2 questions -> AI drafts profile -> instant first leads.
    Customer-facing — propose in a report before implementing.
