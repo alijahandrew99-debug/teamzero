@@ -26,7 +26,7 @@ At ~3-4 turns/min and ~180 characters spoken per turn:
 |---|---|---|---|
 | Speech recognition (`<Gather>`) | **$0.02 per USE** (flat, any length up to 60s) | $0.060–0.080 | ~38% |
 | Text-to-speech (Twilio `<Say>`, Polly Generative) | $0.0130 / 100 chars | $0.070–0.094 | ~45% |
-| AI (Haiku, prompt-cached) | ~$0.006 / turn | $0.018–0.024 | ~12% |
+| AI (**Sonnet** as of Aug 24, prompt-cached) | figure below is stale — was Haiku ~$0.006/turn; voice tier moved to Sonnet in `695a9aa` for answer quality, per-turn cost not yet re-measured | $0.018–0.024 (stale) | ~12% (stale) |
 | Phone line (inbound local) | $0.0085 / min | $0.0085 | ~4% |
 | Recording + storage | $0.0025/min + $0.0005/min/mo | $0.0025 | ~1% |
 
@@ -110,7 +110,14 @@ architecture does.**
    email.
 4. **Charge for extra locations/numbers** ($29/mo). Every competitor does;
    underlying cost is $1.15.
-5. **Prompt-caching discipline** on live-call turns: $0.006 → ~$0.002.
+5. ~~**Prompt-caching discipline** on live-call turns: $0.006 → ~$0.002.~~ **Done** —
+   `lib/ai.js` sends the system block with `cache_control: { type: 'ephemeral' }`,
+   `voice.warmCache()` primes it before the caller's first turn, and `think()`
+   caps message history at 16 turns so the uncached part stays bounded (all
+   since `fa07426`, 2026-08-17). The $0.006 → $0.002 target itself is stale
+   now that voice turns run Sonnet, not Haiku (see the AI row above) — worth a
+   fresh per-turn measurement via `/api/admin/spend` rather than reusing this
+   number. (Verified 2026-08-26, re-verified 2026-08-28.)
 
 ### Do NOT do these
 
