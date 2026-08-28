@@ -2429,6 +2429,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             db.logActivity(acc, { agent: 'SYSTEM', msg: `Phone script drafted for ${saved.name || 'your business'} — review it on AI Answering` });
           }
         }
+        db.trackFunnel(acc, 'profile');
         return json(res, { profile: saved });
       }
       // Start a background prospecting job and return immediately — long runs
@@ -3029,6 +3030,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           db.logActivity(acc, { agent: 'SYSTEM', msg: 'Assistant error: ' + e.message });
           return json(res, { text: 'Something glitched on my end. Try once more — or email support@dawnpipe.com and a human will sort it.', go: '' });
         }
+      }
+
+      // Activation funnel: how many accounts ever crossed each milestone
+      // (signup -> profile -> first lead -> first send -> upgrade). Counts
+      // only — no per-account detail, no third-party tracker.
+      if (p === '/api/admin/funnel' && req.method === 'GET') {
+        if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
+        return json(res, { steps: db.FUNNEL_STEPS, counts: db.getFunnelSummary() });
       }
 
       // ---- CALL-BACKS (the customer's view) ----
