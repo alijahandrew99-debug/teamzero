@@ -32,6 +32,14 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    `lib/stripe.js`, `lib/plans.js`, the new per-profile voice config,
    per-rep commission rates) — no new raw `writeFileSync`/`fs.write` sites
    found. Nothing further to do here until the branch merges.
+   **Status (2026-08-29):** re-checked once more against everything main
+   gained since 08-26 (password reset, social-share card, forwarding
+   divert, SEO/schema work, phone-setup-per-business, website import,
+   spam filter, in-app assistant) — still no new raw
+   `writeFileSync`/`fs.write` sites (`lib/agents.js:561`'s per-profile
+   brief file is the only pre-existing one, still low-stakes). Branch
+   still merges clean (`git merge-tree`, no conflicts). Still unmerged,
+   four days now.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
@@ -41,6 +49,7 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    Customer-facing (changes what every new signup experiences), so per
    the keeper's standing rule this is proposed, not implemented — see
    today's report (`ops/reports/2026-08-27.md`) for the proposed shape.
+   **Status (2026-08-29): re-verified, still open, unchanged.**
 
 3. **Stuck-call / webhook failure audit** — look for siblings of the fixed
    "stuck calls" bug (timeouts, orphaned voice sessions). One instance
@@ -94,6 +103,18 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
 
 6. **Media Streams + Deepgram + Polly-direct design** (arch D, the end
    state) — design doc, largest lift.
+   **Status (2026-08-29): design doc written**,
+   `ops/design/media-streams-deepgram-polly-design.md` (branch
+   `keeper/2026-08-29-media-streams-design`). Scopes the three new pieces
+   D needs beyond item 5 (a hand-rolled zero-dependency WebSocket *server*
+   for Twilio Media Streams, a WebSocket client to Deepgram, and
+   SigV4-signed direct Polly calls with reply-chunking for low-latency
+   TTS), assesses each against the zero-npm-dependency rule (all feasible,
+   the WS server is the hard one), and lists what has to be rebuilt vs.
+   what ports from `lib/voice.js` unchanged. Recommends explicitly:
+   design only for now — do not spike or implement until item 5's arch-C
+   spike/canary lands, since D inherits every open question item 5 raised
+   and adds its own on top. Not started as code.
 
 7. **Activation analytics** — count signup -> profile -> first lead -> first
    send -> upgrade into a flat JSON, no third-party tracker.
