@@ -123,6 +123,7 @@ setInterval(() => {
   const now = Date.now();
   for (const [k, v] of hits) if (now > v.reset) hits.delete(k);
   try { db.pruneSessions(); } catch {}
+  try { db.pruneResets(); } catch {}
 }, 10 * 60 * 1000);
 
 // ---- legal copy ----
