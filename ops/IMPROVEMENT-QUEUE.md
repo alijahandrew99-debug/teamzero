@@ -40,6 +40,27 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    brief file is the only pre-existing one, still low-stakes). Branch
    still merges clean (`git merge-tree`, no conflicts). Still unmerged,
    four days now.
+   **Status (2026-08-30):** branch re-verified against current main
+   (`git merge-tree`) — still merges clean, no conflicts, six days
+   unmerged now. Meanwhile the bug it fixes is still live in production:
+   `lib/reps.js:146` on current `main` still has the raw
+   `fs.writeFileSync` rewriting `reps.json` (the commission ledger's rep
+   table) directly, bypassing `db`'s atomic temp-file+rename path — the
+   exact write-safety gap this queue item was opened for. Flagging again,
+   more urgently, since it's sat mergeable and unmerged for a week.
+   Separately, found and fixed a *sibling* gap in the same family while
+   reading the new password-reset code: `db.pruneSessions()` sweeps
+   expired session tokens every 10 min so `sessions.json` can't grow
+   without bound, but the equally new `resets.json` (password-reset
+   tokens, added with `c577195`) had no equivalent — `useResetToken()`
+   only deletes a token on successful use, so an expired-but-never-used
+   one (the common case — most reset links are never clicked) sat in the
+   file forever. Added `db.pruneResets()` mirroring `pruneSessions()`
+   exactly, wired into the same interval. See branch
+   `keeper/2026-08-30-prune-reset-tokens`. Smoke-tested against an
+   isolated `DATA_DIR` (expired token pruned, live token kept, idempotent
+   on a second run); `node test-reps.js` (37 tests) still passes;
+   `node --check` clean on both touched files.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
