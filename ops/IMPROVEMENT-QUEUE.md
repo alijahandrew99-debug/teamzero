@@ -61,6 +61,14 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    isolated `DATA_DIR` (expired token pruned, live token kept, idempotent
    on a second run); `node test-reps.js` (37 tests) still passes;
    `node --check` clean on both touched files.
+   **Status (2026-08-31):** branch `keeper/2026-08-25-atomic-rep-delete`
+   re-verified (`git merge-tree`) — still merges clean against current
+   main, still unmerged, now a full week old. `lib/reps.js:146`'s raw
+   `writeFileSync` on `reps.json` is still live on `main`. This is now
+   the oldest thing in this queue waiting purely on a merge, not on more
+   Keeper work — re-auditing it daily is turning into pure overhead.
+   Recommend Alijah just merge it (see report). No new bypass sites found
+   (no new commits landed on `main` since `c577195`, 2026-08-26).
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
@@ -159,3 +167,26 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
 
 8. **Onboarding**: 2 questions -> AI drafts profile -> instant first leads.
    Customer-facing — propose in a report before implementing.
+
+9. **Stale duplicate ops/ docs on `main`.** `ad5e278` (2026-08-24, bundled
+   into an unrelated per-rep-commission commit) added a second copy of
+   `IMPROVEMENT-QUEUE.md`/`KEEPER-LOG.md` straight onto `main`, never
+   updated since — flagged as unreconciled every shift from 2026-08-26
+   through 2026-08-30. **Status (2026-08-31): fixed.** Removed both stale
+   files on `main` and added `ops/README.md` pointing at `keeper-ops` as
+   the canonical location, keeping `ops/seo-check.js` (a real tool, run
+   daily by this shift — see item 10). Branch
+   `keeper/2026-08-31-reconcile-stale-ops-docs`, docs-only, no code
+   touched.
+
+10. **`ops/seo-check.js`** — a zero-dependency SEO/trust-signal monitor for
+    dawnpipe.com, discovered on `main` 2026-08-31 while investigating item
+    9 (added in `1a316ec`+`083e66a`, 2026-08-25, never previously run by
+    this shift). Checks title/JSON-LD/canonical/sitemap/favicon/robots
+    across the marketing pages, DNS via DoH, exit-code 1 on any FAIL —
+    meant to run daily so a deploy regression (duplicate title, broken
+    JSON-LD, dead sitemap URL) gets caught same-day. Ran it today: every
+    check returned the same `403` as the direct health-check curls
+    (session egress policy, not a real site error — see today's report).
+    Recommend adding a "run ops/seo-check.js" step to the shift once site
+    egress is reachable again.
