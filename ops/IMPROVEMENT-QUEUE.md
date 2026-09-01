@@ -69,6 +69,14 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    Keeper work — re-auditing it daily is turning into pure overhead.
    Recommend Alijah just merge it (see report). No new bypass sites found
    (no new commits landed on `main` since `c577195`, 2026-08-26).
+   **Status (2026-09-01):** re-verified with an actual `git merge
+   --no-commit` against current `main` (not just `git merge-tree`, which
+   today flagged both touched files as "changed in both" — a false alarm
+   from that tool's coarse per-file reporting; the real merge auto-resolves
+   with no conflicts). Still unmerged, eight days now; `lib/reps.js:142`'s
+   raw `writeFileSync` is still live. No new commits on `main` since
+   08-26, so still nothing new to audit. Nothing left to do here but wait
+   on the merge.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
