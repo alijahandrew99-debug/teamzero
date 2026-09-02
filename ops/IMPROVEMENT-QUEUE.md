@@ -77,6 +77,20 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    raw `writeFileSync` is still live. No new commits on `main` since
    08-26, so still nothing new to audit. Nothing left to do here but wait
    on the merge.
+   **Status (2026-09-02):** branch still unmerged, nine days now, no new
+   commits on `main` to re-audit. Shipped one more concrete piece of this
+   item instead of re-verifying the same stale branch: `write()` in
+   `lib/db.js` was pretty-printing every JSON write (`JSON.stringify(d,
+   null, 2)`) — no reader ever needs that formatting, it's pure CPU and
+   bytes on the hottest write path (`saveCall` runs every conversational
+   turn of every live call). Dropped the formatting; `node --check` clean,
+   `node test-reps.js` 37/37 still passing, zero behavior change. Branch
+   `keeper/2026-09-02-db-write-compact`. Surfaced by the independent
+   2026-08-26 audit (item 12) as the cheapest available win here — see
+   there for the full context on `calls.json`'s row cap, which this does
+   not fix. `keeper/2026-08-25-atomic-rep-delete` is still the higher-value
+   ask: it fixes a live bypass of the atomic path, this only makes the
+   atomic path itself cheaper.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
@@ -198,3 +212,75 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     (session egress policy, not a real site error — see today's report).
     Recommend adding a "run ops/seo-check.js" step to the shift once site
     egress is reachable again.
+
+11. **URGENT — merge `audit/2026-08-26-voice-status-fallback-billing`.**
+    Discovered 2026-09-02: a separate, independent code-audit session (not
+    this Keeper shift) ran 2026-08-26 and found a real billing-correctness
+    bug, tracked entirely outside this queue until today. `/voice/status`'s
+    fallback path (runs when the in-memory call record is gone because a
+    deploy landed mid-call — routine, since Render auto-deploys `main` and
+    this shift pushes daily) billed `ceil(CallDuration/60)` unconditionally,
+    with no check for whether the caller ever spoke or the spam filter
+    flagged the call. The live path already refuses to bill those calls
+    ("robocalls, dead air and pocket dials were eating paid minutes"). Net
+    effect: the exact same robocall was free or billed depending only on
+    whether a deploy happened to be mid-flight — a few calls a week
+    overbilled against the product's own stated rule. Fix is already
+    written, tested (`node --check` clean, guard logic table-tested against
+    5 transcript shapes), and on branch
+    `audit/2026-08-26-voice-status-fallback-billing` — **re-verified
+    2026-09-02, still merges clean against current `main` via
+    `git merge --no-commit --no-ff`, still unmerged, 7 days now.** Full
+    writeup with the trade-off (a call that dies before the first agent
+    reply now goes unbilled — under-billing by at most 1 minute, deliberately
+    chosen over the alternative of ever overbilling) is in
+    `ops/audit/2026-08-26.md` on branch `keeper-audit`, finding 1. This is
+    now the top merge ask, ahead of item 1's week-old branch, because it's
+    actively costing customers money on every deploy in the meantime.
+
+12. **Other findings from the 2026-08-26 independent audit**
+    (`ops/audit/2026-08-26.md`, branch `keeper-audit` — not a `keeper/*` or
+    `keeper-ops` branch, so this shift can read but not merge it). Folding
+    the audit's own "suggested queue additions" in here so they're tracked:
+    - `/voice/status` billing is not idempotent — no `billedMin` stamp on
+      the call row, so a second delivery of the same status callback would
+      double-bill. Not observed live today (both registered callbacks are
+      completed-only, webhooks don't retry), but cheap to guard and the
+      ways it becomes live later are casual (adding `StatusCallbackEvent`,
+      a retrying proxy, a `statusCallback` on the transfer leg). ~6 lines,
+      touches the live billing path — do deliberately, not as a drive-by.
+    - `calls.json` is capped at 3,000 rows **globally**, not per account —
+      at ~200 customers this is roughly 3 days of history before a quiet
+      customer's calls (and recordings) get evicted by a busy customer's
+      volume. Also: pretty-printed writes on every turn measured at up to
+      ~135ms of blocked event loop at the cap (item 11's compact-write fix,
+      shipped 2026-09-02 as `keeper/2026-09-02-db-write-compact`, halves
+      this but doesn't fix the global-cap eviction). Recommend per-account
+      retention next time `lib/db.js`'s call storage is touched.
+    - The do-not-call branch on `/voice/incoming` (`server.js:1288-1290`) is
+      unreachable dead code encoding a *different* policy than the reject
+      that actually runs at `server.js:1159` — worth a product decision from
+      Alijah on which behavior is intended (see the audit doc for the two
+      readings), not a Keeper call to make.
+    - `estimateCost` (`lib/voice.js`) omits the transferred `<Dial>` leg's
+      cost — understates every transferred call's shown cost by ~$0.04 on a
+      typical 5-minute call. Low severity, fold in whenever that function is
+      next touched rather than its own branch.
+    - Audit recommends measuring actual production `calls.json` size (via
+      `/api/admin/spend` or a Render shell) before pricing the Postgres
+      migration — this shift has no owner-authenticated access to check.
+
+13. **A parallel, independent code-audit process exists** (branch
+    `keeper-audit`, `ops/audit/2026-08-26.md`) that this Keeper shift was
+    not previously aware of — it rotates through lenses on `server.js`
+    (voice state machine done; next up per its own doc: db.js concurrency,
+    then security, then request/webhook handlers generally) and pushes
+    fixes to `audit/*`-prefixed branches, separate from this queue and this
+    shift's `keeper/*` branches. Worth Alijah confirming whether that's a
+    separate standing job he's running, so this shift can fold its output
+    into this queue as it lands instead of rediscovering it late (this one
+    sat unknown to this shift for 7 days). Also noticed in passing:
+    branch `research-competitors` (`research/competitors/2026-08-31.md`,
+    pricing/positioning baseline for Rosie/Dialzara/Smith.ai/Ruby/Sameday +
+    a note on Zoom's new $29.99/mo AI receptionist entrant) — unrelated to
+    ops, not this shift's to act on, flagged only so it isn't lost.
