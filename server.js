@@ -1853,6 +1853,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
         if (call) {
           const dur = Number(params.CallDuration || 0);
+          // Twilio's status callback is completed-only today (no retries
+          // observed), but a second delivery of the same one -- a proxy that
+          // retries, a future StatusCallbackEvent config -- must not bill the
+          // same minutes twice. billedMin on the persisted row is the receipt.
+          const priorRow = db.getCalls(call.accountId, 50).find((c) => c.sid === sid);
+          const alreadyBilled = !!(priorRow && priorRow.billedMin);
           // Bill the plan's minute allowance (rounded up, like a carrier) --
           // but NOT for calls where the caller never said a word. Robocalls,
           // dead air and pocket dials were eating paid minutes and could push
@@ -1862,7 +1868,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const acctForBill = db.getAccount(call.accountId);
           // A call flagged spam had "speech" — the robocall's recording — but
           // nobody real. It is never billed against the plan.
-          if (acctForBill && callerSpoke && !call.spamCall) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          const shouldBill = acctForBill && callerSpoke && !call.spamCall && !alreadyBilled;
+          if (shouldBill) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
           if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
           // Dead air on an inbound call is a spam signal: robocall dialers
           // probe lines and hang up. One point (block needs three) so a real
@@ -1920,6 +1927,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: billableTurns,
+            ...(shouldBill ? { billedMin: true } : {}),
             estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns,
               chars: call.turns.filter((t) => t.who !== 'caller' && !/^\[system/.test(t.text || '')).reduce((n, t) => n + (t.text || '').length, 0),
               direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
