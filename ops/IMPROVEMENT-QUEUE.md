@@ -244,11 +244,32 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     the audit's own "suggested queue additions" in here so they're tracked:
     - `/voice/status` billing is not idempotent — no `billedMin` stamp on
       the call row, so a second delivery of the same status callback would
-      double-bill. Not observed live today (both registered callbacks are
-      completed-only, webhooks don't retry), but cheap to guard and the
-      ways it becomes live later are casual (adding `StatusCallbackEvent`,
-      a retrying proxy, a `statusCallback` on the transfer leg). ~6 lines,
-      touches the live billing path — do deliberately, not as a drive-by.
+      double-bill. **Status (2026-09-03): shipped**, branch
+      `keeper/2026-09-03-billing-idempotency`. `server.js`'s live-call
+      billing branch (the `if (call) {...}` path, not the restart-recovery
+      fallback a few lines above it) now reads the persisted row's
+      `billedMin` flag before calling `consumeVoiceMinutes`, and stamps it
+      only on the same `saveCall` write that already runs once per callback
+      — a duplicate delivery of the same completed callback sees the stamp
+      and skips billing instead of charging the call twice. Deliberately
+      scoped away from the restart-recovery fallback path (`server.js`
+      lines ~1845-1853): that's exactly what pending branch
+      `audit/2026-08-26-voice-status-fallback-billing` (item 11) already
+      rewrites, and touching the same lines here would hand Alijah a
+      guaranteed conflict between two unmerged branches. Verified via an
+      actual `git merge --no-commit --no-ff` of that audit branch into
+      current `main` in an isolated worktree while investigating this —
+      raised a false alarm first (a raw branch-vs-main diff made it look
+      like the audit branch would revert `c577195`'s password-reset mailer
+      fix, since the audit branch was cut from before that commit), but the
+      real 3-way merge auto-resolves cleanly and both fixes survive intact.
+      That resolves the standing worry behind item 11's repeated "still
+      merges clean" note — it does, verified two ways now.
+      Smoke-tested against an isolated `DATA_DIR` (first callback for a sid
+      bills and stamps, a simulated duplicate callback for the same sid
+      sees the stamp and would skip billing, an unrelated sid is
+      unaffected); `node --check` clean; `node test-reps.js` (37/37) and
+      `node test-spam.js` (18/18) both still pass.
     - `calls.json` is capped at 3,000 rows **globally**, not per account —
       at ~200 customers this is roughly 3 days of history before a quiet
       customer's calls (and recordings) get evicted by a busy customer's
