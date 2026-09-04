@@ -91,6 +91,22 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    not fix. `keeper/2026-08-25-atomic-rep-delete` is still the higher-value
    ask: it fixes a live bypass of the atomic path, this only makes the
    atomic path itself cheaper.
+   **Status (2026-09-04):** shipped a fix for a gap the 2026-09-02 audit
+   flagged but couldn't confirm the trigger for ("one thing I could not
+   settle" in `ops/audit/2026-09-02.md`): `write()`'s temp file was a fixed
+   `f + '.tmp'`, so two writers sharing `DATA_DIR` (an overlapping Render
+   deploy, or ever >1 instance on the same disk) would race on the same
+   temp path — the loser's `renameSync` can splice its own write over the
+   winner's, and `read()`'s swallowed parse failure turns that into a
+   silently emptied collection on the next read. Made the temp name unique
+   per call (`f + '.' + pid + '.' + random + '.tmp'`) rather than waiting
+   to confirm whether Render's deploys actually overlap — no behavior
+   change for a single writer, removes the collision either way.
+   `node --check` clean, `test-reps.js` 37/37. Branch
+   `keeper/2026-09-04-unique-tmp-write`. Whether the trigger is real is
+   still worth Alijah checking (see today's report) — that's a Render
+   dashboard question this shift can't answer, but the fix doesn't need
+   to wait on it.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
@@ -305,3 +321,83 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     pricing/positioning baseline for Rosie/Dialzara/Smith.ai/Ruby/Sameday +
     a note on Zoom's new $29.99/mo AI receptionist entrant) — unrelated to
     ops, not this shift's to act on, flagged only so it isn't lost.
+    **Status (2026-09-04):** the process ran again 2026-09-02 (lens (b),
+    db.js concurrency — the exact rotation it announced), confirming it's
+    a standing job, not a one-off. See item 14 for what it found. Its own
+    doc flags one more thing worth Alijah's attention directly, not
+    through this queue: **`git fetch origin keeper-audit` doesn't happen
+    by default in a fresh clone**, and the audit's own first pass this run
+    repeated the prior lens before it noticed the branch existed. Same
+    blind spot this Keeper shift had until 2026-09-02. Two independent
+    processes have now each lost real time to the same discoverability
+    gap — worth Alijah deciding whether `keeper-audit` should be seeded
+    into fresh clones some other way, since neither process can fix that
+    from inside itself.
+
+14. **URGENT — merge `audit/2026-09-02-consume-stale-snapshot`.** Found by
+    the 2026-09-02 audit run (`ops/audit/2026-09-02.md` on `keeper-audit`,
+    finding 1): `lib/plans.js`'s `consumeVoiceMinutes()` and `consume()`
+    (lead metering) both compute `before` from the **caller's** account
+    snapshot, taken before an `await`. `server.js`'s night shift fires
+    `agents.keeperRun` and a prospect job concurrently against the same
+    account; `keeperRun` reads the account, awaits an AI draft for
+    seconds, then writes `snapshot + 1` — silently erasing every lead the
+    prospect job metered during that await. Reproduced end to end: 21
+    leads metered during the window, 1 recorded. Same shape for voice
+    minutes. This under-meters (costs Dawnpipe AI spend that never lands
+    against a plan or draws down a top-up balance) — it does not overbill
+    anyone, but it's the same margin hole as item 11's billing bug, just
+    the opposite direction and on a different pair of functions. Fix
+    re-reads the account (`db.getAccount(account.id)`) instead of trusting
+    the snapshot, same pattern already used in `lib/agents.js:473` and
+    `server.js`'s `sentToday` re-read — safe because `db.js` is fully
+    synchronous, so the re-read and write can't be interleaved by anything
+    else. Verified: `node --check` clean; repro goes green; the audit's
+    four suites (`test-reps`, `test-spam`, `test-voiceprofiles`,
+    `test-assistant` — 87 assertions, note only `test-reps.js` exists on
+    `main` today, the other three live on branches not yet merged) all
+    pass. One thing for Alijah to know before merging, from the audit
+    doc itself: accounts that have been under-metered will start
+    depleting their allowance at the true rate once this lands — a
+    visible behavior change, not a new charge, but worth picking the
+    timing for. This and item 11 are now the two top merge asks; both are
+    small, both are billing-correctness fixes, neither has anything left
+    for this shift to do but keep flagging them.
+
+15. **Extend per-account retention to `smsThreads`, not just `calls`.**
+    The 2026-09-02 audit (finding 2) found `lib/db.js`'s `smsThreads` cap
+    (2000, global) has the same bug as `calls`' cap (item 12's second
+    bullet) — plus it's worse, because a thread is live in-flight state
+    (the missed-call text-back flow reads it to recover context), and
+    eviction is by **creation order**, not recency: `saveThread` updates a
+    row in place but `slice(-2000)` still evicts by original index, so a
+    thread created this morning and texted all day can be evicted before
+    an untouched thread from last week. Not biting yet at today's customer
+    count — flagged as a "before 200 customers" item, same bracket as
+    item 12. **The trap if this gets fixed:** `logActivity`'s existing
+    `capPerAccount` (the pattern to reuse) walks forward and keeps the
+    first N per account because that collection is newest-first
+    (`unshift`); `calls` and `smsThreads` are oldest-first (`push`).
+    Applying `capPerAccount` as-is would keep the OLDEST N per account and
+    silently delete everything recent — the audit deliberately did not
+    ship this for that reason, plus wanting to avoid two routines editing
+    `lib/db.js` the same day (`keeper/2026-09-02-db-write-compact` was in
+    flight). Needs a reversed/`newestFirst`-aware version of
+    `capPerAccount` and a test asserting which rows survive, applied to
+    both collections together. Good next `lib/db.js` slice for a future
+    shift; not picked up today since `keeper/2026-09-04-unique-tmp-write`
+    already touched the same file once this shift (same reason the audit
+    gave for holding off).
+
+16. **Render deploy-overlap check — owner-only, ten minutes.** The
+    2026-09-02 audit couldn't determine from inside the repo whether
+    Render's deploy strategy for this disk-backed service ever runs the
+    old and new instance concurrently (`render.yaml`'s `healthCheckPath`
+    comment claims zero-downtime, which would imply an overlap window;
+    Render typically does *not* do zero-downtime for disk-backed services,
+    which would mean no window). This is exactly the trigger item 1's
+    2026-09-04 fix (unique temp filenames) now defends against regardless
+    — so the fix doesn't block on the answer — but the answer still tells
+    Alijah whether this was a live risk or a hypothetical one. One look at
+    the Render dashboard's deploy settings/logs settles it; see today's
+    report for the specific thing to check.
