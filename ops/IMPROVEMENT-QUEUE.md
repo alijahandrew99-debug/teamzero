@@ -388,6 +388,25 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     shift; not picked up today since `keeper/2026-09-04-unique-tmp-write`
     already touched the same file once this shift (same reason the audit
     gave for holding off).
+    **Status (2026-09-05): shipped**, branch
+    `keeper/2026-09-05-per-account-retention`, cut fresh off `main`
+    (`c577195`, unchanged since 08-26 — no other branch has touched
+    `lib/db.js` on `main` yet, so the "two routines same file" concern
+    doesn't apply here). Added `capPerAccountOldestFirst(rows, perAccount
+    = 500)` — walks backward instead of forward, keeping the newest N per
+    account instead of the oldest, then restores oldest-first order for
+    `saveCall`/`saveThread`. Applied to both `calls` (was a global
+    `slice(-3000)`) and `smsThreads` (was `slice(-2000)`) together, exactly
+    as the audit asked. `node --check` clean; `test-reps.js` (37/37) and
+    `test-spam.js` (18/18) both still pass (neither exercises retention at
+    scale). Smoke-tested against three isolated `DATA_DIR`s: a quiet
+    tenant's one call/thread survives 600 writes from a busy tenant on the
+    same file (global-cap bug); a row created early but updated
+    600-writes-later survives the cap (creation-order bug); busy tenant
+    lands at exactly 500 rows in both cases, keeping its newest, not its
+    oldest — 6/6 assertions pass. This closes the queue-15/12-bullet-2 gap
+    the audit flagged; item 16 (whether Render deploys ever overlap) is
+    unrelated and still open.
 
 16. **Render deploy-overlap check — owner-only, ten minutes.** The
     2026-09-02 audit couldn't determine from inside the repo whether
