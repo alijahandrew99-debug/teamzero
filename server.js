@@ -1810,7 +1810,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const call = voice.getCall(sid);
         const st = String(params.DialCallStatus || '');
         if (st === 'completed' || st === 'answered') {
-          if (call) db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
+          // Twilio bills this leg (Twilio -> the human's number) separately from
+          // the caller's leg, at the outbound rate -- estimateCost needs it too,
+          // or a transferred call's shown cost silently omits the dial-out.
+          if (call) db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns, transferSec: Number(params.DialCallDuration || 0) });
           res.writeHead(204); return res.end();
         }
         // Waterfall: this number didn't pick up — try the next one on the
@@ -1917,10 +1920,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // inflated number as the real bill. Chars stay agent-side (that is
           // what TTS billed) minus the [system: notes nobody ever spoke.
           const billableTurns = call.turns.filter((t) => t.who === 'caller').length;
+          // If this call was transferred, /voice/dialback already stamped the
+          // human-leg duration -- fold it in so a transferred call's shown cost
+          // isn't missing the leg Twilio actually bills for connecting it.
+          const transferSec = ((db.getCalls(call.accountId, 50).find((c) => c.sid === sid) || {}).transferSec) || 0;
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: billableTurns,
-            estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns,
+            estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns, transferSec,
               chars: call.turns.filter((t) => t.who !== 'caller' && !/^\[system/.test(t.text || '')).reduce((n, t) => n + (t.text || '').length, 0),
               direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
               tier: /Generative|Chirp3/.test(voice.voiceFor(call.account)) ? 'generative' : 'neural' }) });
