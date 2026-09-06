@@ -303,6 +303,21 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
       cost — understates every transferred call's shown cost by ~$0.04 on a
       typical 5-minute call. Low severity, fold in whenever that function is
       next touched rather than its own branch.
+      **Status (2026-09-06): shipped**, branch
+      `keeper/2026-09-06-transfer-leg-cost`, cut fresh off `main` (still
+      `c577195`, unchanged since 08-26). `/voice/dialback` now stamps
+      `DialCallDuration` onto the call row when a transfer connects;
+      `/voice/status`'s billing block reads it back and passes it into
+      `estimateCost()` as a new `transferSec` param, which adds
+      `ceil(transferSec/60) * RATE_VOICE_MIN_OUT` (the dial-out leg is
+      always billed at the outbound rate, regardless of the parent call's
+      own direction). `transferSec` defaults to 0, a no-op, so every
+      non-transferred call's cost is byte-for-byte unchanged. `node --check`
+      clean on both files; `test-reps.js` 37/37 (unaffected, doesn't
+      exercise voice billing); direct smoke test of `estimateCost()` with
+      and without a 2-minute transfer leg confirms the delta is exactly
+      `2 * RATE_VOICE_MIN_OUT` and that `transferSec: 0` reproduces the old
+      output exactly.
     - Audit recommends measuring actual production `calls.json` size (via
       `/api/admin/spend` or a Render shell) before pricing the Postgres
       migration — this shift has no owner-authenticated access to check.
