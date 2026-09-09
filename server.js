@@ -1215,11 +1215,16 @@ const server = http.createServer(async (req, res) => {
         // plays a recording or dead air and gets hung up on in /voice/turn.
         // Known callers (history or an existing lead) are never screened:
         // being established outranks any signal.
+        // Has this caller been in touch before? Needed by the screen below (a
+        // known caller is never screened) and again by the greeting and the
+        // agent brief further down. Looked up ONCE: callerHistory reads and
+        // filters the whole call file plus the appointment file, and this is
+        // the greeting path, where the caller is listening to silence.
+        const hist = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
         if (vcfg.spamFilter !== false) {
           const sig = spam.signalCheck(params);
           const priorStrikes = spam.strikes(account.id, params.From || '');
-          const known = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
-          if ((sig.suspect || priorStrikes > 0) && !known) {
+          if ((sig.suspect || priorStrikes > 0) && !hist) {
             const esScr = voice.langFor(account) === 'es-US';
             const scrProfile = route.profile || db.getProfiles(account.id)[0];
             const scrLine = spam.screenLine((scrProfile && scrProfile.name) || 'us', agentName, esScr, vcfg.record !== false);
@@ -1255,11 +1260,10 @@ const server = http.createServer(async (req, res) => {
           : "Hi, you've reached " + profile.name + ' — this is ' + agentName + ', their AI receptionist' + (recOn ? ', on a recorded line' : '') + '.';
         // Greet returning callers by name. The legal disclosure is unchanged and
         // still comes first; only the friendly part personalises.
-        const histEarly = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
         const dflt = es ? '¿En qué le puedo ayudar?' : 'What can I do for you?';
-        const hello = histEarly && histEarly.name
-          ? (es ? `Hola ${histEarly.name.split(' ')[0]}, qué gusto escucharle de nuevo — ${(vcfg.greeting || '¿en qué le puedo ayudar hoy?')}`
-                : `Hi ${histEarly.name.split(' ')[0]}, good to hear from you again — ${(vcfg.greeting || 'what can I do for you today?').replace(/^\s*[A-Z]/, (c) => c.toLowerCase())}`)
+        const hello = hist && hist.name
+          ? (es ? `Hola ${hist.name.split(' ')[0]}, qué gusto escucharle de nuevo — ${(vcfg.greeting || '¿en qué le puedo ayudar hoy?')}`
+                : `Hi ${hist.name.split(' ')[0]}, good to hear from you again — ${(vcfg.greeting || 'what can I do for you today?').replace(/^\s*[A-Z]/, (c) => c.toLowerCase())}`)
           : (vcfg.greeting || dflt);
         const greeting = disclosure + ' ' + hello;
         // Does this caller already exist as a lead? If so the AI opens the call
@@ -1269,9 +1273,8 @@ const server = http.createServer(async (req, res) => {
           .find((l) => suppress.phoneKey(l.phone || '') && suppress.phoneKey(l.phone) === suppress.phoneKey(params.From || ''));
         // Beyond email leads: anyone who has CALLED or BOOKED before is a known
         // person, and the agent should treat them like one. Built from the
-        // call and appointment history for this number.
-        const hist = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
-        const leadBrief = [knownLead ? memory.briefFor(knownLead) : '', hist ? `=== THIS CALLER HAS BEEN IN TOUCH BEFORE ===
+        // call and appointment history for this number (looked up above).
+        const leadBrief =[knownLead ? memory.briefFor(knownLead) : '', hist ? `=== THIS CALLER HAS BEEN IN TOUCH BEFORE ===
 ${hist.brief}
 Use it the way a good receptionist would: greet them by name if you have one, don't re-ask what you already know (address, what they usually need), and if they're calling about the same thing as last time, say so. Never read the history back like a file.` : '']
           .filter(Boolean).join('\n\n');
