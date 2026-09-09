@@ -204,7 +204,30 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    full `node test-reps.js` suite (37 tests) still passes.
 
 8. **Onboarding**: 2 questions -> AI drafts profile -> instant first leads.
-   Customer-facing — propose in a report before implementing.
+   **Status (2026-09-09): substantially already implemented, closing.**
+   Checked `server.js`/`lib/agents.js`/`views/app.html` (all predate this
+   queue, part of the `main` history from before 08-26): `POST
+   /api/profile/autofill` (`agents.autofillFromWebsite`) takes one URL
+   (or pasted text for sites it can't fetch — JS-only pages, WAFs
+   blocking datacenter IPs, sites that are down) and drafts the *entire*
+   profile — offer, ICP, value prop, proof, tone, CTA, plus a full phone
+   script — in one AI call. Wired to a real "✨ Fill it in for me" button
+   in the profile-setup UI (`views/app.html`), and a locked (no-plan)
+   account gets 2 free autofills specifically so this works before any
+   card is entered. That's the "2 questions" idea delivered as something
+   simpler for the owner (one URL, not two prompts) and richer in output
+   (a phone script too, not just the profile). One real gap: leads are
+   not fully instant — after autofill+save the owner still clicks a
+   separate "🎯 Find leads" button (`/api/prospect/run`). Not closing
+   that gap today since it's a customer-facing behavior change (an
+   account's first prospect run would fire automatically, which costs AI
+   spend and produces leads the owner hasn't asked for yet) — per
+   standing policy, proposing it instead: auto-fire one small first
+   prospect run (~5 leads, no auto-draft/send) the moment a profile is
+   saved for the first time *from* an autofill, so a brand-new account
+   sees its first leads without a second click. Only ever on that one
+   first-save-after-autofill transition, so it can't repeat or surprise a
+   returning user. Recommend Alijah sign off before this is built.
 
 9. **Stale duplicate ops/ docs on `main`.** `ad5e278` (2026-08-24, bundled
    into an unrelated per-rep-commission commit) added a second copy of
