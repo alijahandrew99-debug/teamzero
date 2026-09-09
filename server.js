@@ -119,6 +119,19 @@ function rateLimited(req, bucket, max, windowMs) {
   rec.n++;
   return rec.n > max;
 }
+// A global once-a-minute gate for log lines written on UNAUTHENTICATED paths.
+// db.logActivity rewrites the whole activity file on every call, so a line
+// logged before the caller is authenticated turns each anonymous request into
+// a multi-megabyte synchronous write — which on a single-threaded server is a
+// stall for every live call at the same time. Not per-IP: the point is to cap
+// the total write rate, and an attacker chooses their source addresses.
+const lastAnonLog = new Map();
+function anonLogAllowed(bucket, everyMs = 60000) {
+  const now = Date.now();
+  if (now - (lastAnonLog.get(bucket) || 0) < everyMs) return false;
+  lastAnonLog.set(bucket, now);
+  return true;
+}
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of hits) if (now > v.reset) hits.delete(k);
@@ -1141,7 +1154,14 @@ const server = http.createServer(async (req, res) => {
       const sig = req.headers['x-twilio-signature'];
       if (!voice.configured()) return xml(res, voice.sayAndHangup("Sorry, this line isn't set up yet. Bye for now."));
       if (!voice.verifySignature(base + p, params, sig)) {
-        db.logActivity('system', { agent: 'VOICE', msg: 'Rejected unsigned webhook on ' + p });
+        // Throttled: this branch is reachable by anyone who can POST here, and
+        // an unthrottled logActivity rewrites the entire activity file per
+        // request. One line a minute still surfaces a genuinely misconfigured
+        // Twilio console (which fails continuously), without handing a stranger
+        // a way to stall the event loop that every live call is waiting on.
+        if (anonLogAllowed('voice-badsig')) {
+          db.logActivity('system', { agent: 'VOICE', msg: 'Rejected unsigned webhook on ' + p });
+        }
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         return res.end('bad signature');
       }
