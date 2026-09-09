@@ -118,6 +118,24 @@ const SPAM_DEAD = '+15556660000';
   console.log('== dead-air strikes decay: fresh numbers start clean ==');
   ok('unknown number has zero strikes', spamlib.strikes(acc.id, '+15550009999') === 0);
 
+  // ...but a number that HAS been struck and then went quiet for 30 days must
+  // reuse its row, not gain a second one under the same id. When it gained a
+  // second row, every later read found the stale one first and reported zero,
+  // so a repeat robocaller could never be struck again or auto-blocked.
+  const AGED = '+15550008888';
+  const watchFile = require('path').join(process.env.DATA_DIR, 'spamwatch.json');
+  const rowsOf = (n) => db.readCollection('spamwatch').filter((x) => x.number === n);
+  spamlib.strike(acc.id, AGED, 1, 'dead air');
+  const aged = db.readCollection('spamwatch');
+  aged.find((x) => x.number === AGED).at = new Date(Date.now() - 31 * 24 * 3600 * 1000).toISOString();
+  require('fs').writeFileSync(watchFile, JSON.stringify(aged, null, 2));
+  ok('a decayed strike reads as a clean slate', spamlib.strikes(acc.id, AGED) === 0, spamlib.strikes(acc.id, AGED));
+  spamlib.strike(acc.id, AGED, 2, 'robocall phrases');
+  ok('a strike after decay counts again', spamlib.strikes(acc.id, AGED) === 2, spamlib.strikes(acc.id, AGED));
+  ok('...and reused the row instead of duplicating it', rowsOf(AGED).length === 1, rowsOf(AGED).length);
+  spamlib.strike(acc.id, AGED, 2, 'robocall phrases');
+  ok('a decayed-then-repeat robocaller still auto-blocks', suppress.isPhoneSuppressed(acc.id, AGED).blocked);
+
   console.log(String.fromCharCode(10) + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('HARNESS', e); process.exit(1); });
