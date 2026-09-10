@@ -458,3 +458,55 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     Alijah whether this was a live risk or a hypothetical one. One look at
     the Render dashboard's deploy settings/logs settles it; see today's
     report for the specific thing to check.
+
+17. **Spam auto-block silently stopped re-arming after a 30-day quiet
+    spell.** Found by an independent audit session (2026-09-09), branch
+    `audit/2026-09-09-spam-strike-decay`. `lib/spam.js`'s `strike()` decided
+    whether to patch or insert a `spamwatch` row from `rec()` — the
+    *decayed* view, which returns `null` once a row is >30 days old even
+    though the row still physically exists. A number that went quiet for
+    30 days and then struck again got a second row inserted under the same
+    id; every later read (`db.readCollection('spamwatch').find(...)`)
+    found the first (stale, zero-points) row and reported 0 strikes
+    forever after, so the auto-block could never re-arm for that number
+    again, and `spamwatch.json` grew one duplicate row per strike,
+    unbounded. **Status: shipped, ready to merge.** Fix adds `stored()` (a
+    non-decaying existence check) and decides patch-vs-insert from that
+    instead of `rec()`; `strikes()`'s decay behavior is unchanged. New
+    test in `test-spam.js` reproduces the exact decay-then-restrike
+    sequence and asserts a single row + working auto-block afterward.
+    Re-verified today: merges clean against current `main` alone and
+    together with items 18/19, `node --check` clean, full suite
+    22/22 (`test-spam.js`) and 91/91 overall on the combined merge. This is
+    a live security-relevant bug (repeat robocallers becoming permanently
+    un-blockable) — recommend prioritizing this merge.
+
+18. **Unauthenticated voice webhook could be hammered to stall every live
+    call.** Found by the same 2026-09-09 audit session, branch
+    `audit/2026-09-09-voice-webhook-log-flood`. The bad-Twilio-signature
+    branch in `server.js` (reachable by anyone who can POST to `/voice/*`,
+    no auth) called `db.logActivity()` on every rejected request;
+    `logActivity` rewrites the whole activity file synchronously, so on
+    this single-threaded server a burst of bad-signature POSTs turns into
+    back-to-back multi-megabyte synchronous writes — a stall for every
+    live call in progress at the same time. **Status: shipped, ready to
+    merge.** Adds a once-a-minute gate (`anonLogAllowed`, global not
+    per-IP, since the point is capping total write rate and an attacker
+    picks their own source IPs) around that one log line; a genuinely
+    misconfigured Twilio console still surfaces at one line/minute. Re-
+    verified today: merges clean against `main` alone and together with
+    items 17/19, `node --check` clean. Same priority tier as item 17 — a
+    live DoS-adjacent bug on an unauthenticated path.
+
+19. **`/voice/incoming` looked up the same caller history three times per
+    call.** Found by the same 2026-09-09 audit session, branch
+    `audit/2026-09-09-duplicate-caller-history`. `stats.callerHistory()`
+    (reads + filters the whole `calls.json` and appointments file) was
+    called separately for the spam-screen check, the greeting
+    personalization, and the agent brief — all on the greeting path, where
+    the caller is listening to silence while it runs. **Status: shipped,
+    ready to merge.** Looks it up once, reuses the result for all three
+    call sites; no behavior change. Re-verified today: merges clean alone
+    and together with items 17/18, `node --check` clean. Lower priority
+    than 17/18 (performance, not correctness/security) but trivially safe
+    to fold into the same merge batch.
