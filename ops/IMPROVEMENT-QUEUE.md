@@ -107,6 +107,45 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    still worth Alijah checking (see today's report) — that's a Render
    dashboard question this shift can't answer, but the fix doesn't need
    to wait on it.
+   **Status (2026-09-13): the "per-file write queue" question this item
+   opened with 08-25/08-26 is now answered — with a caveat.** Every prior
+   check confirmed `db.js` itself needs no queue: every function in it is
+   fully synchronous (`readFileSync`/`writeFileSync`, no `await` inside),
+   so within `db.js` a read-modify-write can never be interleaved. That's
+   still true. The gap is one level up: a CALLER can capture an account
+   object, `await` something slow (a Stripe API round trip), then write a
+   patch computed off that now-stale object — item 14's
+   `consume`/`consumeVoiceMinutes` bug was exactly this shape, and today
+   turned up a second, previously-unaudited instance: `lib/stripe.js`
+   `creditTopup()` adds `t.leads`/`t.minutes` onto whatever `topupLeads`/
+   `topupMinutes` the caller last read, and is reachable from two places
+   for the same account — the webhook path (sync) and the `/app`
+   reconcile safety net (`reconcileTopup`, two awaited Stripe fetches
+   before crediting). Two top-ups landing close together (or a webhook
+   racing its own safety net) can lose one credit entirely: second write
+   overwrites the first before either is persisted, and the customer paid
+   for a top-up that never lands. Unlike item 14/item 11, this one had
+   never been audited before — it's additive-balance code, not metering
+   or billing-flag code, so it didn't match either audit's search pattern.
+   **Status (2026-09-13): shipped**, branch
+   `keeper/2026-09-13-topup-write-race`. Added `db.withLock(key, fn)` — a
+   per-key async promise queue, generic infra so future async-gap races
+   (not just this one) have somewhere to plug in — and routed
+   `creditTopup` through `db.withLock('account:'+id, ...)`, re-reading
+   the account fresh once the lock is held instead of trusting the
+   possibly-stale object the caller captured before its own awaits.
+   Scoped narrowly to this one call site rather than wiring every
+   read-await-write pattern in `stripe.js` (e.g. `reconcileCheckout`'s
+   `account.reconciledSession` staleness check is lower-stakes — it's not
+   additive, so a redundant duplicate write is mostly harmless — and
+   rewriting live billing webhook logic without a Stripe test harness
+   here is a bigger risk than this shift should take in one slice).
+   Verified the lock actually serializes with a standalone repro (three
+   concurrent read-await-write jobs against a shared counter: without the
+   lock they'd race to 1, with it they correctly reach 3); `node --check`
+   clean on both files; all four suites still pass (87/87). Recommend
+   folding `reconcileCheckout`'s narrower staleness gap into a future
+   slice of this item rather than this one.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
