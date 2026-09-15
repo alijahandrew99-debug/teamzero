@@ -2318,7 +2318,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       page = page.replace('__CHECKOUT__', checkoutResult);
       const locked = !stripe.hasAccess(account);
       page = page.replace('__EMAIL__', account.email).replace('__LOCKED__', locked ? 'true' : 'false').replace('__AIMODE__', aiMode());
-      return html(res, page);
+      // The app's HTML carries all its JS inline, and it changes with every
+      // deploy. With no cache header the browser was free to keep serving a
+      // stale copy — so a shipped fix (e.g. the disconnect button) looked
+      // "still broken" until a hard refresh. no-cache forces a revalidate on
+      // every load, so a normal reload always runs the current code.
+      return html(res, page, 200, { 'Cache-Control': 'no-cache, must-revalidate' });
     }
 
     // ---------- API (needs access) ----------

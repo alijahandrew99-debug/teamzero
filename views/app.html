@@ -353,7 +353,11 @@
     <div class="card hide" id="cardEmailData">
       <h2><span class="agent">OWNER</span> Email data key (platform)</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 6px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
+        <p class="muted" style="margin:0 0 8px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
+        <!-- Prominent status: a saved key never shows back in the box (it's a
+             password field), so without this the empty box reads as "broken"
+             even when a key is connected and working. -->
+        <div id="hkStatus" class="okbox" style="margin-bottom:10px">Checking…</div>
         <div class="row">
           <input id="hk_key" type="password" placeholder="Data provider API key" style="flex:1;min-width:200px;margin:0">
           <button onclick="saveEmailKey()" id="hkBtn">Connect &amp; verify</button>
@@ -2113,7 +2117,19 @@ function fillSettings(){
   renderVoice();
   loadDeskAppointments();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
-  $('hkMsg').textContent=ed.connected?'Per-account override active.':(ed.fallback?'Using the platform data key ✓':'⚠ No platform key set — set HUNTER_API_KEY on the server or leads fall back to site-published emails.');
+  // The empty box is normal (password field, never echoed). The status banner
+  // is the real indicator, so a connected key never looks "blank / broken".
+  const hkStatus=$('hkStatus');
+  if(hkStatus){
+    if(ed.connected){hkStatus.className='okbox';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='✓ <b>A data key is connected on this account</b> — verified-email lookups are on. The box below stays empty on purpose (keys are never shown back). Leave it blank to keep this key.';}
+    else if(ed.fallback){hkStatus.className='okbox';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='✓ <b>Using the platform key</b> (set on the server) — every account gets verified emails automatically. You do not need to enter anything here.';}
+    else {hkStatus.className='warnbox bad';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='⚠ <b>No data key.</b> Leads fall back to site-published emails. Set <code>HUNTER_API_KEY</code> on the server, or paste a key below.';}
+  }
+  if($('hk_key'))$('hk_key').placeholder=(ed.connected||ed.fallback)?'A key is saved — paste a new one only to replace it':'Data provider API key';
+  $('hkMsg').textContent='';
   // Owner-only, always. A customer paying for lead-finding must never be told
   // to go and buy a second subscription to make the thing they bought work.
   const edCard=$('cardEmailData');
