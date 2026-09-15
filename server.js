@@ -3355,11 +3355,31 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const cfg = { host: f.host || 'smtp.gmail.com', port: Number(f.port) || 465,
           user: f.user || existing.user || '', pass,
           fromEmail: f.fromEmail || f.user || existing.fromEmail || '', fromName: f.fromName ?? existing.fromName ?? '' };
+        // Fix a wrong SMTP host before it can fail. The client guesses
+        // smtp.<domain> for a custom domain, which does not exist (Google
+        // Workspace uses smtp.gmail.com, Microsoft 365 uses office365) — that
+        // is the ENOTFOUND error. Detect the real host from the domain's MX
+        // whenever the host is blank or looks like that naive guess.
+        const emailDom = dnsauth.domainOfEmail(cfg.fromEmail || cfg.user);
+        if (emailDom && (!cfg.host || cfg.host.toLowerCase() === 'smtp.' + emailDom)) {
+          const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+          // Google Workspace is the dominant small-business host and the whole
+          // app-password flow is Gmail-centric, so if MX detection comes back
+          // empty, smtp.gmail.com is a far safer default than the guaranteed-
+          // dead smtp.<domain>.
+          cfg.host = real || 'smtp.gmail.com';
+        }
         // Verify whenever we have credentials that haven't been proven in this
         // exact combination — i.e. a new password, or a changed user/host.
         const needsVerify = !!f.pass || (pass && (cfg.user !== existing.user || cfg.host !== existing.host));
         if (needsVerify) {
-          const v = await smtp.verify(cfg);
+          let v = await smtp.verify(cfg);
+          // Last-ditch self-heal: if the host still could not be reached, try
+          // the detected host once more before giving up.
+          if (!v.ok && /ENOTFOUND|EAI_AGAIN|getaddrinfo|ECONNREFUSED/i.test(v.error || '') && emailDom) {
+            const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+            if (real && real !== cfg.host) { cfg.host = real; v = await smtp.verify(cfg); }
+          }
           if (!v.ok) return json(res, { error: `Could not sign in to that mailbox: ${v.error}` }, 400);
         }
         // A different sending domain means a fresh reputation — restart warmup.
