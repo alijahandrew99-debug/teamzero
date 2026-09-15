@@ -3553,6 +3553,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (it && it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
         return json(res, { item: it });
       }
+      // Clear the parked pile: reject every held (unverified-address) draft
+      // for a business in one go, and free their leads to be re-found.
+      if (p === '/api/queue/clear-held' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const held = db.getQueue(acc, f.profileId).filter((q) => q.status === 'held');
+        for (const it of held) {
+          db.updateQueueItem(acc, it.id, { status: 'rejected' });
+          if (it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
+        }
+        db.logActivity(acc, { agent: 'OPERATOR', msg: `Cleared ${held.length} parked draft(s) (no verified email)` });
+        return json(res, { cleared: held.length });
+      }
       if (p === '/api/queue/sent' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
         const it = db.updateQueueItem(acc, f.id, { status: 'sent', sentAt: db.nowISO() });

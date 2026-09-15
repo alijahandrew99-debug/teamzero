@@ -482,7 +482,7 @@
               <button class="sm ok" onclick="approveAll()" id="apprAllBtn">✓ Approve all</button>
               <input id="adjInstr" placeholder="Change every draft at once — e.g. shorter, friendlier, mention the fall special" style="min-width:250px;margin:0;font-size:13px">
               <button class="sm ghost" onclick="adjustAll()" id="adjBtn">✏️ Adjust all drafts</button>
-              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✓✉ Approve &amp; send all</button>
+              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✉ Send everything that can go</button>
               <span class="muted" id="sendInfo"></span>
             </div>
             <div class="progress" id="sendProgress" style="margin-bottom:14px">
@@ -495,7 +495,19 @@
                 <b>You can close this page.</b> It keeps sending on our server, and "Stop sending" works from any device.
               </div>
             </div>
+            <div id="sendResult" class="okbox hide" style="margin-bottom:12px"></div>
             <div id="queue"><div class="empty">Nothing pending yet.</div></div>
+            <!-- Parked: drafts that could not send (no verified email). Kept
+                 out of the active list so a send visibly clears the queue,
+                 with one button to bin them all. -->
+            <div id="parkedWrap" class="hide" style="margin-top:16px;border-top:1px dashed var(--line);padding-top:14px">
+              <div class="row" style="justify-content:space-between;align-items:center">
+                <b id="parkedHead">⏸ Parked</b>
+                <button class="sm ghost" onclick="clearParked()" id="clearParkedBtn" style="color:var(--red);white-space:nowrap">Clear parked</button>
+              </div>
+              <div class="muted" style="margin:4px 0 10px;font-size:12.5px">No verified email address for these, so sending would bounce and hurt your domain. Run <b>Find leads</b> again for fresh verified emails, or clear them.</div>
+              <div id="parked"></div>
+            </div>
           </div>
         </div>
         <div class="card" id="briefCard" style="display:none">
@@ -1006,7 +1018,12 @@ function render(){
   const P=pid();const p=curProfile();
   if(curTab==='desk')$('deskProfileName').textContent=p?p.name:'—';
   const leads=STATE.leads.filter(l=>l.profileId===P);
-  const queue=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  // Active list = things you can act on. Parked = held drafts with no verified
+  // email, split out so a send visibly empties the queue instead of leaving
+  // held ones behind looking stuck.
+  const live=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  const queue=live.filter(q=>q.status!=='held');
+  const parked=live.filter(q=>q.status==='held');
   $('leadcount').textContent=`· ${leads.length}`;
   $('leads').innerHTML=leads.length?leads.map(l=>{
     const c=l.emailConfidence||'';
@@ -1033,17 +1050,24 @@ function render(){
       </div></div>`;
   }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
   // Break the count down so the queue reflects reality after a send — not a
-  // flat "16 pending" that never changes. Held drafts are called out because
-  // they are the usual reason a send "did nothing": the address is a guess.
+  // flat "16 pending" that never changes.
   const nPend=queue.filter(q=>q.status==='pending').length;
   const nAppr=queue.filter(q=>q.status==='approved').length;
-  const nHeld=queue.filter(q=>q.status==='held').length;
   const parts=[];
   if(nPend)parts.push(`${nPend} to review`);
   if(nAppr)parts.push(`${nAppr} approved`);
-  if(nHeld)parts.push(`${nHeld} held (needs a real email)`);
-  $('qcount').textContent=parts.length?'· '+parts.join(' · '):`· ${queue.length}`;
-  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">All clear — nothing waiting. Find leads, then draft.</div>';
+  if(parked.length)parts.push(`${parked.length} parked`);
+  $('qcount').textContent=parts.length?'· '+parts.join(' · '):(queue.length?`· ${queue.length}`:'');
+  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">All clear — nothing waiting to send. Find leads, then draft.</div>';
+  // Parked section: the held drafts, kept out of the active list.
+  const pw=$('parkedWrap');
+  if(pw){
+    pw.classList.toggle('hide',!parked.length);
+    if(parked.length){
+      $('parkedHead').textContent=`⏸ Parked — ${parked.length} draft${parked.length===1?'':'s'} with no verified email`;
+      $('parked').innerHTML=parked.map(qcard).join('');
+    }
+  }
   $('feed').innerHTML=(STATE.activity||[]).map(a=>`<div><span class="t">${new Date(a.at).toLocaleTimeString()}</span> [${a.agent}] ${esc(a.msg)}</div>`).join('')||'<div class="empty">No activity yet.</div>';
 }
 function qcard(q){
@@ -2312,16 +2336,23 @@ async function approveAndSendAll(){
   const pend=mine.filter(q=>q.status==='pending'||q.status==='approved').length;
   const held=mine.filter(q=>q.status==='held').length;
   if(!pend){
-    if(held)return toast(`${held} draft(s) are held because the address couldn't be verified — sending those would bounce and hurt your domain. Re-run Find leads, or use "Clear guesses".`);
-    return toast('Nothing to send — no approved or pending drafts for this business.');
+    if(held)return toast(`Those ${held} draft(s) are parked — no verified email, so sending would bounce. Run Find leads again for real emails, or Clear parked.`);
+    return toast('Nothing to send — no drafts ready for this business.');
   }
-  if(!confirm(`Approve and SEND ${pend} email(s) from ${STATE.smtp.user}?\n\nThey go out a few minutes apart to protect your sender reputation — you can close the page, and you can stop it at any time.`))return;
+  if(!confirm(`Send the ${pend} draft(s) that have a verified email, from ${STATE.smtp.user}?\n\nAnything without a real email is parked, not sent. They go out a few minutes apart — you can close the page and stop any time.`))return;
+  const sr=$('sendResult');if(sr)sr.classList.add('hide');
   const b=$('sendAllBtn'),ab=$('apprAllBtn');b.disabled=true;ab.disabled=true;
   try{
     await api('/api/queue/approve-all',{profileId:pid()});
     const r=await api('/api/send/run',{profileId:pid()});
     watchSend(r.jobId);
   }catch(e){toast(e.message);b.disabled=false;ab.disabled=false;}
+}
+// Bin every parked (held) draft for this business in one call.
+async function clearParked(){
+  const b=$('clearParkedBtn');if(b)b.disabled=true;
+  try{const r=await api('/api/queue/clear-held',{profileId:pid()});toast(`Cleared ${r.cleared} parked draft${r.cleared===1?'':'s'}`);await load();}
+  catch(e){toast(e.message);if(b)b.disabled=false;}
 }
 // One watcher, shared by "send all" and by a page that reloads mid-run. Without
 // the second path, refreshing the tab left mail going out with no Stop button
@@ -2351,9 +2382,20 @@ function watchSend(jobId){
     await load().catch(()=>{});
     if(s.status==='running'){setTimeout(poll,2500);return;}
     finish();
-    if(s.status==='error')toast('Send failed: '+s.error);
-    else if(s.note)toast(s.note);
-    else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.deferred?`, ${s.deferred} held for their business hours`:''}${s.blocked?`, ${s.blocked} held (unverified address)`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
+    if(s.status==='error'){toast('Send failed: '+s.error);return;}
+    // A persistent result banner, not a toast that vanishes — the whole point
+    // is that you can SEE what went and what got parked.
+    const sr=$('sendResult');
+    if(sr){
+      const bits=[`<b>✅ ${s.sent} sent</b>`];
+      if(s.blocked)bits.push(`⏸ ${s.blocked} parked (no verified email)`);
+      if(s.deferred)bits.push(`🕗 ${s.deferred} waiting for their business hours`);
+      if(s.skipped)bits.push(`📅 ${s.skipped} going tomorrow (daily limit)`);
+      if(s.failed)bits.push(`⚠ ${s.failed} failed`);
+      sr.innerHTML=bits.join(' · ')+(s.blocked?' — parked ones are below; run Find leads for real emails, or Clear parked.':'');
+      sr.className='okbox';sr.classList.remove('hide');
+    }
+    if(s.note)toast(s.note);
   };
   poll();
 }
