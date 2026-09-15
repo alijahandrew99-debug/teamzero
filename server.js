@@ -8,6 +8,18 @@ const auth = require('./lib/auth');
 const stripe = require('./lib/stripe');
 const agents = require('./lib/agents');
 const smtp = require('./lib/smtp');
+// The actual sending config for an account's outreach. "Use Dawnpipe to send"
+// (smtp.useDawnpipe) routes through the system mailbox — zero customer setup,
+// no credentials to enter — while keeping the owner's chosen from-name. A
+// customer who connected their own Gmail uses that directly.
+function outboundSmtpCfg(account) {
+  const s = (account && account.smtp) || {};
+  if (s.useDawnpipe && mailer.enabled()) {
+    const sys = mailer.systemCfg();
+    return { ...sys, fromName: s.fromName || sys.fromName };
+  }
+  return s;
+}
 const plans = require('./lib/plans');
 const mailer = require('./lib/mailer');
 const emailApi = require('./lib/emailapi');
@@ -444,7 +456,7 @@ function startSendJob(account, profileId) {
   const id = db.uid();
   activeSends.set(account.id, id);
   const items = db.getQueue(account.id, profileId).filter((q) => q.status === 'approved');
-  const cfg = account.smtp || {};
+  const cfg = outboundSmtpCfg(account);
   const todayStr = db.today();
   const sentToday = (account.sentToday && account.sentToday.date === todayStr) ? account.sentToday.count : 0;
   // Daily ceiling is the LOWER of the user's cap and today's warmup allowance —
@@ -2369,8 +2381,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
           // masked: the app never ships the app-password back to the browser
-          smtp: account.smtp ? { host: account.smtp.host, port: account.smtp.port, user: account.smtp.user,
-            fromName: account.smtp.fromName, fromEmail: account.smtp.fromEmail, connected: !!account.smtp.pass } : { connected: false },
+          smtp: (() => {
+            const s = account.smtp || {};
+            if (s.useDawnpipe && mailer.enabled()) {
+              const sys = mailer.systemCfg();
+              return { mode: 'dawnpipe', connected: true, user: sys.fromEmail || sys.user, fromName: s.fromName || sys.fromName };
+            }
+            return { mode: 'own', host: s.host, port: s.port, user: s.user,
+              fromName: s.fromName, fromEmail: s.fromEmail, connected: !!s.pass };
+          })(),
+          dawnpipeSendAvailable: mailer.enabled(),
           // So a page refresh can re-attach to a run in progress — otherwise
           // reloading loses the only Stop button on screen while mail keeps going.
           activeSend: (() => { const j = sendJobs.get(activeSends.get(acc)); return j && j.status === 'running' ? sendJobView(j) : null; })(),
@@ -3278,6 +3298,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // now, changing nothing. The one-click answer to "is my password saved
       // and does Gmail still accept it?"
       if (p === '/api/settings/smtp/test' && req.method === 'POST') {
+        // Dawnpipe-managed sending is already verified server-side — nothing
+        // for the customer to test.
+        if ((account.smtp || {}).useDawnpipe) {
+          const sys = mailer.systemCfg();
+          return json(res, mailer.enabled() ? { ok: true, user: sys.fromEmail || sys.user } : { ok: false, error: 'Dawnpipe sending is not configured on the server.' });
+        }
         const tcfg = account.smtp || {};
         if (!tcfg.user || !tcfg.pass) return json(res, { ok: false, error: 'No mailbox saved yet - enter your email and app password above.' });
         const v = await smtp.verify(tcfg);
@@ -3302,6 +3328,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           db.updateAccount(acc, { smtp: {} });
           db.logActivity(acc, { agent: 'SEND', msg: 'Sending mailbox disconnected' });
           return json(res, { ok: true, disconnected: true });
+        }
+        // One-click "let Dawnpipe send for me" — routes outreach through the
+        // system mailbox. No app password, no Google steps. Only offered when
+        // the system mailbox is actually configured.
+        if (f.useDawnpipe) {
+          if (!mailer.enabled()) return json(res, { error: "Dawnpipe sending isn't set up on the server yet. Connect your own mailbox for now." }, 400);
+          const sys = mailer.systemCfg();
+          const fromName = (f.fromName || (account.smtp || {}).fromName || 'Dawnpipe').toString().slice(0, 80);
+          db.updateAccount(acc, { smtp: { useDawnpipe: true, fromName, fromEmail: sys.fromEmail || sys.user, user: sys.fromEmail || sys.user } });
+          db.logActivity(acc, { agent: 'SEND', msg: `Sending via Dawnpipe's mailbox (${sys.fromEmail || sys.user})` });
+          return json(res, { ok: true, mode: 'dawnpipe' });
         }
         // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
         // after a successful connect (so it's never displayed), which meant any

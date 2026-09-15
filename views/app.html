@@ -372,9 +372,22 @@
              so the connected identity is never confused with what's typed in
              the boxes below. -->
         <div id="smConnected" class="okbox hide" style="margin-bottom:12px;display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap">
-          <span>✓ <b>Your mailbox is connected</b> — sending as <b id="smWho"></b>. Approved emails go out automatically.</span>
+          <span>✓ <b>Sending is on</b> — <b id="smWho"></b>. Approved emails go out automatically.</span>
           <button class="sm ghost" onclick="disconnectSmtp()" style="color:var(--red);white-space:nowrap">Disconnect</button>
         </div>
+        <!-- The one-click path: send through Dawnpipe's own mailbox. No app
+             password, no Google settings — the "easy like signing in" option.
+             Shown only when the server mailbox is configured and nothing is
+             connected yet. -->
+        <div id="smEasy" class="hide" style="border:2px solid var(--red);border-radius:10px;background:var(--paper2);padding:16px;margin-bottom:12px">
+          <div style="font-weight:700;font-size:16px;margin-bottom:4px">✨ Easiest — let Dawnpipe send for you</div>
+          <div class="muted" style="margin-bottom:12px">One click. No App Password, no Google settings, nothing to look up. We send your approved emails through our own mailbox, and you can switch to your own Gmail any time.</div>
+          <button class="red" onclick="useDawnpipe()" id="smEasyBtn">Use Dawnpipe to send →</button>
+        </div>
+        <div id="smOrLine" class="muted hide" style="text-align:center;margin:2px 0 12px;font-size:13px">— or connect your own Gmail, so emails come from your address —</div>
+        <!-- Everything in smManual is the connect-your-own-mailbox path; it
+             hides as one block once sending is on. -->
+        <div id="smManual">
         <!-- The 2-minute Gmail walkthrough. Real links, numbered, opens the
              exact Google pages — replaces a dense one-liner nobody could
              follow. Collapsed automatically once a mailbox is connected. -->
@@ -414,6 +427,7 @@
           </div>
         </details>
         <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><button class="sm ghost" onclick="testSmtp()" id="smTestBtn">Test connection</button><span class="muted" id="smMsg"></span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -2081,10 +2095,16 @@ function fillSettings(){
   const m=STATE.smtp||{};
   set('sm_user',m.user||'');set('sm_fromName',m.fromName||'');set('sm_host',m.host||'smtp.gmail.com');
   set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);set('sm_window',STATE.sendWindow||'business');
-  // Connected banner is the source of truth for "am I connected and as whom";
-  // the small status line just echoes it. The guide collapses once connected.
+  // Sending has three visible states, and only one block shows at a time:
+  //   connected        -> green banner (mode-aware), everything else hidden
+  //   not connected     -> one-click Dawnpipe option (if available) + the
+  //                        "or your own Gmail" guide and fields
+  const easyAvail=!!STATE.dawnpipeSendAvailable;
   if($('smConnected'))$('smConnected').classList.toggle('hide',!m.connected);
-  if($('smWho'))$('smWho').textContent=m.user||'';
+  if($('smWho'))$('smWho').textContent=m.mode==='dawnpipe'?`sending through Dawnpipe (${m.user||'our mailbox'})`:`sending as ${m.user||''}`;
+  if($('smEasy'))$('smEasy').classList.toggle('hide',m.connected||!easyAvail);
+  if($('smOrLine'))$('smOrLine').classList.toggle('hide',m.connected||!easyAvail);
+  if($('smManual'))$('smManual').classList.toggle('hide',m.connected);
   if($('smGuide')&&m.connected)$('smGuide').removeAttribute('open');
   $('smMsg').textContent=m.connected?'':'Not connected — you will send by hand until you connect a mailbox.';
   const ed=STATE.emailData||{};
@@ -2164,10 +2184,20 @@ async function saveSmtp(){
     toast(hadPass?'Mailbox connected ✓':'Settings updated ✓');clearDirty();await load();
   }catch(e){$('smMsg').textContent='';toast(smtpHint(e.message));}finally{b.disabled=false;b.textContent=o;}
 }
+async function useDawnpipe(){
+  const b=$('smEasyBtn');b.disabled=true;const o=b.textContent;b.textContent='Turning on…';
+  try{
+    await api('/api/settings/smtp',{useDawnpipe:true,fromName:$('sm_fromName').value||''});
+    toast('Done — Dawnpipe will send your approved emails ✓');clearDirty();await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+}
+// No confirm() dialog: some in-app browsers silently suppress it, which left
+// the button doing nothing. Disconnecting is one click to undo (reconnect),
+// so a blocking prompt bought nothing and cost reliability.
 async function disconnectSmtp(){
-  if(!confirm('Disconnect this mailbox?\n\nApproved emails will wait for you to send them by hand until you connect one again.'))return;
-  try{await api('/api/settings/smtp',{disconnect:true});toast('Mailbox disconnected');$('sm_pass').value='';clearDirty();await load();}
-  catch(e){toast(e.message);}
+  const b=event&&event.target;if(b)b.disabled=true;
+  try{await api('/api/settings/smtp',{disconnect:true});toast('Sending turned off');$('sm_pass').value='';clearDirty();await load();}
+  catch(e){toast(e.message);if(b)b.disabled=false;}
 }
 // ---- bulk approve / send ----
 // ---- the assistant (help bubble) ----
