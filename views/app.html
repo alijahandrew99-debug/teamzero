@@ -1032,8 +1032,18 @@ function render(){
         <button class="sm ghost" onclick="setStage('${l.id}','lost')" title="Not interested - stops follow-ups">Not interested</button>
       </div></div>`;
   }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
-  $('qcount').textContent=`· ${queue.length} pending`;
-  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">Nothing pending. Find leads, then draft.</div>';
+  // Break the count down so the queue reflects reality after a send — not a
+  // flat "16 pending" that never changes. Held drafts are called out because
+  // they are the usual reason a send "did nothing": the address is a guess.
+  const nPend=queue.filter(q=>q.status==='pending').length;
+  const nAppr=queue.filter(q=>q.status==='approved').length;
+  const nHeld=queue.filter(q=>q.status==='held').length;
+  const parts=[];
+  if(nPend)parts.push(`${nPend} to review`);
+  if(nAppr)parts.push(`${nAppr} approved`);
+  if(nHeld)parts.push(`${nHeld} held (needs a real email)`);
+  $('qcount').textContent=parts.length?'· '+parts.join(' · '):`· ${queue.length}`;
+  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">All clear — nothing waiting. Find leads, then draft.</div>';
   $('feed').innerHTML=(STATE.activity||[]).map(a=>`<div><span class="t">${new Date(a.at).toLocaleTimeString()}</span> [${a.agent}] ${esc(a.msg)}</div>`).join('')||'<div class="empty">No activity yet.</div>';
 }
 function qcard(q){
@@ -1053,7 +1063,14 @@ function qcard(q){
   const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${bo}`;
   const outlook=`https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${su}&body=${bo}`;
   const mailto=`mailto:${to}?subject=${su}&body=${bo}`;
-  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
+  // Held drafts (unverified/guessed address) used to render exactly like a
+  // plain "pending" one, so after a send it looked like nothing happened —
+  // the list still full, no explanation. Show the real status on every card.
+  const held=q.status==='held';
+  const statusPill=held
+    ? `<span class="pill" style="background:#fbe9e7;color:#a02617" title="${esc(q.heldReason||'')}">⏳ held — ${esc(q.heldReason||'needs a verified email')}</span>`
+    : approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>';
+  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${statusPill}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress','website','pricing'];
