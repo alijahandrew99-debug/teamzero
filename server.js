@@ -3295,6 +3295,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ---- sending mailbox settings ----
       if (p === '/api/settings/smtp' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
+        // Explicit disconnect. Without this there was no way to clear a mailbox
+        // from the UI — every save merged over the old one, so a wrong address
+        // could never be removed, only overwritten.
+        if (f.disconnect) {
+          db.updateAccount(acc, { smtp: {} });
+          db.logActivity(acc, { agent: 'SEND', msg: 'Sending mailbox disconnected' });
+          return json(res, { ok: true, disconnected: true });
+        }
         // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
         // after a successful connect (so it's never displayed), which meant any
         // later save — tweaking the delay, or just clicking Connect again —
