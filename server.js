@@ -8,6 +8,18 @@ const auth = require('./lib/auth');
 const stripe = require('./lib/stripe');
 const agents = require('./lib/agents');
 const smtp = require('./lib/smtp');
+// The actual sending config for an account's outreach. "Use Dawnpipe to send"
+// (smtp.useDawnpipe) routes through the system mailbox — zero customer setup,
+// no credentials to enter — while keeping the owner's chosen from-name. A
+// customer who connected their own Gmail uses that directly.
+function outboundSmtpCfg(account) {
+  const s = (account && account.smtp) || {};
+  if (s.useDawnpipe && mailer.enabled()) {
+    const sys = mailer.systemCfg();
+    return { ...sys, fromName: s.fromName || sys.fromName };
+  }
+  return s;
+}
 const plans = require('./lib/plans');
 const mailer = require('./lib/mailer');
 const emailApi = require('./lib/emailapi');
@@ -444,7 +456,7 @@ function startSendJob(account, profileId) {
   const id = db.uid();
   activeSends.set(account.id, id);
   const items = db.getQueue(account.id, profileId).filter((q) => q.status === 'approved');
-  const cfg = account.smtp || {};
+  const cfg = outboundSmtpCfg(account);
   const todayStr = db.today();
   const sentToday = (account.sentToday && account.sentToday.date === todayStr) ? account.sentToday.count : 0;
   // Daily ceiling is the LOWER of the user's cap and today's warmup allowance —
@@ -2306,7 +2318,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       page = page.replace('__CHECKOUT__', checkoutResult);
       const locked = !stripe.hasAccess(account);
       page = page.replace('__EMAIL__', account.email).replace('__LOCKED__', locked ? 'true' : 'false').replace('__AIMODE__', aiMode());
-      return html(res, page);
+      // The app's HTML carries all its JS inline, and it changes with every
+      // deploy. With no cache header the browser was free to keep serving a
+      // stale copy — so a shipped fix (e.g. the disconnect button) looked
+      // "still broken" until a hard refresh. no-cache forces a revalidate on
+      // every load, so a normal reload always runs the current code.
+      return html(res, page, 200, { 'Cache-Control': 'no-cache, must-revalidate' });
     }
 
     // ---------- API (needs access) ----------
@@ -2369,8 +2386,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
           // masked: the app never ships the app-password back to the browser
-          smtp: account.smtp ? { host: account.smtp.host, port: account.smtp.port, user: account.smtp.user,
-            fromName: account.smtp.fromName, fromEmail: account.smtp.fromEmail, connected: !!account.smtp.pass } : { connected: false },
+          smtp: (() => {
+            const s = account.smtp || {};
+            if (s.useDawnpipe && mailer.enabled()) {
+              const sys = mailer.systemCfg();
+              return { mode: 'dawnpipe', connected: true, user: sys.fromEmail || sys.user, fromName: s.fromName || sys.fromName };
+            }
+            return { mode: 'own', host: s.host, port: s.port, user: s.user,
+              fromName: s.fromName, fromEmail: s.fromEmail, connected: !!s.pass };
+          })(),
+          dawnpipeSendAvailable: mailer.enabled(),
           // So a page refresh can re-attach to a run in progress — otherwise
           // reloading loses the only Stop button on screen while mail keeps going.
           activeSend: (() => { const j = sendJobs.get(activeSends.get(acc)); return j && j.status === 'running' ? sendJobView(j) : null; })(),
@@ -3278,6 +3303,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // now, changing nothing. The one-click answer to "is my password saved
       // and does Gmail still accept it?"
       if (p === '/api/settings/smtp/test' && req.method === 'POST') {
+        // Dawnpipe-managed sending is already verified server-side — nothing
+        // for the customer to test.
+        if ((account.smtp || {}).useDawnpipe) {
+          const sys = mailer.systemCfg();
+          return json(res, mailer.enabled() ? { ok: true, user: sys.fromEmail || sys.user } : { ok: false, error: 'Dawnpipe sending is not configured on the server.' });
+        }
         const tcfg = account.smtp || {};
         if (!tcfg.user || !tcfg.pass) return json(res, { ok: false, error: 'No mailbox saved yet - enter your email and app password above.' });
         const v = await smtp.verify(tcfg);
@@ -3295,6 +3326,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ---- sending mailbox settings ----
       if (p === '/api/settings/smtp' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
+        // Explicit disconnect. Without this there was no way to clear a mailbox
+        // from the UI — every save merged over the old one, so a wrong address
+        // could never be removed, only overwritten.
+        if (f.disconnect) {
+          db.updateAccount(acc, { smtp: {} });
+          db.logActivity(acc, { agent: 'SEND', msg: 'Sending mailbox disconnected' });
+          return json(res, { ok: true, disconnected: true });
+        }
+        // One-click "let Dawnpipe send for me" — routes outreach through the
+        // system mailbox. No app password, no Google steps. Only offered when
+        // the system mailbox is actually configured.
+        if (f.useDawnpipe) {
+          if (!mailer.enabled()) return json(res, { error: "Dawnpipe sending isn't set up on the server yet. Connect your own mailbox for now." }, 400);
+          const sys = mailer.systemCfg();
+          const fromName = (f.fromName || (account.smtp || {}).fromName || 'Dawnpipe').toString().slice(0, 80);
+          db.updateAccount(acc, { smtp: { useDawnpipe: true, fromName, fromEmail: sys.fromEmail || sys.user, user: sys.fromEmail || sys.user } });
+          db.logActivity(acc, { agent: 'SEND', msg: `Sending via Dawnpipe's mailbox (${sys.fromEmail || sys.user})` });
+          return json(res, { ok: true, mode: 'dawnpipe' });
+        }
         // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
         // after a successful connect (so it's never displayed), which meant any
         // later save — tweaking the delay, or just clicking Connect again —
@@ -3305,11 +3355,31 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const cfg = { host: f.host || 'smtp.gmail.com', port: Number(f.port) || 465,
           user: f.user || existing.user || '', pass,
           fromEmail: f.fromEmail || f.user || existing.fromEmail || '', fromName: f.fromName ?? existing.fromName ?? '' };
+        // Fix a wrong SMTP host before it can fail. The client guesses
+        // smtp.<domain> for a custom domain, which does not exist (Google
+        // Workspace uses smtp.gmail.com, Microsoft 365 uses office365) — that
+        // is the ENOTFOUND error. Detect the real host from the domain's MX
+        // whenever the host is blank or looks like that naive guess.
+        const emailDom = dnsauth.domainOfEmail(cfg.fromEmail || cfg.user);
+        if (emailDom && (!cfg.host || cfg.host.toLowerCase() === 'smtp.' + emailDom)) {
+          const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+          // Google Workspace is the dominant small-business host and the whole
+          // app-password flow is Gmail-centric, so if MX detection comes back
+          // empty, smtp.gmail.com is a far safer default than the guaranteed-
+          // dead smtp.<domain>.
+          cfg.host = real || 'smtp.gmail.com';
+        }
         // Verify whenever we have credentials that haven't been proven in this
         // exact combination — i.e. a new password, or a changed user/host.
         const needsVerify = !!f.pass || (pass && (cfg.user !== existing.user || cfg.host !== existing.host));
         if (needsVerify) {
-          const v = await smtp.verify(cfg);
+          let v = await smtp.verify(cfg);
+          // Last-ditch self-heal: if the host still could not be reached, try
+          // the detected host once more before giving up.
+          if (!v.ok && /ENOTFOUND|EAI_AGAIN|getaddrinfo|ECONNREFUSED/i.test(v.error || '') && emailDom) {
+            const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+            if (real && real !== cfg.host) { cfg.host = real; v = await smtp.verify(cfg); }
+          }
           if (!v.ok) return json(res, { error: `Could not sign in to that mailbox: ${v.error}` }, 400);
         }
         // A different sending domain means a fresh reputation — restart warmup.
@@ -3482,6 +3552,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const it = db.updateQueueItem(acc, f.id, { status: 'rejected' });
         if (it && it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
         return json(res, { item: it });
+      }
+      // Clear the parked pile: reject every held (unverified-address) draft
+      // for a business in one go, and free their leads to be re-found.
+      if (p === '/api/queue/clear-held' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const held = db.getQueue(acc, f.profileId).filter((q) => q.status === 'held');
+        for (const it of held) {
+          db.updateQueueItem(acc, it.id, { status: 'rejected' });
+          if (it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
+        }
+        db.logActivity(acc, { agent: 'OPERATOR', msg: `Cleared ${held.length} parked draft(s) (no verified email)` });
+        return json(res, { cleared: held.length });
       }
       if (p === '/api/queue/sent' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));

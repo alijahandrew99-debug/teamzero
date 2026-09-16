@@ -353,7 +353,11 @@
     <div class="card hide" id="cardEmailData">
       <h2><span class="agent">OWNER</span> Email data key (platform)</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 6px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
+        <p class="muted" style="margin:0 0 8px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
+        <!-- Prominent status: a saved key never shows back in the box (it's a
+             password field), so without this the empty box reads as "broken"
+             even when a key is connected and working. -->
+        <div id="hkStatus" class="okbox" style="margin-bottom:10px">Checking…</div>
         <div class="row">
           <input id="hk_key" type="password" placeholder="Data provider API key" style="flex:1;min-width:200px;margin:0">
           <button onclick="saveEmailKey()" id="hkBtn">Connect &amp; verify</button>
@@ -367,11 +371,45 @@
     <div class="card">
       <h2><span class="agent">SENDING</span> Connect your mailbox (to send automatically)</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 6px">Optional. Connect a mailbox and you can approve &amp; send the whole batch in one click. Leave it empty and you'll keep sending by hand with the Gmail button.</p>
-        <div class="warnbox" style="margin-bottom:12px">For Gmail you must use an <b>App Password</b> (not your normal password) — Google Account → Security → 2-Step Verification → App passwords. Your password is stored on your own server and never shown again.</div>
+        <p class="muted" style="margin:0 0 10px">Optional. Connect a mailbox and you can approve &amp; send the whole batch in one click. Leave it empty and you'll keep sending by hand with the Gmail button.</p>
+        <!-- Shown by renderSettings only when a mailbox is actually connected,
+             so the connected identity is never confused with what's typed in
+             the boxes below. -->
+        <div id="smConnected" class="okbox hide" style="margin-bottom:12px;display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap">
+          <span>✓ <b>Sending is on</b> — <b id="smWho"></b>. Approved emails go out automatically.</span>
+          <button class="sm ghost" onclick="disconnectSmtp()" style="color:var(--red);white-space:nowrap">Disconnect</button>
+        </div>
+        <!-- The one-click path: send through Dawnpipe's own mailbox. No app
+             password, no Google settings — the "easy like signing in" option.
+             Shown only when the server mailbox is configured and nothing is
+             connected yet. -->
+        <div id="smEasy" class="hide" style="border:2px solid var(--red);border-radius:10px;background:var(--paper2);padding:16px;margin-bottom:12px">
+          <div style="font-weight:700;font-size:16px;margin-bottom:4px">✨ Easiest — let Dawnpipe send for you</div>
+          <div class="muted" style="margin-bottom:12px">One click. No App Password, no Google settings, nothing to look up. We send your approved emails through our own mailbox, and you can switch to your own Gmail any time.</div>
+          <button class="red" onclick="useDawnpipe()" id="smEasyBtn">Use Dawnpipe to send →</button>
+        </div>
+        <div id="smOrLine" class="muted hide" style="text-align:center;margin:2px 0 12px;font-size:13px">— or connect your own Gmail, so emails come from your address —</div>
+        <!-- Everything in smManual is the connect-your-own-mailbox path; it
+             hides as one block once sending is on. -->
+        <div id="smManual">
+        <!-- The 2-minute Gmail walkthrough. Real links, numbered, opens the
+             exact Google pages — replaces a dense one-liner nobody could
+             follow. Collapsed automatically once a mailbox is connected. -->
+        <details id="smGuide" style="border:1px solid var(--line);border-radius:8px;background:var(--paper2);padding:12px 14px;margin-bottom:12px" open>
+          <summary style="cursor:pointer;font-weight:700">📩 How to connect Gmail — 2 minutes, one time</summary>
+          <div style="margin-top:10px">
+            <p class="muted" style="margin:0 0 10px">Gmail won't take your normal password. It needs a one-time <b>App Password</b> — a 16-character code just for Dawnpipe. You never share your real password, and it's stored on your own server. Do these three things:</p>
+            <ol style="margin:0;padding-left:20px;line-height:2">
+              <li><b>Turn on 2-Step Verification</b> (App Passwords only appear after this): <a href="https://myaccount.google.com/signinoptions/two-step-verification" target="_blank" rel="noopener"><b>open the page →</b></a></li>
+              <li><b>Create an App Password</b> and name it <b>Dawnpipe</b>: <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"><b>open the page →</b></a></li>
+              <li><b>Copy the 16-character code</b> Google shows you and paste it in the App password box below. Spaces don't matter — we clean them for you.</li>
+            </ol>
+            <p class="muted" style="margin:10px 0 0;font-size:13px">Not on Gmail? Put your provider's email and password in the same boxes — most work as-is.</p>
+          </div>
+        </details>
         <div class="two">
           <div class="field"><label>Your email address</label><input id="sm_user" placeholder="you@gmail.com"></div>
-          <div class="field"><label>App password</label><input id="sm_pass" type="password" placeholder="16-character app password"></div>
+          <div class="field"><label>App password</label><input id="sm_pass" type="password" placeholder="paste the 16-character code" oninput="this.value=this.value.replace(/\s+/g,'')"></div>
           <div class="field"><label>Name emails come from</label><input id="sm_fromName" placeholder="Alijah Skinner"></div>
         </div>
         <!-- The rest are safe defaults we pick. They stay in the DOM (the save
@@ -393,6 +431,7 @@
           </div>
         </details>
         <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><button class="sm ghost" onclick="testSmtp()" id="smTestBtn">Test connection</button><span class="muted" id="smMsg"></span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -443,7 +482,7 @@
               <button class="sm ok" onclick="approveAll()" id="apprAllBtn">✓ Approve all</button>
               <input id="adjInstr" placeholder="Change every draft at once — e.g. shorter, friendlier, mention the fall special" style="min-width:250px;margin:0;font-size:13px">
               <button class="sm ghost" onclick="adjustAll()" id="adjBtn">✏️ Adjust all drafts</button>
-              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✓✉ Approve &amp; send all</button>
+              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✉ Send everything that can go</button>
               <span class="muted" id="sendInfo"></span>
             </div>
             <div class="progress" id="sendProgress" style="margin-bottom:14px">
@@ -456,7 +495,19 @@
                 <b>You can close this page.</b> It keeps sending on our server, and "Stop sending" works from any device.
               </div>
             </div>
+            <div id="sendResult" class="okbox hide" style="margin-bottom:12px"></div>
             <div id="queue"><div class="empty">Nothing pending yet.</div></div>
+            <!-- Parked: drafts that could not send (no verified email). Kept
+                 out of the active list so a send visibly clears the queue,
+                 with one button to bin them all. -->
+            <div id="parkedWrap" class="hide" style="margin-top:16px;border-top:1px dashed var(--line);padding-top:14px">
+              <div class="row" style="justify-content:space-between;align-items:center">
+                <b id="parkedHead">⏸ Parked</b>
+                <button class="sm ghost" onclick="clearParked()" id="clearParkedBtn" style="color:var(--red);white-space:nowrap">Clear parked</button>
+              </div>
+              <div class="muted" style="margin:4px 0 10px;font-size:12.5px">No verified email address for these, so sending would bounce and hurt your domain. Run <b>Find leads</b> again for fresh verified emails, or clear them.</div>
+              <div id="parked"></div>
+            </div>
           </div>
         </div>
         <div class="card" id="briefCard" style="display:none">
@@ -967,7 +1018,12 @@ function render(){
   const P=pid();const p=curProfile();
   if(curTab==='desk')$('deskProfileName').textContent=p?p.name:'—';
   const leads=STATE.leads.filter(l=>l.profileId===P);
-  const queue=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  // Active list = things you can act on. Parked = held drafts with no verified
+  // email, split out so a send visibly empties the queue instead of leaving
+  // held ones behind looking stuck.
+  const live=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  const queue=live.filter(q=>q.status!=='held');
+  const parked=live.filter(q=>q.status==='held');
   $('leadcount').textContent=`· ${leads.length}`;
   $('leads').innerHTML=leads.length?leads.map(l=>{
     const c=l.emailConfidence||'';
@@ -993,8 +1049,25 @@ function render(){
         <button class="sm ghost" onclick="setStage('${l.id}','lost')" title="Not interested - stops follow-ups">Not interested</button>
       </div></div>`;
   }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
-  $('qcount').textContent=`· ${queue.length} pending`;
-  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">Nothing pending. Find leads, then draft.</div>';
+  // Break the count down so the queue reflects reality after a send — not a
+  // flat "16 pending" that never changes.
+  const nPend=queue.filter(q=>q.status==='pending').length;
+  const nAppr=queue.filter(q=>q.status==='approved').length;
+  const parts=[];
+  if(nPend)parts.push(`${nPend} to review`);
+  if(nAppr)parts.push(`${nAppr} approved`);
+  if(parked.length)parts.push(`${parked.length} parked`);
+  $('qcount').textContent=parts.length?'· '+parts.join(' · '):(queue.length?`· ${queue.length}`:'');
+  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">All clear — nothing waiting to send. Find leads, then draft.</div>';
+  // Parked section: the held drafts, kept out of the active list.
+  const pw=$('parkedWrap');
+  if(pw){
+    pw.classList.toggle('hide',!parked.length);
+    if(parked.length){
+      $('parkedHead').textContent=`⏸ Parked — ${parked.length} draft${parked.length===1?'':'s'} with no verified email`;
+      $('parked').innerHTML=parked.map(qcard).join('');
+    }
+  }
   $('feed').innerHTML=(STATE.activity||[]).map(a=>`<div><span class="t">${new Date(a.at).toLocaleTimeString()}</span> [${a.agent}] ${esc(a.msg)}</div>`).join('')||'<div class="empty">No activity yet.</div>';
 }
 function qcard(q){
@@ -1014,7 +1087,14 @@ function qcard(q){
   const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${bo}`;
   const outlook=`https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${su}&body=${bo}`;
   const mailto=`mailto:${to}?subject=${su}&body=${bo}`;
-  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
+  // Held drafts (unverified/guessed address) used to render exactly like a
+  // plain "pending" one, so after a send it looked like nothing happened —
+  // the list still full, no explanation. Show the real status on every card.
+  const held=q.status==='held';
+  const statusPill=held
+    ? `<span class="pill" style="background:#fbe9e7;color:#a02617" title="${esc(q.heldReason||'')}">⏳ held — ${esc(q.heldReason||'needs a verified email')}</span>`
+    : approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>';
+  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${statusPill}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress','website','pricing'];
@@ -2060,14 +2140,37 @@ function fillSettings(){
   const m=STATE.smtp||{};
   set('sm_user',m.user||'');set('sm_fromName',m.fromName||'');set('sm_host',m.host||'smtp.gmail.com');
   set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);set('sm_window',STATE.sendWindow||'business');
-  $('smMsg').textContent=m.connected?`Connected as ${m.user} ✓`:'Not connected — you will send by hand';
+  // Sending has three visible states, and only one block shows at a time:
+  //   connected        -> green banner (mode-aware), everything else hidden
+  //   not connected     -> one-click Dawnpipe option (if available) + the
+  //                        "or your own Gmail" guide and fields
+  const easyAvail=!!STATE.dawnpipeSendAvailable;
+  if($('smConnected'))$('smConnected').classList.toggle('hide',!m.connected);
+  if($('smWho'))$('smWho').textContent=m.mode==='dawnpipe'?`sending through Dawnpipe (${m.user||'our mailbox'})`:`sending as ${m.user||''}`;
+  if($('smEasy'))$('smEasy').classList.toggle('hide',m.connected||!easyAvail);
+  if($('smOrLine'))$('smOrLine').classList.toggle('hide',m.connected||!easyAvail);
+  if($('smManual'))$('smManual').classList.toggle('hide',m.connected);
+  if($('smGuide')&&m.connected)$('smGuide').removeAttribute('open');
+  $('smMsg').textContent=m.connected?'':'Not connected — you will send by hand until you connect a mailbox.';
   const ed=STATE.emailData||{};
   renderWarmup();
   loadSuppression();
   renderVoice();
   loadDeskAppointments();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
-  $('hkMsg').textContent=ed.connected?'Per-account override active.':(ed.fallback?'Using the platform data key ✓':'⚠ No platform key set — set HUNTER_API_KEY on the server or leads fall back to site-published emails.');
+  // The empty box is normal (password field, never echoed). The status banner
+  // is the real indicator, so a connected key never looks "blank / broken".
+  const hkStatus=$('hkStatus');
+  if(hkStatus){
+    if(ed.connected){hkStatus.className='okbox';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='✓ <b>A data key is connected on this account</b> — verified-email lookups are on. The box below stays empty on purpose (keys are never shown back). Leave it blank to keep this key.';}
+    else if(ed.fallback){hkStatus.className='okbox';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='✓ <b>Using the platform key</b> (set on the server) — every account gets verified emails automatically. You do not need to enter anything here.';}
+    else {hkStatus.className='warnbox bad';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='⚠ <b>No data key.</b> Leads fall back to site-published emails. Set <code>HUNTER_API_KEY</code> on the server, or paste a key below.';}
+  }
+  if($('hk_key'))$('hk_key').placeholder=(ed.connected||ed.fallback)?'A key is saved — paste a new one only to replace it':'Data provider API key';
+  $('hkMsg').textContent='';
   // Owner-only, always. A customer paying for lead-finding must never be told
   // to go and buy a second subscription to make the thing they bought work.
   const edCard=$('cardEmailData');
@@ -2108,23 +2211,50 @@ async function saveSchedule(){
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 // ---- sending mailbox ----
+// Turn Gmail's terse SMTP errors into something an owner can act on. The
+// overwhelmingly common failure is a wrong/absent app password.
+function smtpHint(err){
+  const e=String(err||'').toLowerCase();
+  if(/accepted|authenticat|credential|username and password|535|534|application-specific/.test(e))
+    return 'That code was not accepted. Two things to check: 2-Step Verification must be ON, and you must paste a fresh App Password (not your normal Gmail password). Make a new one and paste all 16 characters.';
+  if(/cert|tls|ssl|handshake/.test(e)) return 'A security handshake failed — wait a moment and try Connect again.';
+  if(/timed out|timeout|econn|network/.test(e)) return 'Could not reach the mail server — check the email address is spelled right, then try again.';
+  return err;
+}
 async function testSmtp(){
   const b=$('smTestBtn');b.disabled=true;const o=b.textContent;b.textContent='Testing…';
   try{const r=await api('/api/settings/smtp/test',{});
-    if(r.ok){$('smMsg').textContent='Live check passed — signed in as '+r.user+' ✓';toast('Gmail accepted the saved password ✓');}
-    else toast('Test failed: '+r.error);
-  }catch(e){toast(e.message);}
+    if(r.ok){$('smMsg').textContent='Live check passed — signed in as '+r.user+' ✓';toast('Your mailbox is working ✓');}
+    else {$('smMsg').textContent='';toast(smtpHint(r.error));}
+  }catch(e){toast(smtpHint(e.message));}
   finally{b.disabled=false;b.textContent=o;}
 }
 async function saveSmtp(){
+  const user=$('sm_user').value.trim();
+  if(!user){toast('Enter your email address first');return;}
   const b=$('smBtn');b.disabled=true;const o=b.textContent;b.textContent='Verifying…';
   try{
-    await api('/api/settings/smtp',{user:$('sm_user').value,pass:$('sm_pass').value,fromName:$('sm_fromName').value,
-      host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,sendWindow:$('sm_window').value,verify:!!$('sm_pass').value});
+    await api('/api/settings/smtp',{user,pass:$('sm_pass').value.replace(/\s+/g,''),fromName:$('sm_fromName').value,
+      host:$('sm_host').value,port:465,fromEmail:user,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,sendWindow:$('sm_window').value,verify:!!$('sm_pass').value});
     const hadPass=!!$('sm_pass').value;$('sm_pass').value='';
-    $('smMsg').textContent=hadPass?'Mailbox connected ✓':'Settings updated ✓';
-    toast(hadPass?'Mailbox connected':'Settings updated');clearDirty();await load();
-  }catch(e){$('smMsg').textContent='';toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+    $('smMsg').textContent='';
+    toast(hadPass?'Mailbox connected ✓':'Settings updated ✓');clearDirty();await load();
+  }catch(e){$('smMsg').textContent='';toast(smtpHint(e.message));}finally{b.disabled=false;b.textContent=o;}
+}
+async function useDawnpipe(){
+  const b=$('smEasyBtn');b.disabled=true;const o=b.textContent;b.textContent='Turning on…';
+  try{
+    await api('/api/settings/smtp',{useDawnpipe:true,fromName:$('sm_fromName').value||''});
+    toast('Done — Dawnpipe will send your approved emails ✓');clearDirty();await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+}
+// No confirm() dialog: some in-app browsers silently suppress it, which left
+// the button doing nothing. Disconnecting is one click to undo (reconnect),
+// so a blocking prompt bought nothing and cost reliability.
+async function disconnectSmtp(){
+  const b=event&&event.target;if(b)b.disabled=true;
+  try{await api('/api/settings/smtp',{disconnect:true});toast('Sending turned off');$('sm_pass').value='';clearDirty();await load();}
+  catch(e){toast(e.message);if(b)b.disabled=false;}
 }
 // ---- bulk approve / send ----
 // ---- the assistant (help bubble) ----
@@ -2206,16 +2336,23 @@ async function approveAndSendAll(){
   const pend=mine.filter(q=>q.status==='pending'||q.status==='approved').length;
   const held=mine.filter(q=>q.status==='held').length;
   if(!pend){
-    if(held)return toast(`${held} draft(s) are held because the address couldn't be verified — sending those would bounce and hurt your domain. Re-run Find leads, or use "Clear guesses".`);
-    return toast('Nothing to send — no approved or pending drafts for this business.');
+    if(held)return toast(`Those ${held} draft(s) are parked — no verified email, so sending would bounce. Run Find leads again for real emails, or Clear parked.`);
+    return toast('Nothing to send — no drafts ready for this business.');
   }
-  if(!confirm(`Approve and SEND ${pend} email(s) from ${STATE.smtp.user}?\n\nThey go out a few minutes apart to protect your sender reputation — you can close the page, and you can stop it at any time.`))return;
+  if(!confirm(`Send the ${pend} draft(s) that have a verified email, from ${STATE.smtp.user}?\n\nAnything without a real email is parked, not sent. They go out a few minutes apart — you can close the page and stop any time.`))return;
+  const sr=$('sendResult');if(sr)sr.classList.add('hide');
   const b=$('sendAllBtn'),ab=$('apprAllBtn');b.disabled=true;ab.disabled=true;
   try{
     await api('/api/queue/approve-all',{profileId:pid()});
     const r=await api('/api/send/run',{profileId:pid()});
     watchSend(r.jobId);
   }catch(e){toast(e.message);b.disabled=false;ab.disabled=false;}
+}
+// Bin every parked (held) draft for this business in one call.
+async function clearParked(){
+  const b=$('clearParkedBtn');if(b)b.disabled=true;
+  try{const r=await api('/api/queue/clear-held',{profileId:pid()});toast(`Cleared ${r.cleared} parked draft${r.cleared===1?'':'s'}`);await load();}
+  catch(e){toast(e.message);if(b)b.disabled=false;}
 }
 // One watcher, shared by "send all" and by a page that reloads mid-run. Without
 // the second path, refreshing the tab left mail going out with no Stop button
@@ -2245,9 +2382,20 @@ function watchSend(jobId){
     await load().catch(()=>{});
     if(s.status==='running'){setTimeout(poll,2500);return;}
     finish();
-    if(s.status==='error')toast('Send failed: '+s.error);
-    else if(s.note)toast(s.note);
-    else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.deferred?`, ${s.deferred} held for their business hours`:''}${s.blocked?`, ${s.blocked} held (unverified address)`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
+    if(s.status==='error'){toast('Send failed: '+s.error);return;}
+    // A persistent result banner, not a toast that vanishes — the whole point
+    // is that you can SEE what went and what got parked.
+    const sr=$('sendResult');
+    if(sr){
+      const bits=[`<b>✅ ${s.sent} sent</b>`];
+      if(s.blocked)bits.push(`⏸ ${s.blocked} parked (no verified email)`);
+      if(s.deferred)bits.push(`🕗 ${s.deferred} waiting for their business hours`);
+      if(s.skipped)bits.push(`📅 ${s.skipped} going tomorrow (daily limit)`);
+      if(s.failed)bits.push(`⚠ ${s.failed} failed`);
+      sr.innerHTML=bits.join(' · ')+(s.blocked?' — parked ones are below; run Find leads for real emails, or Clear parked.':'');
+      sr.className='okbox';sr.classList.remove('hide');
+    }
+    if(s.note)toast(s.note);
   };
   poll();
 }
