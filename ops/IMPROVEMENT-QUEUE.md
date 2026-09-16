@@ -549,3 +549,37 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     and together with items 17/18, `node --check` clean. Lower priority
     than 17/18 (performance, not correctness/security) but trivially safe
     to fold into the same merge batch.
+
+20. **Shared Dawnpipe sending domain skipped warmup entirely.** `main` moved
+    for the first time in 22 days today (`c577195` → `a70c1ec`, 6 commits: a
+    new one-click "let Dawnpipe send for me" mailbox feature plus MX-based
+    SMTP host detection). Audited the new code the same way this queue
+    audits everything landing on `main`: the `useDawnpipe` branch of `POST
+    /api/settings/smtp` (`server.js`) set `smtp.useDawnpipe` but never
+    touched `account.warmup` — unlike the own-mailbox branch one block
+    below it, which explicitly restarts warmup on a domain change. Net
+    effect: a brand-new account has no warmup state at all, and
+    `sending.warmupAllowance()` treats that as `Infinity` — so it could
+    send its full daily cap (default 50) through the shared
+    `support@dawnpipe.com` domain on day one, with zero pacing. That
+    domain is pooled across every customer who opts into this feature, so
+    it's the one domain in the whole system that most needs the ramp — a
+    single customer blasting their cap on day one degrades deliverability
+    for everyone sharing it, not just themselves.
+    **Status (2026-09-16): shipped**, branch
+    `keeper/2026-09-16-dawnpipe-send-warmup`, cut fresh off `main`
+    (`a70c1ec`). Mirrors the own-mailbox path's exact "same domain keeps
+    its ramp, different domain restarts it" logic for `useDawnpipe`, and
+    now returns `warmup` status in the response for parity. Added 3
+    assertions to the new `test-sending-mode.js` (warmup enabled on the
+    Dawnpipe domain, day-one allowance is the warmup floor (10) not
+    unlimited, re-enabling on an unchanged domain doesn't reset the ramp)
+    — 12/12 in that suite, 98/98 across all five suites. `node --check`
+    clean on `server.js`. While investigating, re-verified all 18 standing
+    `keeper/*`/`audit/*` branches (items 1/11/12/14/17/18/19 above, plus
+    the design-doc branches) actually merge clean against the new `main`
+    via real `git merge --no-commit --no-ff` in an isolated worktree, not
+    just `git merge-tree` (which flagged all 14 non-design branches as
+    conflicting — a false alarm from that tool's coarse per-file
+    reporting, the exact failure mode flagged 2026-09-01; the real merges
+    all auto-resolve clean). Nothing broke.
