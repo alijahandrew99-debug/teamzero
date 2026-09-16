@@ -25,6 +25,13 @@ let pass=0,fail=0;const ok=(l,c,x)=>{c?pass++:fail++;console.log((c?'  PASS  ':'
   console.log('== stored as marker, no creds copied ==');
   const acc=db.getAccount(a.id);
   ok('useDawnpipe marker, no password stored',acc.smtp.useDawnpipe===true&&!acc.smtp.pass,acc.smtp);
+  console.log('== shared Dawnpipe domain still gets warmed up ==');
+  ok('warmup started on the Dawnpipe domain',acc.warmup&&acc.warmup.enabled&&acc.warmup.domain==='dawnpipe.com',acc.warmup);
+  const sending=require('./lib/sending');
+  ok('day-one allowance is the warmup floor, not unlimited',sending.warmupAllowance(acc.warmup)===10,sending.warmupAllowance(acc.warmup));
+  r=await api('/api/settings/smtp',{useDawnpipe:true,fromName:'Bob Plumbing Again'});
+  const acc2=db.getAccount(a.id);
+  ok('re-enabling on the same domain does not restart the ramp',acc2.warmup.startDate===acc.warmup.startDate,acc2.warmup);
   console.log('== instant test-connection ==');
   r=await api('/api/settings/smtp/test',{});
   ok('test passes with no password',r.json.ok===true&&r.json.user==='support@dawnpipe.com',r.json);

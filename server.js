@@ -3341,9 +3341,19 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           if (!mailer.enabled()) return json(res, { error: "Dawnpipe sending isn't set up on the server yet. Connect your own mailbox for now." }, 400);
           const sys = mailer.systemCfg();
           const fromName = (f.fromName || (account.smtp || {}).fromName || 'Dawnpipe').toString().slice(0, 80);
-          db.updateAccount(acc, { smtp: { useDawnpipe: true, fromName, fromEmail: sys.fromEmail || sys.user, user: sys.fromEmail || sys.user } });
+          // The shared Dawnpipe mailbox is its own sending domain, pooled across
+          // every account that opts in — it needs the same fresh-reputation
+          // warmup as any other domain, or a brand-new account gets no warmup
+          // state at all (warmupAllowance() treats that as unlimited) and can
+          // blast its full daily cap through the shared domain on day one.
+          const dpDomain = dnsauth.domainOfEmail(sys.fromEmail || sys.user);
+          const prevWarmup = account.warmup || {};
+          const warmup = (prevWarmup.domain === dpDomain && prevWarmup.startDate)
+            ? prevWarmup
+            : sending.startWarmup(dpDomain, prevWarmup.ceiling);
+          db.updateAccount(acc, { smtp: { useDawnpipe: true, fromName, fromEmail: sys.fromEmail || sys.user, user: sys.fromEmail || sys.user }, warmup });
           db.logActivity(acc, { agent: 'SEND', msg: `Sending via Dawnpipe's mailbox (${sys.fromEmail || sys.user})` });
-          return json(res, { ok: true, mode: 'dawnpipe' });
+          return json(res, { ok: true, mode: 'dawnpipe', warmup: sending.warmupStatus(warmup) });
         }
         // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
         // after a successful connect (so it's never displayed), which meant any
