@@ -583,3 +583,64 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     conflicting — a false alarm from that tool's coarse per-file
     reporting, the exact failure mode flagged 2026-09-01; the real merges
     all auto-resolve clean). Nothing broke.
+
+21. **URGENT — merge `audit/2026-09-16-smtp-crlf-injection`.** New independent audit run
+    (2026-09-16, lens (c) security, first time that lens has been covered —
+    `ops/audit/2026-09-16.md` on `keeper-audit`) found and reproduced a **critical** SMTP
+    command/header injection: a lead's email address is never validated anywhere
+    (`server.js:3483` import -> `lib/db.js:418` `addLeads()` -> `isSendableLead()` accepts
+    `imported` rows -> `lib/agents.js:485` copies it verbatim into the send queue), and
+    `lib/smtp.js` writes it raw into `RCPT TO:<${msg.to}>` and `To: <${msg.to}>` — both
+    line-oriented protocol. A CR/LF in the address adds a second `RCPT TO` or closes `DATA`
+    early and starts a forged message. Reproduced on the wire against a stubbed socket:
+    `to = 'victim@example.com>\r\nRCPT TO:<attacker-target@example.net'` put two `RCPT TO`
+    commands on one connection. On `smtp.useDawnpipe` ("let Dawnpipe send for you", one
+    click, no credentials) this goes out through **our own system mailbox**, spending the
+    exact sender-reputation advantage `COST.md` names as structural. Reachable by any
+    account with `hasAccess` (a 7-day trial counts).
+    **Status (2026-09-17): re-verified, ready to merge.** Confirmed today via a real
+    `git merge --no-commit --no-ff` against current `main` (`a70c1ec`) in an isolated
+    worktree — merges clean alone and combined with item 22 below. `node --check lib/smtp.js`
+    clean; `test-sending-mode.js` 9/9 and `test-spam.js` 18/18 both pass on the merged tree,
+    matching the audit's own verification. Fix guards only the fields with no other cover
+    (recipient, envelope sender, attachment name/type, unsubscribe URL) — subject and sender
+    name are deliberately untouched since `encodeHeader()` already covers them — and the
+    thrown error message is worded to avoid `suppression.isHardBounce()`'s trigger words, so
+    a rejected address doesn't get permanently suppressed as if the mailbox were dead. This
+    is now the single highest-priority merge ask in the whole backlog — ahead of items 11/14,
+    which are metering/billing correctness; this is an open-relay-shaped hole on the
+    company's own sending domain, live in production right now.
+    Two more findings from the same audit, not yet fixed, each needs a product/risk decision
+    from Alijah rather than a Keeper patch — see `ops/audit/2026-09-16.md` for full detail:
+    SSRF in `/api/profile/autofill` (unauthenticated URL fetch, reproduced reaching
+    `169.254.169.254`, reachable by an unpaid account via the 2 free autofills), and the
+    inbound Stripe webhook accepting a signature of any age (no timestamp tolerance, unlike
+    Dawnpipe's own outbound verifier in `lib/hooks.js` which enforces 300s).
+
+22. **`esc()` in `views/app.html` does not escape quotes, used inside HTML attributes.**
+    Same 2026-09-16 audit, finding 3. Ten templates interpolate `esc()`'s output inside a
+    double-quoted attribute (`title=`, `value=`, several `onclick=`); a bare `"` in the value
+    closes the attribute. One crosses an account boundary: the owner-only Sales Reps screen
+    renders *other accounts'* email addresses this way (`views/app.html:1834`,
+    `loadUnattributed()`) — signup applies no format check, so a crafted address becomes a
+    live event handler in the owner's own session on hover, running against every
+    `/api/admin/*` route. Stripe's own address validation on checkout is the one thing
+    standing between a signup and this actually landing; the audit couldn't test Stripe's
+    validator from here, so delivery is unconfirmed but the sink is real.
+    **Status (2026-09-17): re-verified, ready to merge.** Branch
+    `audit/2026-09-16-esc-quotes` merges clean against current `main` alone and combined with
+    item 21. Fix escapes `"`/`'` in `esc()`, closing the hover/no-interaction case everywhere
+    at once (all 96 call sites feed `innerHTML`, so no visual change). **Explicitly partial**
+    per the audit's own note: in `onclick="fn('${esc(x)}')"` the HTML parser decodes
+    `&#39;`→`'` before the JS is parsed, so a quote still ends that string literal and a
+    *click* (not just hover) can still run injected code — the real fix is `data-*` attributes
+    plus a delegated listener, a UI refactor not an audit patch. Recommend merging this now
+    (it closes the worse, no-interaction case today) and tracking the click-still-works gap
+    as its own follow-up rather than blocking the merge on the full refactor.
+
+23. **Backlog decision needed.** 20 `keeper/*`/`audit/*` branches now open, zero merged to
+    `main`, unchanged in substance from every prior day's flag — see `ops/KEEPER-LOG.md` for
+    the running count. Items 21/22 above are today's addition and are now the top two asks,
+    ahead of the standing items 11/14 (billing/metering correctness). Repeating only because
+    the 2026-09-16 audit independently made the same point: the backlog itself, not
+    remaining Keeper or audit work, is the bottleneck.
