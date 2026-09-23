@@ -444,8 +444,19 @@ function startSendJob(account, profileId) {
   const runningJob = running && sendJobs.get(running);
   // A lock pointing at a job that is gone or finished is stale — clear it.
   if (running && (!runningJob || runningJob.status !== 'running')) activeSends.delete(account.id);
-  // Also treat a job with no progress for 10 minutes as dead rather than live.
-  if (runningJob && runningJob.status === 'running' && Date.now() - (runningJob.startedAt || 0) > 30 * 60 * 1000) {
+  // Dead means NO PROGRESS, not merely old. This measured total age against 30
+  // minutes, and a healthy run is far older than that — the pacing gap alone is
+  // 3-8 minutes per email, so anything past about six emails qualified. A
+  // second click then force-expired a perfectly live job, released the lock,
+  // and started a concurrent run over the same still-approved items: exactly
+  // the double-send the lock exists to prevent. Longest legitimate gap between
+  // two iterations is one pacing sleep (max 450s) plus one send (max 90s).
+  if (runningJob && runningJob.status === 'running'
+      && Date.now() - (runningJob.lastProgressAt || runningJob.startedAt || 0) > 30 * 60 * 1000) {
+    // Tell the old loop to stop as well. Marking the job errored only relabels
+    // it — the async loop reads stopRequested, and without this it keeps
+    // sending alongside the replacement job.
+    runningJob.stopRequested = true;
     runningJob.status = 'error'; runningJob.error = 'Timed out'; activeSends.delete(account.id);
   }
   if (running && sendJobs.get(running) && sendJobs.get(running).status === 'running') {
@@ -479,7 +490,7 @@ function startSendJob(account, profileId) {
     approved: items.length, capReason,
     warmupCap: Number.isFinite(warmAllow) ? warmAllow : null,
     stopRequested: false,
-    startedAt: Date.now(), error: null, lastError: null };
+    startedAt: Date.now(), lastProgressAt: Date.now(), error: null, lastError: null };
   sendJobs.set(id, job);
 
   (async () => {
@@ -506,7 +517,21 @@ function startSendJob(account, profileId) {
       const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
       let count = sentToday;
       for (const it of items.slice(0, allowed)) {
+        job.lastProgressAt = Date.now();
         try {
+          // `items` is a snapshot taken when the job started, and this loop runs
+          // for hours. Re-read the item before sending: if it is no longer
+          // approved it has already gone out (another run), been rejected, or
+          // been rewritten by "adjust drafts" — which resets it to pending, and
+          // sending the snapshot would put the OLD copy on the wire and mark it
+          // sent. Nobody gets the same email twice off a stale snapshot.
+          const live = db.getQueue(account.id, profileId).find((q) => q.id === it.id);
+          if (!live || live.status !== 'approved') {
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Skipped ${it.to} — the draft changed since this run started (${live ? live.status : 'deleted'})` });
+            job.changed = (job.changed || 0) + 1;
+            job.done++;
+            continue;
+          }
           // Hard block: never SMTP-send to a guessed/invalid address, even if it
           // slipped into the queue before the no-guess guarantee. Each bounce
           // damages the user's sender reputation.
@@ -635,7 +660,7 @@ function sendJobView(j) {
   }
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
     skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0,
-    blocked: j.blocked || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
+    blocked: j.blocked || 0, changed: j.changed || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
     // Why is it sending 8 when I approved 50? The answer travels with the job.
     approved: j.approved || 0, capReason: j.capReason || '', stopping: !!j.stopRequested && j.status === 'running',
     etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
