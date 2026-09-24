@@ -644,3 +644,67 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     ahead of the standing items 11/14 (billing/metering correctness). Repeating only because
     the 2026-09-16 audit independently made the same point: the backlog itself, not
     remaining Keeper or audit work, is the bottleneck.
+
+24. **URGENT — merge `audit/2026-09-23-send-lock-duplicate`.** New independent audit run
+    (2026-09-23, lens (a), server.js request/webhook handlers — `ops/audit/2026-09-23.md` on
+    `keeper-audit`) found and reproduced a **High**-severity live bug: the one-send-per-account
+    lock's staleness check (`server.js:447-450`) compares a job's **total age** against 30
+    minutes, but its own comment says "no progress for 10 minutes" — a different, much
+    stricter predicate. Default pacing is 180-450s between emails, so a healthy run is
+    "stale" by roughly its sixth email. A second click (or the one-button send path
+    `a70c1ec` just made primary) then force-expires the still-running job, releases the
+    lock, and starts a second job over the same still-`approved` drafts — and nothing tells
+    the first job to stop, so both loops send. Every remaining recipient gets the cold email
+    twice, from a warming domain, silently (both sends log as normal in `db.logSend`).
+    Reproduced end-to-end with a virtual-clock harness (2 of 3 recipients double-sent).
+    **Status (2026-09-24): independently re-verified, ready to merge.** Read the fix
+    directly (not just the audit's own report): it measures staleness from a new
+    `lastProgressAt` stamped every loop iteration instead of `startedAt`, sets
+    `stopRequested` when force-expiring so a wedged job that does wake up halts instead of
+    racing its replacement, and re-reads each queue item's status immediately before sending
+    (closing a second, related bug for free: `/api/queue/adjust` rewriting a draft mid-run
+    could otherwise send the stale pre-edit copy). Confirmed via `git merge --no-commit
+    --no-ff` in an isolated worktree: merges clean against current `main` (`a70c1ec`) alone
+    and combined with `audit/2026-09-23-readbody-utf8`; `node --check server.js` clean;
+    `test-sending-mode.js` 9/9 on the merged tree. This is now the single highest-priority
+    merge ask — it is actively duplicate-emailing customers' leads every time a send job
+    runs past ~6 emails and gets a second click, on a domain whose entire warmup/reputation
+    strategy assumes one send per recipient, and it has been live since `a70c1ec`
+    (2026-09-15, the commit that made one-button send — and therefore a second click on it —
+    the primary path). Ahead of items 11/14/21/22.
+
+25. **`audit/2026-09-23-readbody-utf8`** — High severity, same audit run. `readBody()`
+    (`server.js:74-87`) decodes each TCP chunk independently (`b += d` on a `Buffer` with no
+    `setEncoding`), so any multi-byte UTF-8 character split across a chunk boundary — routine
+    for any body past ~1400 bytes — comes out corrupted. For `/webhook/stripe`
+    (`server.js:2215`), the corrupted bytes are exactly what the signature HMAC is computed
+    over, so a genuine Stripe event with a non-ASCII byte anywhere in its payload (customer
+    name, address, product text) can verify as a forgery and get dropped with a 400 —
+    `checkout.session.completed` lost this way leaves a paying customer locked out (partially
+    masked by the reconcile-on-return path at `server.js:2308`); `customer.subscription.deleted`
+    lost this way leaves a churned customer with access. Twilio webhooks are unaffected
+    (form-encoded bodies are pure ASCII). **Status (2026-09-24): independently re-verified,
+    ready to merge.** Fix buffers chunks as `Buffer`s and decodes once via `Buffer.concat` at
+    the end, byte-count instead of char-count for the 2MB flood guard. Read the diff directly:
+    minimal, no behavior change for any all-ASCII body. Merges clean alone and combined with
+    item 24 (confirmed together in the same worktree pass); `node --check` clean. Second
+    merge priority today, right behind item 24.
+
+26. **Reported, not fixed, from the same 2026-09-23 audit** — each needs a product call, not
+    a Keeper patch (full detail in `ops/audit/2026-09-23.md`):
+    - The daily send cap can be spent ~2x in one calendar day: a run that crosses midnight
+      keeps writing the date it started with, and a job started after midnight sees
+      `sentToday` as 0 and grants a fresh cap while the pre-midnight job is still sending.
+      Needs a decision: does a run keep the allowance it started with, or re-derive against
+      the new day mid-loop? Both defensible.
+    - `/v1/calls` and `/v1/bookings` filter `since` **after** truncating to the newest `lim`
+      rows, so an integration polling for incremental sync silently loses rows once volume
+      exceeds `lim` between polls. Wants a cursor (`after=<id>`), an API design decision on a
+      documented response shape.
+    - `GET /u/<token>` unsubscribes on a bare GET, so corporate link scanners (Defender Safe
+      Links etc.) auto-unsubscribe recipients who never clicked; the POST is correctly
+      one-click (RFC 8058). Fix is a confirm-page on GET — a compliance-adjacent UX call.
+    - `autofillsUsed` counter is a lost-update read-modify-write (same shape as items 1/14) —
+      low stakes (free-tier autofill count), flagged because it's the third instance of this
+      pattern and the audit is now recommending one shared `db.mutateAccount(id, fn)` helper
+      rather than fixing each site individually.
