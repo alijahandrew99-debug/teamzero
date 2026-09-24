@@ -2093,6 +2093,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       let page = view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : '').split('__REF__').join(voice.esc(ref));
       const r = ref && reps.repByCode(ref);
       page = page.split('__REF_NOTE__').join(r ? `<div class="refnote">Referred by <b>${voice.esc(r.name)}</b></div>` : '');
+      page = page.split('__FROM_PRICE__').join(plans.fromPrice());
       let cookie;
       if (qref && reps.repByCode(qref) && !cref) {
         const secure = (process.env.PUBLIC_URL || '').startsWith('https') ? ' Secure;' : '';
@@ -2159,19 +2160,23 @@ Use it the way a good receptionist would: greet them by name if you have one, do
     }
 
     if (req.method === 'POST' && p === '/signup') {
+      // One renderer for every signup error, so the from-price and demo number
+      // are always substituted — a raw __FROM_PRICE__ leaking on an error page
+      // would be worse than the stale $49 this whole fix is about.
+      const errSignup = (msg, code) => html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', msg).split('__FROM_PRICE__').join(plans.fromPrice())), code);
       if (rateLimited(req, 'signup', 20, 60 * 60 * 1000)) {
-        return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Too many accounts created from here. Try again later.')), 429);
+        return errSignup('Too many accounts created from here. Try again later.', 429);
       }
       const f = parseForm(await readBody(req));
       const email = (f.email || '').trim().toLowerCase();
       const pw = f.password || '';
-      if (!email || pw.length < 6) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Enter a valid email and a password of 6+ characters.')), 400);
-      if (db.getAccountByEmail(email)) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'That email already has an account. Try logging in.')), 400);
+      if (!email || pw.length < 6) return errSignup('Enter a valid email and a password of 6+ characters.', 400);
+      if (db.getAccountByEmail(email)) return errSignup('That email already has an account. Try logging in.', 400);
       const { salt, passHash } = auth.hashPassword(pw);
       // Terms nobody was shown are terms a court will not enforce (browsewrap
       // fails routinely). Require the click and record when and which version,
       // so the responsibility-shift language actually binds.
-      if (!f.agree) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Please tick the box to agree to the Terms and Privacy Policy.')), 400);
+      if (!f.agree) return errSignup('Please tick the box to agree to the Terms and Privacy Policy.', 400);
       const acc = db.createAccount({ email, passHash, salt, acceptedTermsAt: db.nowISO(), termsVersion: LEGAL_UPDATED });
       seedStarterProfile(acc.id, email);
       db.logActivity(acc.id, { agent: 'SYSTEM', msg: 'Account created' });
