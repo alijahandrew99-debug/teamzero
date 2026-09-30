@@ -179,6 +179,20 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
      `approved` (safe, retried next run).
    - Appointments are written `status: 'booked'` atomically at creation.
    Recommend closing this item unless a new failure mode shows up live.
+   **Status (2026-09-30): reopened, one real gap found and fixed.** The
+   08-24 sweep (`LIVE = [queued, ringing, initiated, in-progress]`, 2h
+   threshold) only ran inside the `GET /api/voice/calls` handler — i.e.
+   only when that account's owner actually opens the Calls tab. An account
+   that doesn't open it after a bad deploy keeps showing a fake live call
+   indefinitely; support impact is cosmetic (nothing else in the codebase
+   branches on `in-progress`, confirmed by grep), but it's real and
+   unbounded in time. Extracted the sweep into `sweepStuckCalls(accountId)`
+   and added a 30-minute `setInterval` over `db.allAccounts()` alongside
+   the existing per-request sweep — same threshold, same terminal status,
+   zero behavior change for accounts that do load the tab. `node --check`
+   clean; `test-reps.js` 37/37 (unaffected, doesn't touch voice calls).
+   Branch `keeper/2026-09-30-sweep-stuck-calls-periodic`, cut fresh off
+   `main` (`facb991`). Re-closing after this merges.
 
 4. **Prompt-caching discipline on live-call Claude turns** ($0.006 ->
    ~$0.002/turn).
@@ -708,3 +722,22 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
       low stakes (free-tier autofill count), flagged because it's the third instance of this
       pattern and the audit is now recommending one shared `db.mutateAccount(id, fn)` helper
       rather than fixing each site individually.
+
+27. **Backlog re-verified 2026-09-30, now 24 branches, zero merged.** `main` moved one commit
+    since the last full check (`a70c1ec` → `facb991`, a cosmetic from-price fix, nothing
+    security- or billing-relevant — audited, no new bypass/race/injection sites). Re-ran a real
+    `git merge --no-commit --no-ff` of the four top-priority branches together against current
+    `main`: `audit/2026-09-23-send-lock-duplicate` (item 24, duplicate-send, High),
+    `audit/2026-09-23-readbody-utf8` (item 25, Stripe webhook corruption, High),
+    `audit/2026-09-16-smtp-crlf-injection` (item 21, open-relay-shaped SMTP injection on
+    Dawnpipe's own sending domain, **Critical**, unmerged 14 days now), and
+    `audit/2026-09-16-esc-quotes` (item 22, attribute-injection XSS into the owner's own admin
+    session, Medium) — all four still merge clean together, `node --check server.js` clean on
+    the merged tree. Added one more branch today (`keeper/2026-09-30-sweep-stuck-calls-periodic`,
+    item 3) — checked it merges clean alongside the other four, no conflict. Ranking unchanged
+    from item 24's note: the CRLF injection (item 21) is the single highest-priority merge ask
+    in the backlog — it's live on production's own sending mailbox right now — followed by the
+    duplicate-send bug (item 24, actively double-emailing customers' leads on any send run past
+    ~6 emails), then the webhook-corruption bug (item 25), then the metering/billing items
+    (11/14), then the XSS fix (item 22). This is now day 14 of the CRLF fix sitting mergeable
+    and unmerged; the one-shot command in today's report merges all four at once.
