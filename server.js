@@ -376,6 +376,25 @@ async function runCallbackQueue() {
 }
 setInterval(() => { runCallbackQueue().catch(() => {}); }, 60 * 1000);
 
+// A call can be orphaned mid-flight -- a deploy restarts the process, the
+// in-memory call map empties, and the status callback finds nothing to
+// complete -- leaving a row frozen at "in-progress" forever. Twilio ended
+// the real call long ago; only our label is stuck. Runs whenever an
+// account's calls tab loads (below) AND on a timer, so an account that
+// never opens the tab after a bad deploy isn't left showing a fake live
+// call indefinitely.
+const LIVE_CALL_STATUSES = ['queued', 'ringing', 'initiated', 'in-progress'];
+function sweepStuckCalls(accountId) {
+  for (const c of db.getCalls(accountId, 50)) {
+    if (LIVE_CALL_STATUSES.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
+      db.saveCall(accountId, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
+    }
+  }
+}
+setInterval(() => {
+  for (const a of db.allAccounts()) { try { sweepStuckCalls(a.id); } catch {} }
+}, 30 * 60 * 1000);
+
 // ---- who may run automated outbound calling ----
 // Two separate questions, and conflating them produced a dead tab with no way
 // forward: (1) is the feature switched on at all on this server — a compliance
@@ -2634,17 +2653,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         } catch (e) { return json(res, { error: e.message }, 502); }
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
-        // A call can be orphaned mid-flight -- a deploy restarts the process,
-        // the in-memory call map empties, and the status callback finds
-        // nothing to complete -- leaving a row frozen at "in-progress"
-        // forever. Twilio ended the real call long ago; only our label is
-        // stuck. Sweep anything still "live" after 2 hours.
-        const LIVE = ['queued', 'ringing', 'initiated', 'in-progress'];
-        for (const c of db.getCalls(acc, 50)) {
-          if (LIVE.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
-            db.saveCall(acc, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
-          }
-        }
+        sweepStuckCalls(acc);
         const rows = db.getCalls(acc, 50);
         // estCost is OUR cost of goods, not the customer's. Someone paying
         // $399 who can see a call cost us 62 cents will price the product for
