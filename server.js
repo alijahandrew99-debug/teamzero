@@ -73,16 +73,26 @@ function redirect(res, location, cookie) {
 const MAX_BODY = 2 * 1024 * 1024;   // 2MB — generous for a CSV paste, fatal to a flood
 function readBody(req) {
   return new Promise((resolve) => {
-    let b = '';
+    // Chunks are kept as Buffers and decoded ONCE, at the end. `b += chunk`
+    // decoded every chunk on its own, so a multi-byte UTF-8 character that
+    // straddled two TCP reads -- ordinary for any body past about 1400 bytes --
+    // came out as replacement characters. That mangles an accented name in a
+    // CSV import, and it changes the exact bytes the Stripe webhook signature
+    // is computed over, so a genuine payment event verifies as a forgery and
+    // is dropped with a 400.
+    const chunks = [];
+    let len = 0;
     let over = false;
     req.on('data', (d) => {
       if (over) return;
-      b += d;
+      const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
+      chunks.push(buf);
+      len += buf.length;
       // Unbounded buffering meant any unauthenticated POST could grow the heap
       // until the process died, taking every tenant down with it.
-      if (b.length > MAX_BODY) { over = true; b = ''; try { req.destroy(); } catch {} resolve(''); }
+      if (len > MAX_BODY) { over = true; chunks.length = 0; try { req.destroy(); } catch {} resolve(''); }
     });
-    req.on('end', () => { if (!over) resolve(b); });
+    req.on('end', () => { if (!over) resolve(Buffer.concat(chunks).toString('utf8')); });
     req.on('error', () => { if (!over) { over = true; resolve(''); } });
   });
 }
