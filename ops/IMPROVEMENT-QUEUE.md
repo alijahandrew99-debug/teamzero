@@ -741,3 +741,30 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     ~6 emails), then the webhook-corruption bug (item 25), then the metering/billing items
     (11/14), then the XSS fix (item 22). This is now day 14 of the CRLF fix sitting mergeable
     and unmerged; the one-shot command in today's report merges all four at once.
+
+28. **URGENT — merge `audit/2026-09-30-preserve-unreadable-store-files`. A corrupt store file
+    plus one ordinary write is currently unrecoverable, total data loss.** Found by the
+    2026-09-30 independent audit run (`ops/audit/2026-09-30.md` on `keeper-audit`, lens (b),
+    `db.js` write-safety). `main:lib/db.js`'s `read()` returns its empty-collection fallback for
+    *any* failure — a file that exists but won't parse (zero-length after an unclean process
+    kill, since `write()` renames without `fsync` and ext4 can publish an empty file; or
+    truncated by a full disk) looks identical to "no records yet." Nothing throws, nothing logs,
+    the app keeps serving — and the next ordinary write (a single signup, a single live call)
+    persists that emptiness over the real file, permanently. There are no backups anywhere in
+    this repo. Audit reproduced it end to end against the real `db.js`: 3 accounts + 2 calls
+    seeded, file zeroed, one write later both files hold exactly the one new row and the rest
+    is gone for good. **Status (2026-10-01): re-verified, ready to merge.** Confirmed via
+    `git merge --no-ff` in an isolated worktree, both alone and combined with items 21/22/24/25
+    (all five together, sequentially) — merges clean, `node --check server.js`/`lib/db.js`/
+    `lib/smtp.js` clean, and `test-sending-mode.js` (9/9), `test-spam.js` (18/18), `test-reps.js`
+    (37/37) all pass on the fully-merged tree. The fix (`quarantine()` in `lib/db.js`) only
+    touches `read()`: an unparseable file is renamed aside to `<file>.corrupt-<ts>` and logged
+    loudly instead of silently emptied; a failure to *read* (cold start, `EMFILE`/`EIO`/`EACCES`)
+    is left untouched so a transient blip can't itself destroy a healthy store. This is
+    containment, not prevention — the audit is explicit that real prevention needs `fsync`
+    before rename plus off-box backups, both flagged as infrastructure/judgment calls for
+    Alijah, not Keeper code. **This and item 21 (CRLF injection) are now the two highest-priority
+    merges in the backlog** — item 21 for being actively exploitable right now, this one for
+    being the only thing standing between an OOM kill or a full disk and losing every customer
+    record permanently. Backlog is now 25 branches, still zero merged, five weeks running — see
+    item 23/27; the audit's own headline this run was the backlog itself, again.
