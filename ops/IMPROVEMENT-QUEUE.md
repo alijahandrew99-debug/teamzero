@@ -768,3 +768,20 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     being the only thing standing between an OOM kill or a full disk and losing every customer
     record permanently. Backlog is now 25 branches, still zero merged, five weeks running — see
     item 23/27; the audit's own headline this run was the backlog itself, again.
+
+29. **Found: someone already built the one-branch merge this queue has been asking for.**
+    `git fetch origin --prune` today turned up `keeper/2026-10-01-consolidated-critical-fixes`
+    (pushed 2026-10-01 12:46 UTC, after yesterday's report was written — never logged here).
+    It merges all five top-priority fixes (items 21/22/24/25/28) into one branch: five real merge
+    commits, one per source branch, no squashing, so each fix's own history and commit message
+    survive intact. Verified today: `facb991` (current `main`) is a direct git ancestor of this
+    branch's tip (`52225cf`) — not just "merges clean," but a mathematically conflict-free
+    fast-forward-style merge, guaranteed, not re-verified-by-testing. Checked out in an isolated
+    worktree: `node --check` clean on `server.js`/`lib/db.js`/`lib/smtp.js`; all five test suites
+    pass, 96/96 (37 reps + 18 spam + 9 sending-mode + 17 voiceprofiles + 15 assistant). Diff vs.
+    `main` touches exactly `lib/db.js`, `lib/smtp.js`, `server.js`, `views/app.html`, plus three
+    pre-existing audit report docs under `ops/audit/` — nothing outside what the five source
+    branches already touched, nothing in a Keeper-forbidden path. **This supersedes yesterday's
+    "one-shot merge command" — Alijah can now merge this single branch instead of five.** See
+    today's report for the exact command. Not closing items 21/22/24/25/28 individually since
+    they're still open until this branch (or an equivalent) actually lands on `main`.
