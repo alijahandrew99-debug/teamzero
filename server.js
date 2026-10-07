@@ -1890,11 +1890,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // A deploy mid-call wipes the in-memory record; bill from the persisted
         // one so those minutes still count against the plan.
         if (!call && sid) {
-          const owner2 = db.accountByCallSid(sid);
+          // Twilio delivers status callbacks AT LEAST once, so a completed call
+          // can arrive here twice: a retry after our ack timed out, or a redeploy
+          // that killed the first response after it had already billed. This
+          // branch was written for "a deploy wiped the in-memory call", but it is
+          // also exactly where a retry lands once endCall() has cleared the call
+          // — so without a record of what this SID was charged it billed the whole
+          // call a second time, burning a paying customer's included minutes and
+          // dropping their line to message-only early.
+          const prior = db.callBySid(sid);
+          const owner2 = prior ? db.getAccount(prior.accountId) : null;
           if (owner2) {
             const dur0 = Number(params.CallDuration || 0);
-            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0 });
-            plans.consumeVoiceMinutes(owner2, Math.ceil(dur0 / 60), stripe.isOwner(owner2));
+            const mins = Math.ceil(dur0 / 60);
+            const already = Number(prior.billedMin || 0);
+            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0,
+              billedMin: Math.max(already, mins) });
+            // Charge the DIFFERENCE: an identical retry costs nothing, while a
+            // later callback reporting a longer call still tops the minutes up.
+            if (mins > already) plans.consumeVoiceMinutes(owner2, mins - already, stripe.isOwner(owner2));
           }
           res.writeHead(204); return res.end();
         }
@@ -1909,7 +1923,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const acctForBill = db.getAccount(call.accountId);
           // A call flagged spam had "speech" — the robocall's recording — but
           // nobody real. It is never billed against the plan.
-          if (acctForBill && callerSpoke && !call.spamCall) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          // Same at-least-once guard as the fallback above: bill only what this
+          // SID has not been billed for yet, so a duplicate delivery is free.
+          const minsToBill = (callerSpoke && !call.spamCall) ? Math.ceil(dur / 60) : 0;
+          const alreadyBilled = Number((db.callBySid(sid) || {}).billedMin || 0);
+          if (acctForBill && minsToBill > alreadyBilled) plans.consumeVoiceMinutes(acctForBill, minsToBill - alreadyBilled, stripe.isOwner(acctForBill));
           if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
           // Dead air on an inbound call is a spam signal: robocall dialers
           // probe lines and hang up. One point (block needs three) so a real
@@ -1967,6 +1985,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: billableTurns,
+            billedMin: Math.max(alreadyBilled, minsToBill),
             estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns,
               chars: call.turns.filter((t) => t.who !== 'caller' && !/^\[system/.test(t.text || '')).reduce((n, t) => n + (t.text || '').length, 0),
               direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
