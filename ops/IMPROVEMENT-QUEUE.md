@@ -193,6 +193,7 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    clean; `test-reps.js` 37/37 (unaffected, doesn't touch voice calls).
    Branch `keeper/2026-09-30-sweep-stuck-calls-periodic`, cut fresh off
    `main` (`facb991`). Re-closing after this merges.
+   **Status (2026-10-08): MERGED into `main` (`0ecb712`). Closed.**
 
 4. **Prompt-caching discipline on live-call Claude turns** ($0.006 ->
    ~$0.002/turn).
@@ -322,7 +323,10 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     5 transcript shapes), and on branch
     `audit/2026-08-26-voice-status-fallback-billing` — **re-verified
     2026-09-02, still merges clean against current `main` via
-    `git merge --no-commit --no-ff`, still unmerged, 7 days now.** Full
+    `git merge --no-commit --no-ff`, still unmerged, 7 days now.**
+    **Status (2026-10-08): MERGED into `main` (`0ecb712`) — closed, via a fresh
+    implementation (`8616294`, new `test-voicebilling.js`), not this original branch
+    (now superseded, safe to drop — see item 30).** Full
     writeup with the trade-off (a call that dies before the first agent
     reply now goes unbilled — under-billing by at most 1 minute, deliberately
     chosen over the alternative of ever overbilling) is in
@@ -397,6 +401,11 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     - Audit recommends measuring actual production `calls.json` size (via
       `/api/admin/spend` or a Render shell) before pricing the Postgres
       migration — this shift has no owner-authenticated access to check.
+    **Status (2026-10-08): the billing-idempotency bullet MERGED into `main` (`0ecb712`,
+    commit `8616294`) — closed, as a fresh implementation rather than the original
+    `audit/2026-08-26-voice-status-fallback-billing` branch (see item 30). The transfer-leg-cost
+    bullet is still open — `keeper/2026-09-06-transfer-leg-cost` now conflicts with that same
+    commit (adjacent-line only, see item 30 for the one-line resolution), still unmerged.
 
 13. **A parallel, independent code-audit process exists** (branch
     `keeper-audit`, `ops/audit/2026-08-26.md`) that this Keeper shift was
@@ -800,6 +809,22 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     conflict-free ancestor-merge of current `main`. Nothing new to ship or flag beyond
     what's in today's report (`ops/reports/2026-10-03.md`).
 
+30. **Status (2026-10-08): `main` moved for the first time in 13 days — six of the top-priority merges landed.** `main` advanced `facb991` → `0ecb712` (20 commits). Confirmed by direct ancestry check (`git merge-base --is-ancestor`), not just the commit log: three real merges landed —
+    - `keeper/2026-10-01-consolidated-critical-fixes` (item 29 below) — closes items **21** (SMTP CRLF injection), **22** (esc-quotes XSS), **24** (duplicate-send lock), **25** (Stripe webhook UTF-8 corruption), **28** (store-file quarantine). All five fixes are now live on `main`.
+    - A fresh fix for item **11** (voice-status fallback double-billing) — **not** the old `audit/2026-08-26-voice-status-fallback-billing` branch, a new implementation (`8616294`, new `test-voicebilling.js`, 7/7 passing) that stamps a numeric `billedMin` on the call row and bills only the difference on a retry, covering both the live-call path and the `!call` fallback. Closing item 11.
+    - `keeper/2026-09-30-sweep-stuck-calls-periodic` (item 3) — the periodic stuck-call sweep. Closing item 3.
+    Sanity re-run against fresh `main` in an isolated worktree: `node --check` clean on `server.js` + all `lib/*.js`; all six suites pass, **103/103** (37 reps + 18 spam + 17 voiceprofiles + 15 assistant + 9 sending-mode + 7 new voicebilling).
+    **Re-verified all 18 remaining open branches against this new `main`**, one real `git merge --no-commit --no-ff` per branch (not `merge-tree`): 16 still merge clean —
+    `keeper/2026-08-25-atomic-rep-delete`, `keeper/2026-08-27-conversationrelay-design`, `keeper/2026-08-28-activation-funnel`, `keeper/2026-08-28-cost-md-sync`, `keeper/2026-08-29-media-streams-design`, `keeper/2026-08-30-prune-reset-tokens`, `keeper/2026-08-31-reconcile-stale-ops-docs`, `keeper/2026-09-02-db-write-compact`, `keeper/2026-09-04-unique-tmp-write`, `keeper/2026-09-05-per-account-retention`, `keeper/2026-09-13-topup-write-race`, `keeper/2026-09-16-dawnpipe-send-warmup`, `audit/2026-09-02-consume-stale-snapshot` (item 14, still URGENT — under-metering), `audit/2026-09-09-spam-strike-decay` (item 17), `audit/2026-09-09-voice-webhook-log-flood` (item 18), `audit/2026-09-09-duplicate-caller-history` (item 19).
+    **Two now conflict with the new `main`, for different reasons:**
+    - **`keeper/2026-09-03-billing-idempotency` (item 12's first bullet) is now superseded — recommend dropping it, not resolving it.** It conflicts on the exact lines `8616294` rewrote; its own guard (a boolean `billedMin` flag, bill-once-ever) is strictly weaker than main's new numeric `billedMin` (bills the true difference, also covers the `!call` fallback this branch never touched). Merging it as-is would regress main's new fix back to a boolean flag. No action needed from Alijah beyond leaving it unmerged; safe to delete.
+    - **`keeper/2026-09-06-transfer-leg-cost` (item 12's fourth bullet, the missing `<Dial>`-leg cost) still has real, un-superseded value — just needs a one-line hand-merge.** Both branches add a field to the same `saveCall(...)` object literal in `server.js` (new main's `billedMin:` vs. this branch's `transferSec` on the `estimateCost` call) — textbook adjacent-line conflict, not a logic conflict. Resolution is keeping both lines:
+      ```js
+      billedMin: Math.max(alreadyBilled, minsToBill),
+      estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns, transferSec,
+      ```
+    Merge backlog is now 18 branches (12 `keeper/*` + 6 `audit/*`, down from 26), zero of which need Keeper code work — 16 are clean merges, one needs the one-line hand-resolution above, one should simply be dropped. Top remaining ask: `audit/2026-09-02-consume-stale-snapshot` (item 14, URGENT, under-meters leads/voice minutes under concurrent writes) is now the oldest URGENT item with nothing blocking its merge.
+
 29. **Found: someone already built the one-branch merge this queue has been asking for.**
     `git fetch origin --prune` today turned up `keeper/2026-10-01-consolidated-critical-fixes`
     (pushed 2026-10-01 12:46 UTC, after yesterday's report was written — never logged here).
@@ -816,3 +841,7 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     "one-shot merge command" — Alijah can now merge this single branch instead of five.** See
     today's report for the exact command. Not closing items 21/22/24/25/28 individually since
     they're still open until this branch (or an equivalent) actually lands on `main`.
+    **Status (2026-10-08): MERGED into `main` (`0ecb712`, commit `5ebf694`) — this branch
+    landed exactly as described. Closing items 21 (SMTP CRLF injection), 22 (esc-quotes
+    XSS), 24 (duplicate-send lock), 25 (Stripe webhook UTF-8 corruption), and 28 (store-file
+    quarantine) — all five fixes confirmed present and passing on fresh `main` (see item 30).
