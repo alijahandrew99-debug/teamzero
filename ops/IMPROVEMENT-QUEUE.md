@@ -406,6 +406,15 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     `audit/2026-08-26-voice-status-fallback-billing` branch (see item 30). The transfer-leg-cost
     bullet is still open — `keeper/2026-09-06-transfer-leg-cost` now conflicts with that same
     commit (adjacent-line only, see item 30 for the one-line resolution), still unmerged.
+    **Status (2026-10-09): resolved and re-pushed.** Did the hand-merge item 30 already
+    specified instead of leaving it for Alijah: merged current `main` into
+    `keeper/2026-09-06-transfer-leg-cost`, kept both `billedMin:` and `transferSec` on the
+    same `saveCall()` object literal (textbook adjacent-line conflict, no logic conflict,
+    exactly as predicted). Pushed as `keeper/2026-10-09-transfer-leg-cost-rebase` — this one
+    is now a clean, ancestor-safe merge onto current `main`, no hand-resolution needed from
+    Alijah. `node --check` clean on `server.js` + all `lib/*.js`; all six suites pass,
+    103/103. Original `keeper/2026-09-06-transfer-leg-cost` is superseded by this branch —
+    safe to drop in favor of the new one once merged.
 
 13. **A parallel, independent code-audit process exists** (branch
     `keeper-audit`, `ops/audit/2026-08-26.md`) that this Keeper shift was
