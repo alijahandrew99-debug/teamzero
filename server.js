@@ -8,6 +8,18 @@ const auth = require('./lib/auth');
 const stripe = require('./lib/stripe');
 const agents = require('./lib/agents');
 const smtp = require('./lib/smtp');
+// The actual sending config for an account's outreach. "Use Dawnpipe to send"
+// (smtp.useDawnpipe) routes through the system mailbox — zero customer setup,
+// no credentials to enter — while keeping the owner's chosen from-name. A
+// customer who connected their own Gmail uses that directly.
+function outboundSmtpCfg(account) {
+  const s = (account && account.smtp) || {};
+  if (s.useDawnpipe && mailer.enabled()) {
+    const sys = mailer.systemCfg();
+    return { ...sys, fromName: s.fromName || sys.fromName };
+  }
+  return s;
+}
 const plans = require('./lib/plans');
 const mailer = require('./lib/mailer');
 const emailApi = require('./lib/emailapi');
@@ -61,16 +73,26 @@ function redirect(res, location, cookie) {
 const MAX_BODY = 2 * 1024 * 1024;   // 2MB — generous for a CSV paste, fatal to a flood
 function readBody(req) {
   return new Promise((resolve) => {
-    let b = '';
+    // Chunks are kept as Buffers and decoded ONCE, at the end. `b += chunk`
+    // decoded every chunk on its own, so a multi-byte UTF-8 character that
+    // straddled two TCP reads -- ordinary for any body past about 1400 bytes --
+    // came out as replacement characters. That mangles an accented name in a
+    // CSV import, and it changes the exact bytes the Stripe webhook signature
+    // is computed over, so a genuine payment event verifies as a forgery and
+    // is dropped with a 400.
+    const chunks = [];
+    let len = 0;
     let over = false;
     req.on('data', (d) => {
       if (over) return;
-      b += d;
+      const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
+      chunks.push(buf);
+      len += buf.length;
       // Unbounded buffering meant any unauthenticated POST could grow the heap
       // until the process died, taking every tenant down with it.
-      if (b.length > MAX_BODY) { over = true; b = ''; try { req.destroy(); } catch {} resolve(''); }
+      if (len > MAX_BODY) { over = true; chunks.length = 0; try { req.destroy(); } catch {} resolve(''); }
     });
-    req.on('end', () => { if (!over) resolve(b); });
+    req.on('end', () => { if (!over) resolve(Buffer.concat(chunks).toString('utf8')); });
     req.on('error', () => { if (!over) { over = true; resolve(''); } });
   });
 }
@@ -364,6 +386,25 @@ async function runCallbackQueue() {
 }
 setInterval(() => { runCallbackQueue().catch(() => {}); }, 60 * 1000);
 
+// A call can be orphaned mid-flight -- a deploy restarts the process, the
+// in-memory call map empties, and the status callback finds nothing to
+// complete -- leaving a row frozen at "in-progress" forever. Twilio ended
+// the real call long ago; only our label is stuck. Runs whenever an
+// account's calls tab loads (below) AND on a timer, so an account that
+// never opens the tab after a bad deploy isn't left showing a fake live
+// call indefinitely.
+const LIVE_CALL_STATUSES = ['queued', 'ringing', 'initiated', 'in-progress'];
+function sweepStuckCalls(accountId) {
+  for (const c of db.getCalls(accountId, 50)) {
+    if (LIVE_CALL_STATUSES.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
+      db.saveCall(accountId, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
+    }
+  }
+}
+setInterval(() => {
+  for (const a of db.allAccounts()) { try { sweepStuckCalls(a.id); } catch {} }
+}, 30 * 60 * 1000);
+
 // ---- who may run automated outbound calling ----
 // Two separate questions, and conflating them produced a dead tab with no way
 // forward: (1) is the feature switched on at all on this server — a compliance
@@ -432,8 +473,19 @@ function startSendJob(account, profileId) {
   const runningJob = running && sendJobs.get(running);
   // A lock pointing at a job that is gone or finished is stale — clear it.
   if (running && (!runningJob || runningJob.status !== 'running')) activeSends.delete(account.id);
-  // Also treat a job with no progress for 10 minutes as dead rather than live.
-  if (runningJob && runningJob.status === 'running' && Date.now() - (runningJob.startedAt || 0) > 30 * 60 * 1000) {
+  // Dead means NO PROGRESS, not merely old. This measured total age against 30
+  // minutes, and a healthy run is far older than that — the pacing gap alone is
+  // 3-8 minutes per email, so anything past about six emails qualified. A
+  // second click then force-expired a perfectly live job, released the lock,
+  // and started a concurrent run over the same still-approved items: exactly
+  // the double-send the lock exists to prevent. Longest legitimate gap between
+  // two iterations is one pacing sleep (max 450s) plus one send (max 90s).
+  if (runningJob && runningJob.status === 'running'
+      && Date.now() - (runningJob.lastProgressAt || runningJob.startedAt || 0) > 30 * 60 * 1000) {
+    // Tell the old loop to stop as well. Marking the job errored only relabels
+    // it — the async loop reads stopRequested, and without this it keeps
+    // sending alongside the replacement job.
+    runningJob.stopRequested = true;
     runningJob.status = 'error'; runningJob.error = 'Timed out'; activeSends.delete(account.id);
   }
   if (running && sendJobs.get(running) && sendJobs.get(running).status === 'running') {
@@ -444,7 +496,7 @@ function startSendJob(account, profileId) {
   const id = db.uid();
   activeSends.set(account.id, id);
   const items = db.getQueue(account.id, profileId).filter((q) => q.status === 'approved');
-  const cfg = account.smtp || {};
+  const cfg = outboundSmtpCfg(account);
   const todayStr = db.today();
   const sentToday = (account.sentToday && account.sentToday.date === todayStr) ? account.sentToday.count : 0;
   // Daily ceiling is the LOWER of the user's cap and today's warmup allowance —
@@ -467,7 +519,7 @@ function startSendJob(account, profileId) {
     approved: items.length, capReason,
     warmupCap: Number.isFinite(warmAllow) ? warmAllow : null,
     stopRequested: false,
-    startedAt: Date.now(), error: null, lastError: null };
+    startedAt: Date.now(), lastProgressAt: Date.now(), error: null, lastError: null };
   sendJobs.set(id, job);
 
   (async () => {
@@ -494,7 +546,21 @@ function startSendJob(account, profileId) {
       const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
       let count = sentToday;
       for (const it of items.slice(0, allowed)) {
+        job.lastProgressAt = Date.now();
         try {
+          // `items` is a snapshot taken when the job started, and this loop runs
+          // for hours. Re-read the item before sending: if it is no longer
+          // approved it has already gone out (another run), been rejected, or
+          // been rewritten by "adjust drafts" — which resets it to pending, and
+          // sending the snapshot would put the OLD copy on the wire and mark it
+          // sent. Nobody gets the same email twice off a stale snapshot.
+          const live = db.getQueue(account.id, profileId).find((q) => q.id === it.id);
+          if (!live || live.status !== 'approved') {
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Skipped ${it.to} — the draft changed since this run started (${live ? live.status : 'deleted'})` });
+            job.changed = (job.changed || 0) + 1;
+            job.done++;
+            continue;
+          }
           // Hard block: never SMTP-send to a guessed/invalid address, even if it
           // slipped into the queue before the no-guess guarantee. Each bounce
           // damages the user's sender reputation.
@@ -623,7 +689,7 @@ function sendJobView(j) {
   }
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
     skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0,
-    blocked: j.blocked || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
+    blocked: j.blocked || 0, changed: j.changed || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
     // Why is it sending 8 when I approved 50? The answer travels with the job.
     approved: j.approved || 0, capReason: j.capReason || '', stopping: !!j.stopRequested && j.status === 'running',
     etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
@@ -1846,11 +1912,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // A deploy mid-call wipes the in-memory record; bill from the persisted
         // one so those minutes still count against the plan.
         if (!call && sid) {
-          const owner2 = db.accountByCallSid(sid);
+          // Twilio delivers status callbacks AT LEAST once, so a completed call
+          // can arrive here twice: a retry after our ack timed out, or a redeploy
+          // that killed the first response after it had already billed. This
+          // branch was written for "a deploy wiped the in-memory call", but it is
+          // also exactly where a retry lands once endCall() has cleared the call
+          // — so without a record of what this SID was charged it billed the whole
+          // call a second time, burning a paying customer's included minutes and
+          // dropping their line to message-only early.
+          const prior = db.callBySid(sid);
+          const owner2 = prior ? db.getAccount(prior.accountId) : null;
           if (owner2) {
             const dur0 = Number(params.CallDuration || 0);
-            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0 });
-            plans.consumeVoiceMinutes(owner2, Math.ceil(dur0 / 60), stripe.isOwner(owner2));
+            const mins = Math.ceil(dur0 / 60);
+            const already = Number(prior.billedMin || 0);
+            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0,
+              billedMin: Math.max(already, mins) });
+            // Charge the DIFFERENCE: an identical retry costs nothing, while a
+            // later callback reporting a longer call still tops the minutes up.
+            if (mins > already) plans.consumeVoiceMinutes(owner2, mins - already, stripe.isOwner(owner2));
           }
           res.writeHead(204); return res.end();
         }
@@ -1865,7 +1945,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const acctForBill = db.getAccount(call.accountId);
           // A call flagged spam had "speech" — the robocall's recording — but
           // nobody real. It is never billed against the plan.
-          if (acctForBill && callerSpoke && !call.spamCall) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          // Same at-least-once guard as the fallback above: bill only what this
+          // SID has not been billed for yet, so a duplicate delivery is free.
+          const minsToBill = (callerSpoke && !call.spamCall) ? Math.ceil(dur / 60) : 0;
+          const alreadyBilled = Number((db.callBySid(sid) || {}).billedMin || 0);
+          if (acctForBill && minsToBill > alreadyBilled) plans.consumeVoiceMinutes(acctForBill, minsToBill - alreadyBilled, stripe.isOwner(acctForBill));
           if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
           // Dead air on an inbound call is a spam signal: robocall dialers
           // probe lines and hang up. One point (block needs three) so a real
@@ -1927,6 +2011,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: billableTurns,
+            billedMin: Math.max(alreadyBilled, minsToBill),
             estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns, transferSec,
               chars: call.turns.filter((t) => t.who !== 'caller' && !/^\[system/.test(t.text || '')).reduce((n, t) => n + (t.text || '').length, 0),
               direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
@@ -2088,6 +2173,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       let page = view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : '').split('__REF__').join(voice.esc(ref));
       const r = ref && reps.repByCode(ref);
       page = page.split('__REF_NOTE__').join(r ? `<div class="refnote">Referred by <b>${voice.esc(r.name)}</b></div>` : '');
+      page = page.split('__FROM_PRICE__').join(plans.fromPrice());
       let cookie;
       if (qref && reps.repByCode(qref) && !cref) {
         const secure = (process.env.PUBLIC_URL || '').startsWith('https') ? ' Secure;' : '';
@@ -2154,19 +2240,23 @@ Use it the way a good receptionist would: greet them by name if you have one, do
     }
 
     if (req.method === 'POST' && p === '/signup') {
+      // One renderer for every signup error, so the from-price and demo number
+      // are always substituted — a raw __FROM_PRICE__ leaking on an error page
+      // would be worse than the stale $49 this whole fix is about.
+      const errSignup = (msg, code) => html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', msg).split('__FROM_PRICE__').join(plans.fromPrice())), code);
       if (rateLimited(req, 'signup', 20, 60 * 60 * 1000)) {
-        return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Too many accounts created from here. Try again later.')), 429);
+        return errSignup('Too many accounts created from here. Try again later.', 429);
       }
       const f = parseForm(await readBody(req));
       const email = (f.email || '').trim().toLowerCase();
       const pw = f.password || '';
-      if (!email || pw.length < 6) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Enter a valid email and a password of 6+ characters.')), 400);
-      if (db.getAccountByEmail(email)) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'That email already has an account. Try logging in.')), 400);
+      if (!email || pw.length < 6) return errSignup('Enter a valid email and a password of 6+ characters.', 400);
+      if (db.getAccountByEmail(email)) return errSignup('That email already has an account. Try logging in.', 400);
       const { salt, passHash } = auth.hashPassword(pw);
       // Terms nobody was shown are terms a court will not enforce (browsewrap
       // fails routinely). Require the click and record when and which version,
       // so the responsibility-shift language actually binds.
-      if (!f.agree) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Please tick the box to agree to the Terms and Privacy Policy.')), 400);
+      if (!f.agree) return errSignup('Please tick the box to agree to the Terms and Privacy Policy.', 400);
       const acc = db.createAccount({ email, passHash, salt, acceptedTermsAt: db.nowISO(), termsVersion: LEGAL_UPDATED });
       seedStarterProfile(acc.id, email);
       db.logActivity(acc.id, { agent: 'SYSTEM', msg: 'Account created' });
@@ -2313,7 +2403,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       page = page.replace('__CHECKOUT__', checkoutResult);
       const locked = !stripe.hasAccess(account);
       page = page.replace('__EMAIL__', account.email).replace('__LOCKED__', locked ? 'true' : 'false').replace('__AIMODE__', aiMode());
-      return html(res, page);
+      // The app's HTML carries all its JS inline, and it changes with every
+      // deploy. With no cache header the browser was free to keep serving a
+      // stale copy — so a shipped fix (e.g. the disconnect button) looked
+      // "still broken" until a hard refresh. no-cache forces a revalidate on
+      // every load, so a normal reload always runs the current code.
+      return html(res, page, 200, { 'Cache-Control': 'no-cache, must-revalidate' });
     }
 
     // ---------- API (needs access) ----------
@@ -2376,8 +2471,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
           // masked: the app never ships the app-password back to the browser
-          smtp: account.smtp ? { host: account.smtp.host, port: account.smtp.port, user: account.smtp.user,
-            fromName: account.smtp.fromName, fromEmail: account.smtp.fromEmail, connected: !!account.smtp.pass } : { connected: false },
+          smtp: (() => {
+            const s = account.smtp || {};
+            if (s.useDawnpipe && mailer.enabled()) {
+              const sys = mailer.systemCfg();
+              return { mode: 'dawnpipe', connected: true, user: sys.fromEmail || sys.user, fromName: s.fromName || sys.fromName };
+            }
+            return { mode: 'own', host: s.host, port: s.port, user: s.user,
+              fromName: s.fromName, fromEmail: s.fromEmail, connected: !!s.pass };
+          })(),
+          dawnpipeSendAvailable: mailer.enabled(),
           // So a page refresh can re-attach to a run in progress — otherwise
           // reloading loses the only Stop button on screen while mail keeps going.
           activeSend: (() => { const j = sendJobs.get(activeSends.get(acc)); return j && j.status === 'running' ? sendJobView(j) : null; })(),
@@ -2611,17 +2714,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         } catch (e) { return json(res, { error: e.message }, 502); }
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
-        // A call can be orphaned mid-flight -- a deploy restarts the process,
-        // the in-memory call map empties, and the status callback finds
-        // nothing to complete -- leaving a row frozen at "in-progress"
-        // forever. Twilio ended the real call long ago; only our label is
-        // stuck. Sweep anything still "live" after 2 hours.
-        const LIVE = ['queued', 'ringing', 'initiated', 'in-progress'];
-        for (const c of db.getCalls(acc, 50)) {
-          if (LIVE.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
-            db.saveCall(acc, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
-          }
-        }
+        sweepStuckCalls(acc);
         const rows = db.getCalls(acc, 50);
         // estCost is OUR cost of goods, not the customer's. Someone paying
         // $399 who can see a call cost us 62 cents will price the product for
@@ -3285,6 +3378,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // now, changing nothing. The one-click answer to "is my password saved
       // and does Gmail still accept it?"
       if (p === '/api/settings/smtp/test' && req.method === 'POST') {
+        // Dawnpipe-managed sending is already verified server-side — nothing
+        // for the customer to test.
+        if ((account.smtp || {}).useDawnpipe) {
+          const sys = mailer.systemCfg();
+          return json(res, mailer.enabled() ? { ok: true, user: sys.fromEmail || sys.user } : { ok: false, error: 'Dawnpipe sending is not configured on the server.' });
+        }
         const tcfg = account.smtp || {};
         if (!tcfg.user || !tcfg.pass) return json(res, { ok: false, error: 'No mailbox saved yet - enter your email and app password above.' });
         const v = await smtp.verify(tcfg);
@@ -3302,6 +3401,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ---- sending mailbox settings ----
       if (p === '/api/settings/smtp' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
+        // Explicit disconnect. Without this there was no way to clear a mailbox
+        // from the UI — every save merged over the old one, so a wrong address
+        // could never be removed, only overwritten.
+        if (f.disconnect) {
+          db.updateAccount(acc, { smtp: {} });
+          db.logActivity(acc, { agent: 'SEND', msg: 'Sending mailbox disconnected' });
+          return json(res, { ok: true, disconnected: true });
+        }
+        // One-click "let Dawnpipe send for me" — routes outreach through the
+        // system mailbox. No app password, no Google steps. Only offered when
+        // the system mailbox is actually configured.
+        if (f.useDawnpipe) {
+          if (!mailer.enabled()) return json(res, { error: "Dawnpipe sending isn't set up on the server yet. Connect your own mailbox for now." }, 400);
+          const sys = mailer.systemCfg();
+          const fromName = (f.fromName || (account.smtp || {}).fromName || 'Dawnpipe').toString().slice(0, 80);
+          db.updateAccount(acc, { smtp: { useDawnpipe: true, fromName, fromEmail: sys.fromEmail || sys.user, user: sys.fromEmail || sys.user } });
+          db.logActivity(acc, { agent: 'SEND', msg: `Sending via Dawnpipe's mailbox (${sys.fromEmail || sys.user})` });
+          return json(res, { ok: true, mode: 'dawnpipe' });
+        }
         // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
         // after a successful connect (so it's never displayed), which meant any
         // later save — tweaking the delay, or just clicking Connect again —
@@ -3312,11 +3430,31 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const cfg = { host: f.host || 'smtp.gmail.com', port: Number(f.port) || 465,
           user: f.user || existing.user || '', pass,
           fromEmail: f.fromEmail || f.user || existing.fromEmail || '', fromName: f.fromName ?? existing.fromName ?? '' };
+        // Fix a wrong SMTP host before it can fail. The client guesses
+        // smtp.<domain> for a custom domain, which does not exist (Google
+        // Workspace uses smtp.gmail.com, Microsoft 365 uses office365) — that
+        // is the ENOTFOUND error. Detect the real host from the domain's MX
+        // whenever the host is blank or looks like that naive guess.
+        const emailDom = dnsauth.domainOfEmail(cfg.fromEmail || cfg.user);
+        if (emailDom && (!cfg.host || cfg.host.toLowerCase() === 'smtp.' + emailDom)) {
+          const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+          // Google Workspace is the dominant small-business host and the whole
+          // app-password flow is Gmail-centric, so if MX detection comes back
+          // empty, smtp.gmail.com is a far safer default than the guaranteed-
+          // dead smtp.<domain>.
+          cfg.host = real || 'smtp.gmail.com';
+        }
         // Verify whenever we have credentials that haven't been proven in this
         // exact combination — i.e. a new password, or a changed user/host.
         const needsVerify = !!f.pass || (pass && (cfg.user !== existing.user || cfg.host !== existing.host));
         if (needsVerify) {
-          const v = await smtp.verify(cfg);
+          let v = await smtp.verify(cfg);
+          // Last-ditch self-heal: if the host still could not be reached, try
+          // the detected host once more before giving up.
+          if (!v.ok && /ENOTFOUND|EAI_AGAIN|getaddrinfo|ECONNREFUSED/i.test(v.error || '') && emailDom) {
+            const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+            if (real && real !== cfg.host) { cfg.host = real; v = await smtp.verify(cfg); }
+          }
           if (!v.ok) return json(res, { error: `Could not sign in to that mailbox: ${v.error}` }, 400);
         }
         // A different sending domain means a fresh reputation — restart warmup.
@@ -3489,6 +3627,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const it = db.updateQueueItem(acc, f.id, { status: 'rejected' });
         if (it && it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
         return json(res, { item: it });
+      }
+      // Clear the parked pile: reject every held (unverified-address) draft
+      // for a business in one go, and free their leads to be re-found.
+      if (p === '/api/queue/clear-held' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const held = db.getQueue(acc, f.profileId).filter((q) => q.status === 'held');
+        for (const it of held) {
+          db.updateQueueItem(acc, it.id, { status: 'rejected' });
+          if (it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
+        }
+        db.logActivity(acc, { agent: 'OPERATOR', msg: `Cleared ${held.length} parked draft(s) (no verified email)` });
+        return json(res, { cleared: held.length });
       }
       if (p === '/api/queue/sent' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
