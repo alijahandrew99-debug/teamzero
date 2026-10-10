@@ -2429,10 +2429,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // monthly rental on a line nobody could switch off.
         '/api/voice/numbers/release'];
       // A locked account gets 2 free website-autofills so the in-person demo
-      // ("watch it read YOUR site") works before any card.
-      const freeAutofill = p === '/api/profile/autofill' && !stripe.hasAccess(account)
-        && Number(account.autofillsUsed || 0) < 2;
-      if (freeAutofill) db.updateAccount(account.id, { autofillsUsed: Number(account.autofillsUsed || 0) + 1 });
+      // ("watch it read YOUR site") works before any card. Checked-and-incremented
+      // atomically via mutateAccount: two concurrent autofill requests both reading
+      // the same stale `account.autofillsUsed` would otherwise either lose an
+      // increment (undercounting) or both pass the <2 check (overgranting).
+      let freeAutofill = false;
+      if (p === '/api/profile/autofill' && !stripe.hasAccess(account)) {
+        const updated = db.mutateAccount(account.id, (a) => (
+          Number(a.autofillsUsed || 0) < 2 ? { autofillsUsed: Number(a.autofillsUsed || 0) + 1 } : null
+        ));
+        if (updated) { account = updated; freeAutofill = true; }
+      }
       if (!stripe.hasAccess(account) && !READ_ONLY.includes(p) && !freeAutofill) {
         const u = plans.usage(account, stripe.isOwner(account));
         return json(res, {
