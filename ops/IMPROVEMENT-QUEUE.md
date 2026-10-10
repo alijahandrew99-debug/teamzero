@@ -740,6 +740,24 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
       low stakes (free-tier autofill count), flagged because it's the third instance of this
       pattern and the audit is now recommending one shared `db.mutateAccount(id, fn)` helper
       rather than fixing each site individually.
+      **Status (2026-10-10): fixed, branch `keeper/2026-10-10-mutate-account-autofill`.**
+      Added `db.mutateAccount(id, mutator)` to `lib/db.js` — re-reads the account and applies
+      `mutator` in the same synchronous pass as the write, so two concurrent
+      `/api/profile/autofill` requests can't both act on the same stale snapshot (one
+      previously lost its increment, or both could pass the "<2 free tries" gate at once).
+      `mutator` returns a falsy value to veto the write atomically; the helper then returns
+      `undefined` (vetoed) vs. `null` (account not found) vs. the updated account (success),
+      so callers can tell all three apart. `server.js`'s `/api/profile/autofill` gate now uses
+      it instead of `updateAccount` + a stale in-memory increment. `node --check` clean on both
+      files; all six suites pass, 103/103; isolated-`DATA_DIR` smoke test reproduces the old
+      bug (two stale reads → one increment lost) and proves the fix (two sequential
+      `mutateAccount` calls both land; a third past the cap vetoes without writing). Verified
+      merges clean against current `main` alone and individually against the 12 other open
+      branches touching `lib/db.js`/`server.js`. This is the shared primitive the note above
+      asked for — item 1 and item 14's fixes (on other branches) are a different shape
+      (re-read-before-write inline, not via a shared helper) and are not required to switch to
+      it, but any *new* account-counter site should use `mutateAccount` rather than repeat the
+      pattern a fourth time.
 
 27. **Backlog re-verified 2026-09-30, now 24 branches, zero merged.** `main` moved one commit
     since the last full check (`a70c1ec` → `facb991`, a cosmetic from-price fix, nothing
