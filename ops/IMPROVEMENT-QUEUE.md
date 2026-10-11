@@ -443,6 +443,53 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     into fresh clones some other way, since neither process can fix that
     from inside itself.
 
+31. **Item 11 was only half-closed — the fallback still billed robocalls/screened-out
+    calls in full. Found, fixed, pushed.** The 2026-10-08 merge (`8616294`) fixed
+    idempotency (a duplicate `/voice/status` delivery no longer double-bills) but
+    never ported the live path's `callerSpoke && !spamCall` exclusion into the
+    `!call` fallback — confirmed by reading current `main:server.js` directly, not
+    by trusting the queue's own "closed" note. `call.spamCall` is purely in-memory
+    and never reaches the db row, so the fallback billed `CallDuration` in full
+    regardless of why the call ended. A robocall/screened-out caller whose final
+    status webhook lands after a deploy wipes memory (routine — `main` auto-deploys)
+    was billed in full against the plan's included minutes, the exact harm item 11
+    was opened to stop. This is independently what the 2026-10-07 `keeper-audit` run
+    flagged as "Finding 1 (NEW)" against stale `main` (`facb991`) — that specific
+    finding turned out to already be moot by the time `8616294` landed the next day
+    (it covers the idempotency half this doc is talking about), but its own
+    "relationship to prior work" section correctly named the OTHER half
+    (`audit/2026-08-26-voice-status-fallback-billing`'s spam exclusion) as still
+    unmerged and conflicting — which is this bug, confirmed independently by reading
+    the live code rather than the stale pushed branch (whose remote ref turned out to
+    be a stale pointer at `8616294` itself, not the new fix its own report describes —
+    flagging that discrepancy for whoever runs the next audit).
+    **Status (2026-10-11): shipped**, branch `keeper/2026-10-11-fallback-spam-billing`,
+    cut fresh off current `main` (`0ecb712`) — a direct-ancestor fast-forward merge,
+    conflict-free by construction. The fallback now derives the same exclusion from
+    what IS persisted: `prior.outcome === 'spam' || 'screened-out'` (every
+    `call.spamCall = true` site sets one of these two, confirmed by reading all three
+    call sites) and `prior.transcript` (saved every turn) recomputing `callerSpoke`
+    exactly like the live path does. Added a new test to `test-voicebilling.js`
+    reproducing the exact shape (robocall phrase tripwire → `endCall` simulating a
+    deploy → the orphaned call's final webhook) — confirmed it FAILS against the
+    pre-fix code (asserted directly: stashed the fix, test failed, restored it) and
+    passes with the fix. `node --check` clean on both files; all six suites pass,
+    **104/104** (37 reps + 18 spam + 17 voiceprofiles + 15 assistant + 9 sending-mode +
+    8 voicebilling, up from 7). Re-verified merges clean against current `main` and
+    individually against `keeper/2026-10-09-transfer-leg-cost-rebase`,
+    `keeper/2026-10-10-mutate-account-autofill`, and
+    `audit/2026-09-02-consume-stale-snapshot` (the other branches touching nearby
+    `server.js`/billing lines) via real `git merge --no-commit --no-ff`. One thing for
+    Alijah to know before merging: any account whose `voiceMinutesUsed` looks high
+    relative to its real call activity may be a victim of this gap (narrow window —
+    needs a robocall/screened-out call AND a deploy landing mid-call at the same
+    moment) rather than real usage; worth a glance if a customer ever disputes being
+    dropped to message-only early. Low-severity cousin left open: this doesn't touch
+    the deploy-mid-call case where the caller spoke normally and the call simply
+    never got a chance to hit the live path's own exclusion checks for other reasons
+    (time-limit, ai-error) — those outcomes are correctly still billed by this fix
+    (caller did speak), matching the live path's own behavior for the same outcomes.
+
 14. **URGENT — merge `audit/2026-09-02-consume-stale-snapshot`.** Found by
     the 2026-09-02 audit run (`ops/audit/2026-09-02.md` on `keeper-audit`,
     finding 1): `lib/plans.js`'s `consumeVoiceMinutes()` and `consume()`
