@@ -80,6 +80,21 @@ const BIZ = '+15550003333', CUST = '+15558884444', CUST2 = '+15558885555';
   await settle();
   ok('and a retry of it bills nothing', minutes() === before + 1, minutes());
 
+  console.log('== a deploy wiped a robocall mid-hangup: the fallback must not bill it either ==');
+  const SID3 = 'CAbill0000000000000000000000003';
+  await hook('/voice/incoming', { CallSid: SID3, To: BIZ, From: '+15559990000', StirVerstat: 'TN-Validation-Passed-A' });
+  // Trips the robocall phrase tripwire: call.spamCall = true, outcome: 'spam',
+  // then the app itself hangs up -- but that TwiML response is exactly what a
+  // deploy can race with, so the record a redeploy leaves behind is "outcome:
+  // spam" with no in-memory call to tell the fallback the live path would
+  // have billed zero.
+  await hook('/voice/turn', { CallSid: SID3, SpeechResult: 'your car warranty is about to expire', Confidence: '0.95' });
+  voice.endCall(SID3);
+  const beforeSpam = minutes();
+  await hook('/voice/status', { CallSid: SID3, CallStatus: 'completed', CallDuration: '45', From: '+15559990000', To: BIZ });
+  await settle();
+  ok('the orphaned robocall billed nothing', minutes() === beforeSpam, minutes());
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

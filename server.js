@@ -1921,7 +1921,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           const owner2 = prior ? db.getAccount(prior.accountId) : null;
           if (owner2) {
             const dur0 = Number(params.CallDuration || 0);
-            const mins = Math.ceil(dur0 / 60);
+            // Same exclusion the live path applies (callerSpoke && !spamCall) --
+            // recomputed from what was persisted before the in-memory call was
+            // lost, since spamCall itself never survives to the db row. A
+            // robocall/screened-out call that finishes right as a deploy wipes
+            // memory must land here exactly as unbilled as it would have live,
+            // not billed in full just because the fallback forgot why.
+            const callerSpoke = (prior.transcript || []).some((t) => t.who === 'caller' && String(t.text || '').trim());
+            const wasSpam = prior.outcome === 'spam' || prior.outcome === 'screened-out';
+            const mins = (callerSpoke && !wasSpam) ? Math.ceil(dur0 / 60) : 0;
             const already = Number(prior.billedMin || 0);
             db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0,
               billedMin: Math.max(already, mins) });
