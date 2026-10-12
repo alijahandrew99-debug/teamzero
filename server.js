@@ -374,15 +374,26 @@ async function placeCallback(rec, { by = 'system' } = {}) {
   }
 }
 // Every minute: anything queued whose time has come.
+// A record only flips off 'queued' once placeCallback's Twilio call resolves
+// (it stays 'queued' for the whole await), so a run that is still working
+// through a backlog when the next tick fires would otherwise see the same
+// still-'queued' rows and dial every one of them a second time -- the same
+// double-run hazard startSendJob's lock exists to prevent, just unguarded
+// here because this loop isn't keyed per-account.
+let callbackQueueRunning = false;
 async function runCallbackQueue() {
-  let due = [];
-  try { due = db.readCollection('callbacks').filter((c) => c.status === 'queued' && (!c.dueAt || Date.parse(c.dueAt) <= Date.now())); } catch { return; }
-  for (const rec of due.slice(0, 20)) {
-    // Re-read: it may have been cancelled or called by hand since.
-    const fresh = db.getCallbacks(rec.accountId, 500).find((c) => c.id === rec.id);
-    if (!fresh || fresh.status !== 'queued') continue;
-    await placeCallback(fresh).catch(() => {});
-  }
+  if (callbackQueueRunning) return;
+  callbackQueueRunning = true;
+  try {
+    let due = [];
+    try { due = db.readCollection('callbacks').filter((c) => c.status === 'queued' && (!c.dueAt || Date.parse(c.dueAt) <= Date.now())); } catch { return; }
+    for (const rec of due.slice(0, 20)) {
+      // Re-read: it may have been cancelled or called by hand since.
+      const fresh = db.getCallbacks(rec.accountId, 500).find((c) => c.id === rec.id);
+      if (!fresh || fresh.status !== 'queued') continue;
+      await placeCallback(fresh).catch(() => {});
+    }
+  } finally { callbackQueueRunning = false; }
 }
 setInterval(() => { runCallbackQueue().catch(() => {}); }, 60 * 1000);
 
