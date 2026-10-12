@@ -919,3 +919,35 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     landed exactly as described. Closing items 21 (SMTP CRLF injection), 22 (esc-quotes
     XSS), 24 (duplicate-send lock), 25 (Stripe webhook UTF-8 corruption), and 28 (store-file
     quarantine) — all five fixes confirmed present and passing on fresh `main` (see item 30).
+
+32. **New find (2026-10-12): `runCallbackQueue()` had no re-entrancy guard — a
+    backlog could double-dial the same number.** Found while looking for siblings
+    of the stuck-call/duplicate-run family (items 3 and 24) per this queue's
+    standing brief. `placeCallback()` leaves a callback record at `status:
+    'queued'` for the entire `await voice.placeCall(...)` (the live Twilio API
+    round trip) and only flips it to `'called'`/`'failed'`/etc. after that
+    resolves. `runCallbackQueue()` runs on a bare 60s `setInterval` with no lock:
+    if processing the up-to-20 due records in one tick (each a real Twilio API
+    call) ever took longer than 60s — a slow Twilio response, a burst of due
+    callbacks, a transient network stall — the next tick's `setInterval` fired
+    anyway, read the same still-`'queued'` rows, and placed a second real call to
+    the same number before the first tick's write ever landed. Exactly the
+    "double-run of an async loop on a bare timer" shape `startSendJob`'s lock
+    (`activeSends` map, see its comment) already exists to prevent for the send
+    queue — this loop just never got the equivalent guard. No evidence this has
+    actually fired in production (would need Twilio latency genuinely exceeding
+    60s, or ~20 due callbacks each taking >3s), but the window is real and the
+    cost of hitting it is a customer's own customer getting called twice by the
+    AI receptionist — worth closing regardless of whether it's fired yet.
+    **Status (2026-10-12): fixed, branch `keeper/2026-10-12-callback-queue-reentrancy-lock`.**
+    Added a module-level `callbackQueueRunning` boolean: `runCallbackQueue()`
+    returns immediately if a previous call is still in flight, and clears the
+    flag in a `finally` so a thrown error can't wedge the queue shut. Confirmed
+    the `setInterval` is the function's only caller, so the guard can't block
+    any other legitimate caller. `node --check server.js` clean; `test-reps.js`
+    (37/37) and `test-voicebilling.js` (8/8, unaffected — different code path)
+    both still pass. Cut fresh off current `main` (`0ecb712`, unchanged since
+    10-08), a direct-ancestor fast-forward merge, conflict-free by construction.
+    Did not re-verify the other 20 open branches against `main` this shift since
+    `main` itself didn't move — consistent with 10-03 through 10-07's practice of
+    skipping a re-check when nothing changed since the last full pass (10-08).
