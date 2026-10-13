@@ -951,3 +951,34 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     Did not re-verify the other 20 open branches against `main` this shift since
     `main` itself didn't move — consistent with 10-03 through 10-07's practice of
     skipping a re-check when nothing changed since the last full pass (10-08).
+
+33. **New find (2026-10-13): `lib/voice.js`'s in-memory `calls` Map leaked
+    indefinitely under normal call volume — a gap the 2026-08-26 audit's
+    in-memory-tracker sweep (item 3) missed.** That audit explicitly checked
+    `jobs`/`sendJobs`/`callJobs`/`phoneJobs`/`activeSends` in `server.js` and
+    concluded no in-memory tracker could go stuck without a persisted row —
+    but never looked at `lib/voice.js`'s own `calls` Map, the live
+    conversation-turn state keyed by call SID. `startCall()`'s only cleanup
+    was `if (calls.size > 500) for (...) if (older than 1h) delete` — gated
+    on the map first passing 500 *concurrent* entries. A call whose status
+    callback never arrives (Twilio never delivers it, or a bug throws before
+    `endCall()` runs) leaks its entry there forever, and at this product's
+    call volume the map never gets near 500, so the gate never opens and the
+    leak never gets swept — a slow, unbounded memory leak for as long as the
+    process stays up. Same root cause as item 3's original bug (an in-memory
+    handle to a call that Twilio considers long over), just the in-memory
+    half instead of the persisted half, and not previously audited because
+    item 3's checklist didn't include this particular Map.
+    **Status (2026-10-13): fixed, branch `keeper/2026-10-13-voice-call-map-leak`.**
+    Replaced the size-gated inline check with an unconditional 15-minute
+    `setInterval` that sweeps any entry older than 1 hour — the same
+    staleness bar the old check used, now independent of call volume. No
+    behavior change for calls that complete normally (`endCall()` still
+    removes them immediately). `node --check lib/voice.js` clean;
+    `test-voicebilling.js` (7/7) and `test-reps.js` (37/37) both still pass
+    — neither exercises this Map directly, confirming no regression in the
+    paths that do touch call state. Cut fresh off current `main` (`0ecb712`,
+    unchanged since 10-08), a direct-ancestor fast-forward merge,
+    conflict-free by construction. Did not re-verify the other ~21 open
+    backlog branches against `main` this shift, consistent with prior
+    shifts' practice of skipping that re-check when `main` hasn't moved.
