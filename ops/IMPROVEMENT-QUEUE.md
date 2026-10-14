@@ -146,6 +146,58 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
    clean on both files; all four suites still pass (87/87). Recommend
    folding `reconcileCheckout`'s narrower staleness gap into a future
    slice of this item rather than this one.
+   **Status (2026-10-14): re-examined the 2026-09-13 `creditTopup` finding
+   against current code, and separately confirmed the three stale September
+   branches are worse than "stale" — they would actively break production if
+   merged as-is.** `main` hasn't moved since 10-08 (still `0ecb712`), so
+   rather than re-run the same unchanged backlog check as 10-03 through
+   10-06 did, spent today's shift reading the actual call sites instead of
+   re-trusting the finding's own writeup.
+   **The race described in the 09-13 status above does not reproduce against
+   current code, and — checking `git blame` — never did.** Both of
+   `creditTopup`'s callers (`applyEvent`'s webhook branch, `server.js`-side;
+   `reconcileTopup`'s final line) re-read the account fresh with
+   `db.getAccount` *immediately* before the synchronous call to
+   `creditTopup` — no `await` sits between that read and the write, in
+   either caller. `db.getAccount`/`creditTopup` are both fully synchronous
+   (no `await` inside), so once that two-line read-then-write sequence
+   starts, Node's single JS thread runs it to completion before any other
+   webhook delivery or `reconcileTopup` resumption can interleave — the
+   exact precondition item 14's `consumeVoiceMinutes`/`consume` bug has
+   (snapshot taken, THEN an await, THEN a write off the stale snapshot) is
+   missing here. `git blame` on the webhook call site
+   (`lib/stripe.js`, `if (acc) creditTopup(acc, ...)`) dates the
+   fresh-read-immediately-before-write pattern to `b11a725d`, 2026-08-25 —
+   three weeks before the 09-13 finding, so this wasn't a regression the
+   fix needed to catch, either. Best guess: the 09-13 audit pattern-matched
+   "additive balance field, read-then-write" against item 14's shape without
+   checking where the read actually falls relative to the awaits. Recommend
+   closing this specific sub-finding as a false positive, distinct from
+   item 14 (still a real, still-unmerged bug — see below).
+   **Separately, and regardless of whether the race is real: do NOT merge
+   `keeper/2026-09-13-topup-write-race` as-is.** Diffed it directly against
+   current `main` (`git diff 0ecb712 origin/keeper/2026-09-13-topup-write-race`).
+   It was cut 2026-09-13, before two fixes that landed in the 10-08 batch:
+   it deletes `lib/db.js`'s `quarantine()` (item 28's corrupt-store
+   protection — merging this branch would silently reintroduce "an
+   unreadable store file plus one ordinary write is unrecoverable, total
+   data loss"), and it deletes `db.callBySid()`, which `server.js:1920` and
+   `server.js:1948` now call on every voice billing callback (added by
+   `8616294`, the fresh item-11 implementation, also in the 10-08 batch) —
+   merging this branch as-is would throw on the next live call's status
+   webhook. Confirmed both by direct `grep` against the extracted `main`
+   tree, not by trusting the branch's own age. The same two regressions are
+   present in `keeper/2026-09-02-db-write-compact` and
+   `keeper/2026-09-04-unique-tmp-write` (checked both the same way) — all
+   three branches touch the exact same block of `lib/db.js` that predates
+   `quarantine()`/`callBySid`, so all three carry the same hazard. This
+   sharpens 10-13's "safe to delete" note (which only said merging them
+   would "strip fixes you already have," a vaguer framing) into "these three
+   would break live call billing and reintroduce a data-loss bug if merged
+   — do not merge, delete instead." Exact commands unchanged from 10-13's
+   report. No code change needed today: there's no live bug to fix, only a
+   backlog-hygiene finding to flag before someone merges one of these by
+   habit.
 
 2. **Email verification on signup** — stops trial-farming.
    **Status (2026-08-27): verified still open.** `lib/auth.js` has no
