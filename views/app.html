@@ -1096,7 +1096,18 @@ function qcard(q){
     : approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>';
   return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${statusPill}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
 }
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+// Quotes are escaped too, because esc() is not only used between tags. Several
+// templates below drop it inside a double-quoted attribute — title="..." and,
+// worse, onclick="..." — and a value carrying a bare " closed the attribute and
+// opened a new one, so an attacker-chosen string became an event handler with
+// no click needed. The clearest case is the owner-only Sales Reps screen, which
+// renders OTHER accounts' email addresses (loadUnattributed) and signup applies
+// no format check to an address at all.
+// NOTE: this does not make onclick="fn('${esc(x)}')" safe. The parser decodes
+// &#39; back to ' before the JS is parsed, so a quote still ends that string
+// literal — those handlers need data-* attributes and a delegated listener, not
+// a better escaper. This closes the no-interaction breakout only.
+function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress','website','pricing'];
 // The 20s background poll used to repaint every input from the last SAVED
 // server values — wiping whatever was being typed, and blanking all eight
