@@ -2227,7 +2227,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (!accountId) return fail('That reset link has expired or already been used. Request a new one.');
       const { salt, passHash } = auth.hashPassword(f.password);
       db.updateAccount(accountId, { salt, passHash });
-      db.logActivity(accountId, { agent: 'SYSTEM', msg: 'Password reset' });
+      // A reset is how someone takes their account BACK. Whoever they are
+      // locking out is, by definition, holding a live session -- a borrowed
+      // laptop, a shared machine, a stolen cookie -- and sessions last 30
+      // days. Changing the password alone does not touch them, so the person
+      // who just "secured" their account is still logged in next to the
+      // intruder. Sign every device out first, then issue the new session, so
+      // the only one left standing is the browser that proved it owns the
+      // mailbox. Order matters: destroy before create, or we kill the cookie
+      // we are about to hand back.
+      db.destroyAllSessions(accountId);
+      db.logActivity(accountId, { agent: 'SYSTEM', msg: 'Password reset — all other devices signed out' });
       const token = db.createSession(accountId);
       return redirect(res, '/app', auth.sessionCookie(token));
     }
