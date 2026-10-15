@@ -1034,3 +1034,77 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     conflict-free by construction. Did not re-verify the other ~21 open
     backlog branches against `main` this shift, consistent with prior
     shifts' practice of skipping that re-check when `main` hasn't moved.
+
+34. **URGENT — merge `audit/2026-10-14-reset-invalidate-sessions`. A password
+    reset did not sign out any other device.** New independent audit run
+    (2026-10-14, lens (c) security — `ops/audit/2026-10-14.md` on
+    `keeper-audit`), found after this shift's 10-14 report had already been
+    written, so not caught until today. `lib/db.js`'s `destroyAllSessions()`
+    has existed since the session store was written, its own comment says
+    it's "used after a password reset" — and it was called from nowhere.
+    `/reset` changed `salt`/`passHash` and issued a fresh cookie, but every
+    session already minted for that account (30-day life, `getSession` only
+    checks `exp`, never the password) stayed valid for up to a month. That
+    inverts the point of the feature: someone resets specifically because
+    they believe another device still has access — a borrowed/sold laptop, a
+    lifted cookie — and the reset tells them they're safe while the
+    intruder's session keeps working. Reproduced end to end against real
+    `lib/db.js` with an isolated `DATA_DIR` (pre-fix: attacker session still
+    valid after reset; post-fix: attacker session dead, victim's new session
+    lives, other tenants untouched).
+    **Status (2026-10-15): re-verified today, ready to merge.** Confirmed via
+    a real `git merge --no-commit --no-ff` against current `main` (`0ecb712`)
+    in an isolated worktree — merges clean (only `server.js` touched, 11
+    insertions), `node --check server.js` clean, all six suites pass on the
+    merged tree, **103/103**. Fix is one call
+    (`db.destroyAllSessions(accountId)`) placed between the password write
+    and the new `createSession`, plus a clearer activity-log line. This is
+    now the single highest-priority merge ask in the backlog — ahead of item
+    14 — since it's the only open finding with a plausible path to full
+    account takeover (PII, call recordings/transcripts, connected mailbox,
+    Stripe portal, send-as-them) via nothing more than a cookie someone
+    already had before the owner "secured" their account.
+    **Two more findings from the same audit, reported but not fixed — each
+    needs Alijah, not a Keeper patch, per the audit doc:**
+    - **Rate limiting and the TCPA consent IP both key off the
+      client-controlled leftmost `X-Forwarded-For` entry** (`server.js:134-137`,
+      `:1000`). If Render's load balancer appends (rather than replaces) the
+      real IP — the standard nginx `$proxy_add_x_forwarded_for` idiom — every
+      throttle in the app (`/login` 10/15min, `/signup` 20/hr, `/forgot`,
+      `/cb/:slug`, `assistant`, `adjust`) is bypassed by rotating one header
+      value per request, and the TCPA consent record (`callbacks.json`'s
+      append-only, never-pruned evidence of caller consent) becomes
+      self-reported by the same header. The audit deliberately did not patch
+      this: guessing the trusted-proxy depth wrong in the other direction
+      (reading rightmost with zero hops) collapses every customer onto the
+      load balancer's own IP and locks out the whole tenant base at
+      `/login`'s 10-attempt cap — a self-inflicted outage. It needs one
+      production measurement first (log the raw `X-Forwarded-For` on one
+      request, count the hops, then key a `TRUSTED_PROXY_HOPS` env var off
+      that) — something only Alijah can do; this session's network egress to
+      dawnpipe.com is blocked (see Site status), and every candidate route is
+      either a POST or authenticated, both off-limits to this shift's GETs
+      even if egress worked. See today's report for the exact thing to
+      check.
+    - **`/v1/*` parses the entire account store on every unauthenticated
+      request, before the API-key check runs** (`server.js:2305-2310`). The
+      per-key rate limit only applies after a key matches, so a wrong key is
+      never throttled, and each attempt is a full synchronous
+      `fs.readFileSync`+`JSON.parse` of `accounts.json` on the event loop
+      shared with live calls — same shape as the still-unmerged
+      2026-09-09 webhook-log-flood finding (item 18, which already merged),
+      just on a different unauthenticated path. Key-guessing itself isn't
+      the risk (`dp_live_`+48 hex isn't brute-forcible); the cost asymmetry
+      per guess is. Fix needs a per-IP throttle *before* the lookup, which
+      depends on the `X-Forwarded-For` finding above being resolved first —
+      flagged, not actioned, for that reason.
+    Also noted by the same audit (confirmed, no action needed): the SMTP CRLF
+    fix (item 21) and `esc()` quote fix (item 22) are both verified live and
+    correct on current `main` — the audit independently re-checked both
+    rather than trusting the merge titles. And a smaller related gap,
+    deliberately left out of this branch to keep it single-purpose: a
+    password reset doesn't invalidate the account's *other* outstanding
+    reset tokens (request three reset emails, use one, the other two still
+    work for the hour) — same stale-credential family, smaller blast radius,
+    belongs with `keeper/2026-08-30-prune-reset-tokens` rather than its own
+    branch.
