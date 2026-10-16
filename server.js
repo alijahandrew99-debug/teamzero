@@ -2303,6 +2303,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
     // Authenticated by `Authorization: Bearer dp_live_...`. Read-only for now:
     // bookings, calls, and a "who is this caller" lookup. Rate-limited per key.
     if (p.startsWith('/v1/')) {
+      // Per-key limiting below needs a resolved key, so a bad or missing one
+      // would otherwise reach db.allAccounts() (a full-file read+parse, same
+      // cost as the already-fixed webhook-log-flood) on every attempt,
+      // unthrottled. Gate by IP first, before that lookup runs.
+      if (rateLimited(req, 'v1auth', 120, 60 * 1000)) return json(res, { error: 'Too many requests.' }, 429);
       const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
       const keyAcc = bearer && bearer.startsWith('dp_live_') ? db.allAccounts().find((a) => a.apiKey === bearer) : null;
       if (!keyAcc) return json(res, { error: 'Invalid or missing API key. Send it as: Authorization: Bearer dp_live_...' }, 401);
