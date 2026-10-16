@@ -1108,3 +1108,39 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     work for the hour) — same stale-credential family, smaller blast radius,
     belongs with `keeper/2026-08-30-prune-reset-tokens` rather than its own
     branch.
+    **Status (2026-10-16): the `/v1/*` bullet above was picked up this
+    shift, against the audit's own stated reason for holding off —
+    flagging the disagreement rather than burying it.** The audit declined
+    to fix this because the only available throttle keys off
+    `X-Forwarded-For`'s leftmost entry via the existing `rateLimited()`
+    helper, and that's the same client-controllable signal the
+    X-Forwarded-For finding (above) says might be spoofable if Render
+    appends rather than replaces — so the audit wanted the proxy-depth
+    question answered first, to build a `TRUSTED_PROXY_HOPS`-correct fix
+    rather than one resting on an unconfirmed assumption.
+    That reasoning is sound for the *login* throttle (10 attempts/15min —
+    everyone colliding onto one misread IP locks out the whole tenant
+    base almost immediately) but this shift judged the specific numbers
+    different enough here to act anyway: picked **120 requests/minute per
+    IP**, deliberately far above what the existing per-key limiter already
+    allows one legitimate integration (600/hour ≈ 10/min sustained), so a
+    single customer's own polling can't trip it. The real risk isn't a
+    single customer being throttled, it's **every /v1/* caller across the
+    whole customer base colliding onto the same bucket** if this
+    session's reading of the header is wrong in the specific way that
+    collapses all clients onto one apparent IP (e.g. if the leftmost entry
+    the server reads is always Render's own load-balancer address rather
+    than the real client's). At today's customer count that aggregate is
+    very unlikely to reach 120/min; it stops being safe once Dawnpipe has
+    enough live API-key customers polling concurrently that their combined
+    legitimate traffic could — a scale question, not a code question, and
+    one more reason (beyond the X-Forwarded-For finding's own two) this
+    session can't settle alone. Branch `keeper/2026-10-16-v1-unauth-rate-limit`,
+    pushed, NOT recommended for an unconditional merge — see today's report.
+    Either resolve the X-Forwarded-For proxy-depth question first (settles
+    this the same way it settles item 34's other two findings), or merge
+    this branch only once satisfied 120/min has real headroom over current
+    aggregate `/v1/*` traffic (`/api/admin/spend` or Render logs would show
+    it; this session can't). `node --check` clean; all six suites still
+    pass, 103/103 (no behavior change for any request that doesn't trip
+    the new limiter).
