@@ -1144,3 +1144,21 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     it; this session can't). `node --check` clean; all six suites still
     pass, 103/103 (no behavior change for any request that doesn't trip
     the new limiter).
+    **Status (2026-10-17): closed the small sibling gap flagged in the
+    audit's last paragraph.** `useResetToken()` (`lib/db.js`) only deleted
+    the one token being consumed — request three reset emails, use one,
+    the other two still worked for the rest of the hour. Now consuming any
+    token for an account deletes every other outstanding token for that
+    same account in the same write, leaving other accounts' tokens
+    untouched. Smoke-tested against an isolated `DATA_DIR`: using one of
+    three tokens for account A invalidates the other two for A, and
+    account B's own token is unaffected. `node --check` clean; `test-reps.js`
+    37/37 (unaffected — doesn't touch resets). Branch
+    `keeper/2026-10-17-reset-invalidate-siblings`, cut fresh off current
+    `main` (`0ecb712`, unchanged since 10-07 — 10 days now), a direct
+    fast-forward merge, conflict-free by construction. The two X-Forwarded-For
+    findings and item 34's main merge ask (`audit/2026-10-14-reset-invalidate-sessions`)
+    are still open and still need Alijah, not a Keeper patch — see today's
+    report. Did not re-verify the other ~24 open backlog branches against
+    `main` this shift since `main` hasn't moved, consistent with prior
+    shifts' practice.
