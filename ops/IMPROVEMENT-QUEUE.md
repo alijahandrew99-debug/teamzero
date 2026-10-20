@@ -1162,3 +1162,34 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     report. Did not re-verify the other ~24 open backlog branches against
     `main` this shift since `main` hasn't moved, consistent with prior
     shifts' practice.
+    **Status (2026-10-20): `main` moved for the first time in 13 days**
+    (`0ecb712` → `df1af64`, two commits, both authored directly by Alijah —
+    not Keeper or audit work). Audited both: `3affdd6` adds a new
+    `receptionist` pricing tier ($169/mo, 300-min cap, phone-only, no
+    lead-gen) to `lib/plans.js` — pure data/config addition, no new write
+    path, no bypass of `db`'s atomic path. `df1af64` adds the public
+    `/partners` affiliate page and a `POST /partners/apply` handler
+    (`server.js`) that emails the owner via the system mailbox — checked it
+    against this queue's own standing CRLF-injection concern (item 21):
+    the applicant-controlled `name` field lands in the email `Subject`,
+    which passes through `lib/smtp.js`'s `encodeHeader()`, which base64-
+    encodes the **entire** header the moment it contains any byte outside
+    printable ASCII (`\r`/`\n` included) — so a crafted name can't inject
+    headers. The recipient (`RCPT TO`) is the hardcoded owner address, not
+    user input. Rate-limited 5/hour per the existing (X-Forwarded-For-
+    keyed) limiter. No new finding. Re-verified the two highest-priority
+    pending merges against this new `main` with a real `git merge
+    --no-commit --no-ff` in an isolated worktree: item 34
+    (`audit/2026-10-14-reset-invalidate-sessions`) and
+    `keeper/2026-10-17-reset-invalidate-siblings` both still merge clean,
+    individually and together; `node --check` and `test-reps.js` (37/37)
+    pass on the merged tree. Also spot-checked item 14
+    (`audit/2026-09-02-consume-stale-snapshot`), the one other open branch
+    that touches `lib/plans.js` (the file the new `receptionist` tier
+    landed in) — auto-merges clean, no conflict with the new tier entry.
+    Did not re-verify the remaining ~22 branches individually; none of them
+    touch `lib/plans.js`, and the `server.js` changes in `df1af64` are two
+    small, additive, line-isolated blocks (sitemap array, a new route
+    inserted after `/about`) unlikely to collide, consistent with how this
+    queue has triaged small additive `main` commits before (e.g. 2026-09-16
+    item 20).
