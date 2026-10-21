@@ -1841,12 +1841,17 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             db.logActivity(acct.id, { agent: 'VOICE', msg: `Could not save message: ${e.message}` });
           }
           db.logActivity(acct.id, { agent: 'VOICE', msg: `Message taken from ${from} (over plan limit): ${heard.slice(0, 140)}` });
-          try {
-            await notify.callSummary({
-              account: acct, profile: prof, outcome: 'message taken - OVER PLAN LIMIT, top up to keep answering live',
-              call: { from, durationSec: 0, transcript: [{ who: 'caller', text: heard || '(nothing captured)' }] },
-            });
-          } catch {}
+          // Fire-and-forget, like every other notify call on a voice webhook.
+          // Awaiting it put the system mailbox on the critical path of a live
+          // call: smtp.js allows 20s to connect and 30s idle, Twilio abandons a
+          // webhook at 15s, and what the caller then hears is Twilio's "an
+          // application error has occurred" — on the over-limit path, whose
+          // entire job is to fail gracefully. The message is already in the
+          // diary by this point, so nothing is lost by telling them so first.
+          notify.callSummary({
+            account: acct, profile: prof, outcome: 'message taken - OVER PLAN LIMIT, top up to keep answering live',
+            call: { from, durationSec: 0, transcript: [{ who: 'caller', text: heard || '(nothing captured)' }] },
+          }).catch((e) => db.logActivity(acct.id, { agent: 'VOICE', msg: `Could not email the message summary: ${e.message}` }));
         }
         return xml(res, voice.sayAndHangup(
           "Got it — I've passed that on and someone will call you right back. Thanks for calling.",
