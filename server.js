@@ -1527,6 +1527,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (call.direction === 'inbound' && (call.account.voice || {}).spamFilter !== false
             && spam.looksLikeRobocall(heard)) {
           call.spamCall = true;
+          call.saved = true;   // handled: never salvage a booking out of a robocall's pitch
           spam.strike(call.accountId, call.from, 2, 'robocall phrases: "' + heard.slice(0, 60) + '"');
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'spam', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: `Hung up on a robocall from ${call.from || 'unknown'} ("${heard.slice(0, 80)}") — not billed` });
@@ -1641,6 +1642,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // whole conversation, so it catches the pitches the phrase list
           // can't. Same consequences as the tripwire: strike, no billing.
           call.spamCall = true;
+          call.saved = true;   // handled: see the tripwire above
           spam.strike(call.accountId, call.from, 2, 'AI judged it spam');
           db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'spam', transcript: call.turns });
           db.logActivity(call.accountId, { agent: 'VOICE', msg: `AI hung up on spam from ${call.from || 'unknown'} — not billed` });
@@ -1648,6 +1650,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
         if (out.action === 'dnc') {
           const num = call.direction === 'inbound' ? params.From : call.to;
+          // Handled, and the one call where salvage would do real damage: it
+          // would build a callback out of whatever they said BEFORE the
+          // opt-out and text a confirmation to the number that just told us
+          // to stop. Honouring an opt-out has to mean the whole call stops.
+          call.saved = true;
           suppress.suppressPhone(call.accountId, num, 'unsubscribe', { note: 'do-not-call, asked on a call' });
           if (call.lead) { try { memory.remember(call.accountId, call.lead, { kind: 'note', channel: 'phone', stage: 'dnc', summary: 'asked not to be contacted' }); } catch {} }
           if (call.lead && call.lead.email) suppress.suppress(call.accountId, call.lead.email, 'unsubscribe', { note: 'do-not-call, by phone' });
@@ -1876,7 +1883,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const call = voice.getCall(sid);
         const st = String(params.DialCallStatus || '');
         if (st === 'completed' || st === 'answered') {
-          if (call) db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
+          if (call) {
+            // A person took this call. What they agreed with the caller
+            // happened off our transcript, so the hangup salvage must not run:
+            // it would read the pre-transfer half ("boiler's out, can someone
+            // come tomorrow morning?"), invent an appointment nobody made, and
+            // text the caller "you're booked for tomorrow morning" on top of
+            // whatever the human actually told them.
+            call.saved = true;
+            db.saveCall(call.accountId, { sid, outcome: 'transferred', transcript: call.turns });
+          }
           res.writeHead(204); return res.end();
         }
         // Waterfall: this number didn't pick up — try the next one on the
@@ -2022,6 +2038,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // Read it once and put it in the diary before letting the call go.
           const snapshot = { ...call, turns: call.turns.slice() };
           voice.endCall(sid);
+          // `saved` means this call was already HANDLED — booked, a callback
+          // written, transferred to a person, or deliberately ended (spam,
+          // do-not-call). Salvage is for the ones that just stopped.
           if (!snapshot.saved && snapshot.turns.some((t) => t.who === 'caller')) {
             voice.salvageFromTranscript(snapshot).then((got) => {
               if (!got || !got.wantsCallback) return;
