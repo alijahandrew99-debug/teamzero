@@ -1083,7 +1083,7 @@ const server = http.createServer(async (req, res) => {
       const mod = new Date().toISOString().slice(0, 10);
       res.writeHead(200, { 'Content-Type': 'application/xml' });
       return res.end('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-        + ['/', '/about', '/automate-your-business-with-ai', '/signup', '/terms', '/privacy']
+        + ['/', '/about', '/automate-your-business-with-ai', '/partners', '/signup', '/terms', '/privacy']
           .map((u) => `<url><loc>${site}${u}</loc><lastmod>${mod}</lastmod></url>`).join('')
         + '</urlset>');
     }
@@ -2147,6 +2147,30 @@ Use it the way a good receptionist would: greet them by name if you have one, do
     // the landing page (demo number + Search Console tag).
     if (req.method === 'GET' && (p === '/about' || p === '/automate-your-business-with-ai')) {
       return html(res, gscMeta(withDemoTel(view(p === '/about' ? 'about.html' : 'guide-automate.html'))));
+    }
+    // Partner / affiliate recruitment page. /referral and /creators alias it.
+    if (req.method === 'GET' && (p === '/partners' || p === '/referral' || p === '/creators')) {
+      if (p !== '/partners') return redirect(res, '/partners');
+      return html(res, gscMeta(withDemoTel(view('partners.html'))));
+    }
+    // A partner application. Emails the owner via the system mailbox; nothing
+    // is auto-approved — a human reads it and sets the rep up by hand.
+    if (req.method === 'POST' && p === '/partners/apply') {
+      if (rateLimited(req, 'partners', 5, 60 * 60 * 1000)) return json(res, { error: 'Too many applications from here. Try again later, or email support@dawnpipe.com.' }, 429);
+      const f = parseJSON(await readBody(req));
+      const name = String(f.name || '').trim().slice(0, 80);
+      const email = String(f.email || '').trim().slice(0, 120);
+      const where = String(f.where || '').trim().slice(0, 200);
+      const note = String(f.note || '').trim().slice(0, 1000);
+      if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !where) return json(res, { error: 'Please fill in your name, a valid email, and where you will promote.' }, 400);
+      db.logActivity('system', { agent: 'PARTNER', msg: `Partner application: ${name} (${email}) — ${where}` });
+      const owner = (process.env.OWNER_EMAILS || 'support@dawnpipe.com').split(',')[0].trim();
+      const body = [`New Dawnpipe partner application.`, '', `Name:  ${name}`, `Email: ${email}`, `Where: ${where}`, note ? `Note:  ${note}` : '', '',
+        `Reply to them at ${email}. To set them up: Sales Reps tab -> add rep with their name + email (code is their name), mark the agreement + W-9 once signed, set a payout method.`].filter((x) => x !== '').join('\n');
+      mailer.send(owner, `Partner application: ${name}`, body).then((r) => {
+        if (!r.ok) db.logActivity('system', { agent: 'PARTNER', msg: `Partner application email FAILED: ${r.error}` });
+      }).catch(() => {});
+      return json(res, { ok: true });
     }
     // Legal pages — public, and required before Stripe will approve billing.
     if (req.method === 'GET' && (p === '/terms' || p === '/privacy')) {
