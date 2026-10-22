@@ -1193,3 +1193,76 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     inserted after `/about`) unlikely to collide, consistent with how this
     queue has triaged small additive `main` commits before (e.g. 2026-09-16
     item 20).
+    **Status (2026-10-22): still open, now 8 days unmerged.** Re-verified
+    `audit/2026-10-14-reset-invalidate-sessions` and
+    `keeper/2026-10-17-reset-invalidate-siblings` still merge clean against
+    current `main` (`df1af64`, unchanged since 10-20) — individually, and
+    together with the two new item 35 branches below (all four at once,
+    one combined `git merge --no-commit --no-ff` in an isolated worktree:
+    clean, no conflicts, `node --check` clean, suites pass on the merged
+    tree). Still the single highest-priority merge ask; the two
+    X-Forwarded-For findings still need Alijah's production measurement,
+    not a Keeper patch.
+
+35. **URGENT — merge `audit/2026-10-21-no-salvage-on-handled-calls`. A call
+    that already reached an ending can still get a fabricated booking, and
+    a confirmation text sent to a number that just opted out.** New
+    independent audit run (2026-10-21, lens (d) — voice state machine,
+    `ops/audit/2026-10-21.md` on `keeper-audit`), found after this shift's
+    10-21 report had already been written. `/voice/status`'s hangup-salvage
+    step re-reads the transcript with the model and books whatever the
+    caller asked for whenever `call.turns` has caller speech — but it never
+    checked whether the call had already been resolved another way. Four
+    endings were exposed to it: a robocall the tripwire or the model judged
+    spam (hung up on deliberately, not billed — now salvaged into an
+    invented appointment anyway); a caller who said stop/DNC mid-call
+    (opted out, suppressed — then texted a booking confirmation at the
+    exact number that just told us to stop contacting them); and a call a
+    human transferee actually picked up (whatever the human and caller
+    agreed to happened off our transcript entirely — salvage reads only
+    the pre-transfer half and invents something on top of it, texting the
+    caller a confirmation for an appointment nobody made and that may
+    contradict what the human just told them). Fixed with a single
+    `call.saved = true` flag set at each of the four ending sites
+    (spam tripwire, AI-judged spam, dnc action, dial-waterfall
+    `completed`/`answered`) and one added guard at the salvage call site:
+    `if (!snapshot.saved && ...)`. New suite `test-voicesalvage.js` drives
+    all five shapes end-to-end through real signed Twilio webhooks against
+    the running server (robocall, AI-judged spam, opt-out, transferred, and
+    the one case that SHOULD still salvage — a caller who just hung up
+    mid-sentence) with Twilio's REST API intercepted at `fetch` so no SMS
+    ever actually sends; confirmed all four bad cases stop inventing
+    appointments and stop texting, confirmed the genuine hang-up case still
+    gets rescued. Verified independently this shift: merges clean against
+    current `main` (`df1af64`) in an isolated worktree, `node --check`
+    clean, all eight suites (now 123 tests, up from 103) pass on the merged
+    tree, including the new `test-voicesalvage.js` (15/15) on its own.
+    Also verified it merges clean together with item 34's two branches and
+    item 35's own sibling fix below — no cross-branch conflicts across all
+    four. This is a correctness/trust bug with real customer-facing fallout
+    (a plumber's customer gets texted a fake appointment time; a number
+    that opted out gets contacted again) — recommend merging ahead of the
+    lower-severity backlog.
+
+    **Same audit, second branch — `audit/2026-10-21-voicemsg-blocking-mailer`.**
+    `/voice/msg` (the over-plan-limit message-taking path, a live Twilio
+    webhook) awaited the system mailbox notification before replying to the
+    caller. The audit measured the mail call at up to 20,042ms against a
+    stalled mail server (`lib/smtp.js` allows 20s to connect, 30s idle) —
+    well past Twilio's 15s webhook deadline, so the caller hears Twilio's
+    own "an application error has occurred" on exactly the path whose job
+    is to fail *gracefully* when the account is out of minutes. Fixed by
+    making the notification fire-and-forget (`.catch()` logging instead of
+    `await`/`try`), matching every other `notify` call elsewhere on the
+    voice webhooks — the message is already written to the diary before
+    the mail send starts, so nothing is lost by not waiting. New suite
+    `test-voicemsg.js` drives the real route against a TCP server that
+    accepts the connection and never replies (a true stall, not a timeout
+    stub) and asserts the webhook answers in well under 3s. Verified
+    independently this shift alongside the branch above: merges clean,
+    `node --check` clean, `test-voicemsg.js` (5/5) passes standalone and as
+    part of the full 123-test combined run. No behavior change for a
+    healthy mail server; only changes the stalled-mailer case from
+    "caller hears an error" to "caller hears the message was taken."
+    Recommend merging together with the branch above — both are small,
+    single-purpose, same audit run, no overlap in the lines they touch.
