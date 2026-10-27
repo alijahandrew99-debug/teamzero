@@ -8,18 +8,32 @@ const auth = require('./lib/auth');
 const stripe = require('./lib/stripe');
 const agents = require('./lib/agents');
 const smtp = require('./lib/smtp');
+// The actual sending config for an account's outreach. "Use Dawnpipe to send"
+// (smtp.useDawnpipe) routes through the system mailbox — zero customer setup,
+// no credentials to enter — while keeping the owner's chosen from-name. A
+// customer who connected their own Gmail uses that directly.
+function outboundSmtpCfg(account) {
+  const s = (account && account.smtp) || {};
+  if (s.useDawnpipe && mailer.enabled()) {
+    const sys = mailer.systemCfg();
+    return { ...sys, fromName: s.fromName || sys.fromName };
+  }
+  return s;
+}
 const plans = require('./lib/plans');
 const mailer = require('./lib/mailer');
 const emailApi = require('./lib/emailapi');
 const dnsauth = require('./lib/dnsauth');
 const sending = require('./lib/sending');
 const suppress = require('./lib/suppression');
+const spam = require('./lib/spam');
 const voice = require('./lib/voice');
 const numbers = require('./lib/numbers');
 const stats = require('./lib/stats');
 const hooks = require('./lib/hooks');
 const spend = require('./lib/spend');
 const reps = require('./lib/reps');
+const assistant = require('./lib/assistant');
 const notify = require('./lib/notify');
 const memory = require('./lib/leadmemory');
 const { aiMode } = require('./lib/ai');
@@ -59,16 +73,26 @@ function redirect(res, location, cookie) {
 const MAX_BODY = 2 * 1024 * 1024;   // 2MB — generous for a CSV paste, fatal to a flood
 function readBody(req) {
   return new Promise((resolve) => {
-    let b = '';
+    // Chunks are kept as Buffers and decoded ONCE, at the end. `b += chunk`
+    // decoded every chunk on its own, so a multi-byte UTF-8 character that
+    // straddled two TCP reads -- ordinary for any body past about 1400 bytes --
+    // came out as replacement characters. That mangles an accented name in a
+    // CSV import, and it changes the exact bytes the Stripe webhook signature
+    // is computed over, so a genuine payment event verifies as a forgery and
+    // is dropped with a 400.
+    const chunks = [];
+    let len = 0;
     let over = false;
     req.on('data', (d) => {
       if (over) return;
-      b += d;
+      const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
+      chunks.push(buf);
+      len += buf.length;
       // Unbounded buffering meant any unauthenticated POST could grow the heap
       // until the process died, taking every tenant down with it.
-      if (b.length > MAX_BODY) { over = true; b = ''; try { req.destroy(); } catch {} resolve(''); }
+      if (len > MAX_BODY) { over = true; chunks.length = 0; try { req.destroy(); } catch {} resolve(''); }
     });
-    req.on('end', () => { if (!over) resolve(b); });
+    req.on('end', () => { if (!over) resolve(Buffer.concat(chunks).toString('utf8')); });
     req.on('error', () => { if (!over) { over = true; resolve(''); } });
   });
 }
@@ -299,9 +323,13 @@ function jobView(job) {
 // lives here and nothing else can place one.
 const callback = require('./lib/callback');
 async function placeCallback(rec, { by = 'system' } = {}) {
-  const account = db.getAccount(rec.accountId);
+  let account = db.getAccount(rec.accountId);
   if (!account) return { ok: false, reason: 'No account.' };
-  const vc = account.voice || {};
+  // The call-back belongs to a BUSINESS: dial from that business's number
+  // with that business's script, not whichever config the account had first.
+  const cbProfile = db.getProfile(rec.accountId, rec.profileId) || db.getProfiles(rec.accountId)[0];
+  const vc = db.profileVoice(account, cbProfile);
+  account = { ...account, voice: vc };
   const owner = stripe.isOwner(account);
   // 1. Consent / basis.
   const allowed = callback.callbackAllowed(rec);
@@ -328,7 +356,7 @@ async function placeCallback(rec, { by = 'system' } = {}) {
     db.updateCallback(rec.accountId, rec.id, { status: 'queued', dueAt, note: hours.reason });
     return { ok: false, queued: true, dueAt, reason: hours.reason };
   }
-  const profile = db.getProfile(rec.accountId, vc.profileId) || db.getProfiles(rec.accountId)[0];
+  const profile = cbProfile;
   if (!profile) { db.updateCallback(rec.accountId, rec.id, { status: 'queued', note: 'No business profile yet.' }); return { ok: false, reason: 'No business profile yet.' }; }
   try {
     const call = await voice.placeCall({ to, from, answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
@@ -357,6 +385,25 @@ async function runCallbackQueue() {
   }
 }
 setInterval(() => { runCallbackQueue().catch(() => {}); }, 60 * 1000);
+
+// A call can be orphaned mid-flight -- a deploy restarts the process, the
+// in-memory call map empties, and the status callback finds nothing to
+// complete -- leaving a row frozen at "in-progress" forever. Twilio ended
+// the real call long ago; only our label is stuck. Runs whenever an
+// account's calls tab loads (below) AND on a timer, so an account that
+// never opens the tab after a bad deploy isn't left showing a fake live
+// call indefinitely.
+const LIVE_CALL_STATUSES = ['queued', 'ringing', 'initiated', 'in-progress'];
+function sweepStuckCalls(accountId) {
+  for (const c of db.getCalls(accountId, 50)) {
+    if (LIVE_CALL_STATUSES.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
+      db.saveCall(accountId, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
+    }
+  }
+}
+setInterval(() => {
+  for (const a of db.allAccounts()) { try { sweepStuckCalls(a.id); } catch {} }
+}, 30 * 60 * 1000);
 
 // ---- who may run automated outbound calling ----
 // Two separate questions, and conflating them produced a dead tab with no way
@@ -426,8 +473,19 @@ function startSendJob(account, profileId) {
   const runningJob = running && sendJobs.get(running);
   // A lock pointing at a job that is gone or finished is stale — clear it.
   if (running && (!runningJob || runningJob.status !== 'running')) activeSends.delete(account.id);
-  // Also treat a job with no progress for 10 minutes as dead rather than live.
-  if (runningJob && runningJob.status === 'running' && Date.now() - (runningJob.startedAt || 0) > 30 * 60 * 1000) {
+  // Dead means NO PROGRESS, not merely old. This measured total age against 30
+  // minutes, and a healthy run is far older than that — the pacing gap alone is
+  // 3-8 minutes per email, so anything past about six emails qualified. A
+  // second click then force-expired a perfectly live job, released the lock,
+  // and started a concurrent run over the same still-approved items: exactly
+  // the double-send the lock exists to prevent. Longest legitimate gap between
+  // two iterations is one pacing sleep (max 450s) plus one send (max 90s).
+  if (runningJob && runningJob.status === 'running'
+      && Date.now() - (runningJob.lastProgressAt || runningJob.startedAt || 0) > 30 * 60 * 1000) {
+    // Tell the old loop to stop as well. Marking the job errored only relabels
+    // it — the async loop reads stopRequested, and without this it keeps
+    // sending alongside the replacement job.
+    runningJob.stopRequested = true;
     runningJob.status = 'error'; runningJob.error = 'Timed out'; activeSends.delete(account.id);
   }
   if (running && sendJobs.get(running) && sendJobs.get(running).status === 'running') {
@@ -438,7 +496,7 @@ function startSendJob(account, profileId) {
   const id = db.uid();
   activeSends.set(account.id, id);
   const items = db.getQueue(account.id, profileId).filter((q) => q.status === 'approved');
-  const cfg = account.smtp || {};
+  const cfg = outboundSmtpCfg(account);
   const todayStr = db.today();
   const sentToday = (account.sentToday && account.sentToday.date === todayStr) ? account.sentToday.count : 0;
   // Daily ceiling is the LOWER of the user's cap and today's warmup allowance —
@@ -461,7 +519,7 @@ function startSendJob(account, profileId) {
     approved: items.length, capReason,
     warmupCap: Number.isFinite(warmAllow) ? warmAllow : null,
     stopRequested: false,
-    startedAt: Date.now(), error: null, lastError: null };
+    startedAt: Date.now(), lastProgressAt: Date.now(), error: null, lastError: null };
   sendJobs.set(id, job);
 
   (async () => {
@@ -488,7 +546,21 @@ function startSendJob(account, profileId) {
       const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
       let count = sentToday;
       for (const it of items.slice(0, allowed)) {
+        job.lastProgressAt = Date.now();
         try {
+          // `items` is a snapshot taken when the job started, and this loop runs
+          // for hours. Re-read the item before sending: if it is no longer
+          // approved it has already gone out (another run), been rejected, or
+          // been rewritten by "adjust drafts" — which resets it to pending, and
+          // sending the snapshot would put the OLD copy on the wire and mark it
+          // sent. Nobody gets the same email twice off a stale snapshot.
+          const live = db.getQueue(account.id, profileId).find((q) => q.id === it.id);
+          if (!live || live.status !== 'approved') {
+            db.logActivity(account.id, { agent: 'SEND', profileId, msg: `Skipped ${it.to} — the draft changed since this run started (${live ? live.status : 'deleted'})` });
+            job.changed = (job.changed || 0) + 1;
+            job.done++;
+            continue;
+          }
           // Hard block: never SMTP-send to a guessed/invalid address, even if it
           // slipped into the queue before the no-guess guarantee. Each bounce
           // damages the user's sender reputation.
@@ -617,7 +689,7 @@ function sendJobView(j) {
   }
   return { id: j.id, status: j.status, done: j.done, total: j.total, sent: j.sent, failed: j.failed,
     skipped: j.skipped, deferred: j.deferred || 0, suppressed: j.suppressed || 0,
-    blocked: j.blocked || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
+    blocked: j.blocked || 0, changed: j.changed || 0, note: j.note || '', warmupCap: j.warmupCap ?? null,
     // Why is it sending 8 when I approved 50? The answer travels with the job.
     approved: j.approved || 0, capReason: j.capReason || '', stopping: !!j.stopRequested && j.status === 'running',
     etaMs, elapsedMs: elapsed, error: j.error, lastError: j.lastError };
@@ -694,9 +766,14 @@ setInterval(checkSchedules, 60 * 1000);
 const RECLAIM_AFTER_DAYS = 21;
 async function reclaimCancelledNumbers() {
   for (const a of db.allAccounts()) {
-    const v = a.voice || {};
-    if (!v.numberSid) continue;
     if (a.subStatus !== 'canceled' && a.subStatus !== 'incomplete_expired') continue;
+    // Numbers live per business now, plus the possible legacy account-level
+    // one. A cancelled account gives back every line it rents.
+    const held = [];
+    const av = a.voice || {};
+    if (av.numberSid) held.push({ kind: 'account', v: av });
+    for (const pr of db.getProfiles(a.id)) if (pr.voice && pr.voice.numberSid) held.push({ kind: 'profile', profileId: pr.id, v: pr.voice });
+    if (!held.length) continue;
     const since = Date.parse(a.canceledAt || '') || 0;
     if (!since) { db.updateAccount(a.id, { canceledAt: new Date().toISOString() }); continue; }
     // A trial that never converted gets its number back fast: they never paid,
@@ -704,12 +781,15 @@ async function reclaimCancelledNumbers() {
     // A real customer who cancels keeps the grace period in case they return.
     const graceDays = a.everPaid ? RECLAIM_AFTER_DAYS : 2;
     if (Date.now() - since < graceDays * 24 * 60 * 60 * 1000) continue;
-    try {
-      await numbers.release(v.numberSid);
-      db.updateAccount(a.id, { voice: { ...v, number: '', numberSid: '', enabled: false } });
-      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Phone number ${v.number} released after ${RECLAIM_AFTER_DAYS} days cancelled` });
-    } catch (e) {
-      db.logActivity(a.id, { agent: 'SYSTEM', msg: `Could not release ${v.number}: ${e.message}` });
+    for (const h of held) {
+      try {
+        await numbers.release(h.v.numberSid);
+        if (h.kind === 'account') db.updateAccount(a.id, { voice: { ...h.v, number: '', numberSid: '', enabled: false } });
+        else db.saveProfileVoice(a.id, h.profileId, { number: '', numberSid: '', enabled: false });
+        db.logActivity(a.id, { agent: 'SYSTEM', msg: `Phone number ${h.v.number} released after ${RECLAIM_AFTER_DAYS} days cancelled` });
+      } catch (e) {
+        db.logActivity(a.id, { agent: 'SYSTEM', msg: `Could not release ${h.v.number}: ${e.message}` });
+      }
     }
   }
 }
@@ -731,7 +811,7 @@ async function sendMonthlyRecaps() {
     if (!['active', 'trialing', 'past_due'].includes(a.subStatus) && !stripe.isOwner(a)) continue;
     try {
       const prof = db.getProfile(a.id, (a.voice || {}).profileId) || db.getProfiles(a.id)[0];
-      const s = stats.summary(a, voice.tzFor(a)).lastMonth;
+      const s = stats.summary({ ...a, voice: db.profileVoice(a, prof) }, voice.tzFor({ ...a, voice: db.profileVoice(a, prof) })).lastMonth;
       const tier = plans.TIERS[a.tier];
       const body = stats.recapEmail(a, (prof && prof.name) || 'your business', s, tier ? tier.price : 0);
       const monthName = new Date(now.getFullYear(), now.getMonth() - 1, 1).toLocaleString('en-US', { month: 'long' });
@@ -775,6 +855,14 @@ function canManageBilling(account) {
   return stripe.isPaid(account) || stripe.DUNNING.includes(account.subStatus);
 }
 
+// Google Search Console ownership tag. Set GOOGLE_SITE_VERIFICATION in the
+// environment to the content value GSC gives you ("google-site-verification:
+// <value>" — just the value part) and every marketing page carries the meta
+// tag. No env var, no tag — the placeholder is stripped either way.
+function gscMeta(page) {
+  const v = (process.env.GOOGLE_SITE_VERIFICATION || '').trim();
+  return page.split('__GSC_META__').join(v ? `<meta name="google-site-verification" content="${voice.esc(v)}">` : '');
+}
 function withDemoTel(page) {
   const { tel, pretty } = demoTel();
   // No line provisioned (or mid-swap): point the phone CTAs at signup instead
@@ -817,8 +905,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && p === '/health') {
     let ai = 'unknown';
     try { ai = aiMode(); } catch {}
+    // `mail` = is the SYSTEM mailbox configured (password resets, digests).
+    // Configured-or-not only, never credentials — without this flag, a dead
+    // reset-email path is invisible from outside: /forgot shows the same
+    // "link is on its way" either way (deliberately, so it can't be used to
+    // probe which emails have accounts).
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ ok: true, ai, uptime: Math.round(process.uptime()), build: BUILD_ID }));
+    return res.end(JSON.stringify({ ok: true, ai, mail: mailer.enabled(), uptime: Math.round(process.uptime()), build: BUILD_ID }));
   }
 
   if (process.env.MAINTENANCE === '1'
@@ -849,9 +942,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/favicon.svg') {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
-      // Static fallback of the moon/sleeper/ringing-phone scene (favicon.js is
-      // the animated version) for contexts that can't run JS.
-      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="13" fill="#151228"/><circle cx="46" cy="17" r="10" fill="#f0c860"/><circle cx="41.5" cy="14" r="9.5" fill="#151228"/><rect x="6" y="42" width="52" height="17" rx="5" fill="#2a2547"/><rect x="9" y="40" width="15" height="10" rx="4" fill="#f4f1ea"/><circle cx="21" cy="44" r="6.2" fill="#e8b48f"/><rect x="26" y="43" width="31" height="13" rx="5" fill="#6b5ea8"/><g transform="rotate(12 45 34)"><rect x="37.5" y="28.5" width="15" height="11" rx="3.5" fill="#c02a1b"/><rect x="39.5" y="30.5" width="11" height="7" rx="2" fill="#ffe9a8"/></g></svg>`);
+      // Static brand mark: the red dawn (rising sun on the horizon), matching
+      // favicon.ico and the apple-touch-icon. favicon.js still animates the
+      // moon/sleeper scene in browser tabs; this is what no-JS contexts,
+      // search engines and link previews see.
+      return res.end(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#c02a1b"/><path d="M138 298a118 118 0 0 1 236 0z" fill="#fbfaf6"/><rect x="85" y="298" width="342" height="44" rx="22" fill="#fbfaf6"/></svg>`);
     }
     if (req.method === 'GET' && (p === '/og.png' || p === '/apple-touch-icon.png')) {
       try {
@@ -868,11 +963,11 @@ const server = http.createServer(async (req, res) => {
       const slug = p.slice(3).toLowerCase();
       const acct = callback.accountByFormSlug(slug);
       if (!acct) return html(res, '<p style="font-family:system-ui;padding:40px">This request form is not active.</p>', 404);
-      const vcfg = acct.voice || {};
-      const prof = db.getProfile(acct.id, vcfg.profileId) || db.getProfiles(acct.id)[0] || {};
+      const prof = db.getProfile(acct.id, (acct.voice || {}).profileId) || db.getProfiles(acct.id)[0] || {};
+      const vcfg = db.profileVoice(acct, prof.id ? prof : null);
       const biz = prof.name || 'us';
       const agentName = vcfg.agentName || 'Our assistant';
-      const tz = voice.tzFor(acct);
+      const tz = voice.tzFor({ ...acct, voice: vcfg });
       const tzLabel = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find((x) => x.type === 'timeZoneName').value; } catch { return ''; } })();
       const render = ({ err = '', done = '', name = '', phone = '', need = '' } = {}) => {
         const consent = callback.consentText(biz, phone);
@@ -940,6 +1035,34 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('User-agent: *\nAllow: /\nDisallow: /app\nDisallow: /api/\nDisallow: /u/\nDisallow: /voice/\nSitemap: https://dawnpipe.com/sitemap.xml\n');
     }
+    // llms.txt: the emerging convention AI crawlers read for a plain-language
+    // description of what a site IS. Costs nothing, and it is exactly the
+    // disambiguation problem we have — AI systems currently explain the brand
+    // query as a typo for a car downpipe. Facts only, no puffery: an AI that
+    // catches a site exaggerating discounts everything else it says.
+    if (req.method === 'GET' && p === '/llms.txt') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+      return res.end([
+        '# Dawnpipe',
+        '',
+        '> Dawnpipe (dawnpipe.com) is an AI receptionist and sales platform for small service businesses in the United States. It answers business phone calls 24/7, books appointments into the calendar, texts back missed callers, finds new customers with verified email addresses, and drafts follow-up outreach that the owner reviews before anything sends. Note: "Dawnpipe" is this software product — it is not a car exhaust downpipe.',
+        '',
+        'Built and run by Alijah Skinner, Illinois, USA. Contact: support@dawnpipe.com.',
+        '',
+        'Key facts:',
+        '- Every call opens by disclosing it is an AI receptionist; recorded lines are disclosed.',
+        '- No AI cold calling: outbound AI calls go only to people who asked to be called back, with consent stored (TCPA).',
+        '- Plans from $99 to $1,499/month, 7-day free trial, cancel in one click, no overage charges.',
+        '- Payments processed by Stripe.',
+        '',
+        '## Pages',
+        '- [Home](https://dawnpipe.com/): product overview, plans, live demo phone number answered by the AI itself',
+        '- [About](https://dawnpipe.com/about): who runs Dawnpipe, contact details, billing and compliance commitments',
+        '- [Guide: How to Automate Your Business with AI](https://dawnpipe.com/automate-your-business-with-ai): practical guide for small business owners',
+        '- [Terms](https://dawnpipe.com/terms) · [Privacy](https://dawnpipe.com/privacy)',
+        '',
+      ].join('\n'));
+    }
     // Public plan catalogue: names, prices, what you get, and whether each
     // one can be bought right now. Nothing here is secret (it is the pricing
     // page as JSON) and it is how we verify from outside that the live plans
@@ -955,9 +1078,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && p === '/sitemap.xml') {
       const site = 'https://dawnpipe.com';
+      // lastmod from the deploy: any page can have changed with a release, and
+      // a moving lastmod nudges recrawls without lying about specific pages.
+      const mod = new Date().toISOString().slice(0, 10);
       res.writeHead(200, { 'Content-Type': 'application/xml' });
       return res.end('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-        + ['/', '/signup', '/terms', '/privacy'].map((u) => `<url><loc>${site}${u}</loc></url>`).join('')
+        + ['/', '/about', '/automate-your-business-with-ai', '/partners', '/signup', '/terms', '/privacy']
+          .map((u) => `<url><loc>${site}${u}</loc><lastmod>${mod}</lastmod></url>`).join('')
         + '</urlset>');
     }
 
@@ -994,7 +1121,10 @@ const server = http.createServer(async (req, res) => {
       }
       const twimlReply = (text) => { res.writeHead(200, { 'Content-Type': 'text/xml' }); return res.end(`<?xml version="1.0" encoding="UTF-8"?><Response>${text ? `<Message>${voice.esc(text)}</Message>` : ''}</Response>`); };
       const from = params.From || '', to = params.To || '', body = String(params.Body || '').trim();
-      const account = db.accountByVoiceNumber(to);
+      // The texted number tells us which BUSINESS this is — script, agent name
+      // and booking slots all come from that business, not the account default.
+      const route = db.routeByVoiceNumber(to);
+      const account = route ? { ...route.account, voice: db.profileVoice(route.account, route.profile) } : null;
       if (!account || !from) return twimlReply('');
       // Opt-out words are law, not a preference. Handle before anything else.
       if (/^\s*(stop|stopall|unsubscribe|cancel|end|quit)\s*$/i.test(body)) {
@@ -1009,7 +1139,7 @@ const server = http.createServer(async (req, res) => {
       if (suppress.isPhoneSuppressed(account.id, from).blocked) return twimlReply('');
       const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
       if (!vAllow.ok || account.subStatus === 'canceled') return twimlReply('');
-      const profile = db.getProfile(account.id, (account.voice || {}).profileId) || db.getProfiles(account.id)[0];
+      const profile = route.profile || db.getProfiles(account.id)[0];
       if (!profile) return twimlReply('');
       // "YES" to a call-back offer. The missed-call text says "reply YES and I
       // will call you right back"; this reply IS the consent -- their own words,
@@ -1085,9 +1215,15 @@ const server = http.createServer(async (req, res) => {
 
       // ---- inbound: someone rang the number ----
       if (p === '/voice/incoming') {
-        const account = db.accountByVoiceNumber(params.To || '');
-        if (!account) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
-        const vcfg = account.voice || {};
+        // The dialled number resolves to a BUSINESS, not just an account —
+        // each business has its own line, script and settings. The account
+        // object is re-pointed at that business's voice config so everything
+        // downstream (call handlers, billing, transfer chains) reads the
+        // right one without knowing the difference.
+        const route = db.routeByVoiceNumber(params.To || '');
+        if (!route) return xml(res, voice.sayAndHangup("Thanks for calling - this line isn't set up yet. Sorry about that."));
+        const vcfg = db.profileVoice(route.account, route.profile);
+        const account = { ...route.account, voice: vcfg };
         // Blocked callers (the owner's own list, plus anyone who told us to
         // stop) are rejected before a single AI token or plan minute is spent.
         // <Reject> costs nothing and hangs up without answering.
@@ -1112,7 +1248,7 @@ const server = http.createServer(async (req, res) => {
           res.writeHead(200, { 'Content-Type': 'text/xml' });
           return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>');
         }
-        const profile = db.getProfile(account.id, vcfg.profileId) || db.getProfiles(account.id)[0];
+        const profile = route.profile || db.getProfiles(account.id)[0];
         if (!profile) return xml(res, voice.sayAndHangup('Thanks for calling. Goodbye.'));
         // A cancelled account is not the same as one over its limit. Taking a
         // message for a company that is no longer a customer promises a
@@ -1138,6 +1274,33 @@ const server = http.createServer(async (req, res) => {
           ));
         }
         const agentName = vcfg.agentName || 'Sarah';
+        // SPAM SCREEN. Suspicious signals — no caller ID, a caller ID the
+        // carrier says failed verification, or a number already on a strike —
+        // get one question before the real conversation starts. A human
+        // answers it and flows straight into the normal call; a robocall
+        // plays a recording or dead air and gets hung up on in /voice/turn.
+        // Known callers (history or an existing lead) are never screened:
+        // being established outranks any signal.
+        if (vcfg.spamFilter !== false) {
+          const sig = spam.signalCheck(params);
+          const priorStrikes = spam.strikes(account.id, params.From || '');
+          const known = stats.callerHistory(account.id, params.From || '', suppress.phoneKey);
+          if ((sig.suspect || priorStrikes > 0) && !known) {
+            const esScr = voice.langFor(account) === 'es-US';
+            const scrProfile = route.profile || db.getProfiles(account.id)[0];
+            const scrLine = spam.screenLine((scrProfile && scrProfile.name) || 'us', agentName, esScr, vcfg.record !== false);
+            const scrCall = voice.startCall(sid, { accountId: account.id, account, profile: scrProfile, direction: 'inbound',
+              from: params.From || '', to: params.To || '', lead: null, leadBrief: '', callerName: '' });
+            scrCall.screening = sig.suspect ? sig.reason : 'prior spam strike';
+            scrCall.turns.push({ who: 'agent', text: scrLine });
+            voice.warmCache(scrCall).catch(() => {});
+            db.saveCall(account.id, { sid, direction: 'inbound', from: params.From || '', to: params.To || '',
+              profileId: (scrProfile && scrProfile.id) || '', status: 'in-progress', transcript: [] });
+            db.logActivity(account.id, { agent: 'VOICE', msg: `Screening call from ${params.From || 'unknown'} (${scrCall.screening}) before connecting` });
+            if (vcfg.record !== false) voice.startRecording(sid, base + '/voice/recording').catch(() => {});
+            return xml(res, voice.sayAndGather(scrLine, base + '/voice/turn', voice.voiceFor(account), voice.hintsFor(scrProfile, account)));
+          }
+        }
         // Transparency is mandatory: the caller is told it is an AI up front.
         // The AI + transcription disclosure is a fixed prefix the customer
         // CANNOT remove. A custom greeting used to replace the whole line and
@@ -1326,6 +1489,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             }
           }
           call.silence = (call.silence || 0) + 1;
+          // A call still in SCREENING gets a shorter leash: the question was
+          // "what's this call about?", and two silent gathers after it is a
+          // recording that already finished, or dead air. One strike; three
+          // strikes and the number is rejected before it can ring again.
+          // Real humans hesitate once — they get the same gentle nudge below.
+          if (call.screening && call.silence >= 2) {
+            call.spamCall = true;   // already struck here — /voice/status must not strike it again as dead air
+            spam.strike(call.accountId, call.from, 1, 'failed screening: ' + call.screening);
+            db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'screened-out', transcript: call.turns });
+            db.logActivity(call.accountId, { agent: 'VOICE', msg: `Screened out ${call.from || 'unknown caller'} (${call.screening}, never spoke) — not billed` });
+            return xml(res, voice.sayAndHangup("I'll let you go. Call back anytime.", voice.voiceFor(call.account)));
+          }
           // Three strikes, not two: an empty gather usually means they were
           // still thinking, not that the line is dead, and hanging up on
           // someone mid-thought is worse than waiting one more beat.
@@ -1343,6 +1518,24 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
         call.silence = 0;
         call.turns.push({ who: 'caller', text: heard });
+        // ROBOCALL TRIPWIRE. Unambiguous recorded-pitch phrases ("press 1",
+        // "your car warranty", "final notice") hang up right here, before a
+        // single AI token is spent. Two points: one detected robocall plus
+        // any other strike blocks the number outright. The call is flagged so
+        // /voice/status does not bill the customer's minutes for it — the
+        // recording "spoke", but nobody real did.
+        if (call.direction === 'inbound' && (call.account.voice || {}).spamFilter !== false
+            && spam.looksLikeRobocall(heard)) {
+          call.spamCall = true;
+          spam.strike(call.accountId, call.from, 2, 'robocall phrases: "' + heard.slice(0, 60) + '"');
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'spam', transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `Hung up on a robocall from ${call.from || 'unknown'} ("${heard.slice(0, 80)}") — not billed` });
+          return xml(res, voice.sayAndHangup("This line doesn't take solicitations. Bye now.", voice.voiceFor(call.account)));
+        }
+        // They answered the screening question like a person — screening over,
+        // and the conversation continues as if it never happened: their answer
+        // is already the first caller turn, so the AI just responds to it.
+        if (call.screening) call.screening = null;
         // They engaged. That outranks anything a drip campaign can tell us.
         if (!call.markedWarm && call.lead) {
           call.markedWarm = true;
@@ -1443,6 +1636,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         call.turns.push({ who: 'agent', text: out.say });
         db.saveCall(call.accountId, { sid, transcript: call.turns });
 
+        if (out.action === 'spam' && call.direction === 'inbound') {
+          // The model judged this a robocall or cold solicitation — it has the
+          // whole conversation, so it catches the pitches the phrase list
+          // can't. Same consequences as the tripwire: strike, no billing.
+          call.spamCall = true;
+          spam.strike(call.accountId, call.from, 2, 'AI judged it spam');
+          db.saveCall(call.accountId, { sid, status: 'completed', outcome: 'spam', transcript: call.turns });
+          db.logActivity(call.accountId, { agent: 'VOICE', msg: `AI hung up on spam from ${call.from || 'unknown'} — not billed` });
+          return xml(res, voice.sayAndHangup(out.say || "This line doesn't take solicitations. Bye now.", voice.voiceFor(call.account)));
+        }
         if (out.action === 'dnc') {
           const num = call.direction === 'inbound' ? params.From : call.to;
           suppress.suppressPhone(call.accountId, num, 'unsubscribe', { note: 'do-not-call, asked on a call' });
@@ -1464,7 +1667,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // with the phone in the truck, a $1,500 emergency became a message
           // read at 7am. The on-call list falls back to transferTo so existing
           // customers keep working unchanged.
-          const chain = (Array.isArray(vc.onCall) && vc.onCall.length ? vc.onCall : [vc.transferTo]).map((n) => voice.toE164(n)).filter(Boolean);
+          // Night flips the order: the on-call list rings before the owner's
+          // number between 8pm and 8am, so the 2am burst pipe wakes the tech
+          // who is on duty instead of ringing out on a sleeping owner.
+          const night = voice.isNightFor(call.account);
+          const chain = voice.transferChain(vc, night);
+          if (night && chain.length > 1) db.logActivity(call.accountId, { agent: 'VOICE', msg: 'After-hours: trying the on-call list before the main transfer number' });
           if (!chain.length) {
             // No transfer number configured. On a CUSTOMER's line that is a
             // take-a-message moment. On the DEMO line it was the single worst
@@ -1561,6 +1769,9 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             voice.voiceFor(call.account),
             'Someone will be in touch. Thanks for your time, and have a good one. Bye now.'));
         }
+        // "spam" on a call WE placed makes no sense — treat it as a normal end
+        // so the model can never leave an outbound call hanging in continue.
+        if (out.action === 'spam') out.action = 'end';
         if (out.action === 'end') {
           // A call that ended without a slot being agreed is NOT nothing. The
           // agent routinely takes a name and a number and says "someone will
@@ -1615,10 +1826,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // emailed — including WHY, so they can top up instead of quietly
       // bleeding jobs.
       if (p === '/voice/msg') {
-        const acct = db.accountByVoiceNumber(params.To || '');
+        const msgRoute = db.routeByVoiceNumber(params.To || '');
+        const acct = msgRoute && msgRoute.account;
         const heard = String(params.SpeechResult || params.Digits || '').trim();
         if (acct) {
-          const prof = db.getProfile(acct.id, (acct.voice || {}).profileId) || db.getProfiles(acct.id)[0];
+          const prof = msgRoute.profile || db.getProfiles(acct.id)[0];
           const from = params.From || '';
           try {
             db.addAppointment(acct.id, {
@@ -1697,11 +1909,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // A deploy mid-call wipes the in-memory record; bill from the persisted
         // one so those minutes still count against the plan.
         if (!call && sid) {
-          const owner2 = db.accountByCallSid(sid);
+          // Twilio delivers status callbacks AT LEAST once, so a completed call
+          // can arrive here twice: a retry after our ack timed out, or a redeploy
+          // that killed the first response after it had already billed. This
+          // branch was written for "a deploy wiped the in-memory call", but it is
+          // also exactly where a retry lands once endCall() has cleared the call
+          // — so without a record of what this SID was charged it billed the whole
+          // call a second time, burning a paying customer's included minutes and
+          // dropping their line to message-only early.
+          const prior = db.callBySid(sid);
+          const owner2 = prior ? db.getAccount(prior.accountId) : null;
           if (owner2) {
             const dur0 = Number(params.CallDuration || 0);
-            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0 });
-            plans.consumeVoiceMinutes(owner2, Math.ceil(dur0 / 60), stripe.isOwner(owner2));
+            const mins = Math.ceil(dur0 / 60);
+            const already = Number(prior.billedMin || 0);
+            db.saveCall(owner2.id, { sid, status: params.CallStatus || 'completed', durationSec: dur0,
+              billedMin: Math.max(already, mins) });
+            // Charge the DIFFERENCE: an identical retry costs nothing, while a
+            // later callback reporting a longer call still tops the minutes up.
+            if (mins > already) plans.consumeVoiceMinutes(owner2, mins - already, stripe.isOwner(owner2));
           }
           res.writeHead(204); return res.end();
         }
@@ -1714,8 +1940,24 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // spam from billing, and it is the right thing to do regardless.
           const callerSpoke = (call.turns || []).some((t) => t.who === 'caller' && String(t.text || '').trim());
           const acctForBill = db.getAccount(call.accountId);
-          if (acctForBill && callerSpoke) plans.consumeVoiceMinutes(acctForBill, Math.ceil(dur / 60), stripe.isOwner(acctForBill));
+          // A call flagged spam had "speech" — the robocall's recording — but
+          // nobody real. It is never billed against the plan.
+          // Same at-least-once guard as the fallback above: bill only what this
+          // SID has not been billed for yet, so a duplicate delivery is free.
+          const minsToBill = (callerSpoke && !call.spamCall) ? Math.ceil(dur / 60) : 0;
+          const alreadyBilled = Number((db.callBySid(sid) || {}).billedMin || 0);
+          if (acctForBill && minsToBill > alreadyBilled) plans.consumeVoiceMinutes(acctForBill, minsToBill - alreadyBilled, stripe.isOwner(acctForBill));
           if (!callerSpoke && dur > 0) db.logActivity(call.accountId, { agent: 'VOICE', msg: `Not billed: nobody spoke (${dur}s, likely spam or a dropped call)` });
+          // Dead air on an inbound call is a spam signal: robocall dialers
+          // probe lines and hang up. One point (block needs three) so a real
+          // customer who hung up on the greeting once or twice is never
+          // touched, and their missed-call text still goes out below.
+          if (call.direction === 'inbound' && !callerSpoke && dur >= 5 && !call.spamCall
+              && (call.account.voice || {}).spamFilter !== false) {
+            const ownLine = [(call.account.voice || {}).transferTo, ...(Array.isArray((call.account.voice || {}).onCall) ? (call.account.voice || {}).onCall : [])]
+              .some((n) => n && suppress.phoneKey(n) === suppress.phoneKey(params.From || call.from || ''));
+            if (!ownLine) spam.strike(call.accountId, params.From || call.from || '', 1, `dead air (${dur}s, no speech)`);
+          }
           // MISSED-CALL TEXT-BACK. A real person who hung up before the agent
           // got a word in -- gave up on the greeting, bad signal, changed their
           // mind -- is still a lead, and the highest-ROI capture in trades is
@@ -1730,7 +1972,10 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             const mine = vc.number || (stripe.isOwner(call.account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
             const isOwnLine = [vc.transferTo, ...(Array.isArray(vc.onCall) ? vc.onCall : [])].some((n) => n && suppress.phoneKey(n) === suppress.phoneKey(from));
             const bookedOrCallback = ['booked', 'callback', 'transferred'].includes(((db.getCalls(call.accountId, 50).find((c) => c.sid === sid) || {}).outcome) || '');
+            // call.screening still set means they never answered the screen —
+            // a suspected spoofed or anonymous number gets no text from us.
             if (call.direction === 'inbound' && !callerSpoke && dur >= 5 && mine && from && !isOwnLine && !bookedOrCallback
+                && !call.screening && !call.spamCall
                 && vc.textBack !== false && !suppress.isPhoneSuppressed(call.accountId, from).blocked
                 && !stats.textedToday(call.accountId, from)) {
               const biz = (call.profile && call.profile.name) || 'us';
@@ -1759,6 +2004,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           db.saveCall(call.accountId, { sid, status: params.CallStatus || 'completed',
             durationSec: dur, transcript: call.turns,
             turns: billableTurns,
+            billedMin: Math.max(alreadyBilled, minsToBill),
             estCost: voice.estimateCost({ durationSec: dur, turns: billableTurns,
               chars: call.turns.filter((t) => t.who !== 'caller' && !/^\[system/.test(t.text || '')).reduce((n, t) => n + (t.text || '').length, 0),
               direction: call.direction === 'outbound' ? 'outbound' : 'inbound',
@@ -1895,7 +2141,36 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         .split('__COMPLETE_MINUTES__').join(COMP.voiceMinutes.toLocaleString())
         .split('__COMPLETE_LEADS__').join(COMP.leads.toLocaleString());
       page = page.split('__PHONE_TIER_BLOCK__').join(block).split('__PHONE_TIER_CTA__').join(cta).split('__VOICE_FROM__').join(voiceFrom).split('__ALLOWANCE_LINE__').join(allowance);
-      return html(res, page.split('__FROM_PRICE__').join(plans.fromPrice()));
+      return html(res, gscMeta(page).split('__FROM_PRICE__').join(plans.fromPrice()));
+    }
+    // About + the SEO guide: public trust pages. Same placeholder treatment as
+    // the landing page (demo number + Search Console tag).
+    if (req.method === 'GET' && (p === '/about' || p === '/automate-your-business-with-ai')) {
+      return html(res, gscMeta(withDemoTel(view(p === '/about' ? 'about.html' : 'guide-automate.html'))));
+    }
+    // Partner / affiliate recruitment page. /referral and /creators alias it.
+    if (req.method === 'GET' && (p === '/partners' || p === '/referral' || p === '/creators')) {
+      if (p !== '/partners') return redirect(res, '/partners');
+      return html(res, gscMeta(withDemoTel(view('partners.html'))));
+    }
+    // A partner application. Emails the owner via the system mailbox; nothing
+    // is auto-approved — a human reads it and sets the rep up by hand.
+    if (req.method === 'POST' && p === '/partners/apply') {
+      if (rateLimited(req, 'partners', 5, 60 * 60 * 1000)) return json(res, { error: 'Too many applications from here. Try again later, or email support@dawnpipe.com.' }, 429);
+      const f = parseJSON(await readBody(req));
+      const name = String(f.name || '').trim().slice(0, 80);
+      const email = String(f.email || '').trim().slice(0, 120);
+      const where = String(f.where || '').trim().slice(0, 200);
+      const note = String(f.note || '').trim().slice(0, 1000);
+      if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !where) return json(res, { error: 'Please fill in your name, a valid email, and where you will promote.' }, 400);
+      db.logActivity('system', { agent: 'PARTNER', msg: `Partner application: ${name} (${email}) — ${where}` });
+      const owner = (process.env.OWNER_EMAILS || 'support@dawnpipe.com').split(',')[0].trim();
+      const body = [`New Dawnpipe partner application.`, '', `Name:  ${name}`, `Email: ${email}`, `Where: ${where}`, note ? `Note:  ${note}` : '', '',
+        `Reply to them at ${email}. To set them up: Sales Reps tab -> add rep with their name + email (code is their name), mark the agreement + W-9 once signed, set a payout method.`].filter((x) => x !== '').join('\n');
+      mailer.send(owner, `Partner application: ${name}`, body).then((r) => {
+        if (!r.ok) db.logActivity('system', { agent: 'PARTNER', msg: `Partner application email FAILED: ${r.error}` });
+      }).catch(() => {});
+      return json(res, { ok: true });
     }
     // Legal pages — public, and required before Stripe will approve billing.
     if (req.method === 'GET' && (p === '/terms' || p === '/privacy')) {
@@ -1915,6 +2190,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       let page = view('signup.html').split('__TIER__').join(/^[a-z]+$/.test(t) ? t : '').split('__REF__').join(voice.esc(ref));
       const r = ref && reps.repByCode(ref);
       page = page.split('__REF_NOTE__').join(r ? `<div class="refnote">Referred by <b>${voice.esc(r.name)}</b></div>` : '');
+      page = page.split('__FROM_PRICE__').join(plans.fromPrice());
       let cookie;
       if (qref && reps.repByCode(qref) && !cref) {
         const secure = (process.env.PUBLIC_URL || '').startsWith('https') ? ' Secure;' : '';
@@ -1932,12 +2208,26 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (rateLimited(req, 'forgot', 5, 15 * 60 * 1000)) {
         return html(res, view('forgot.html').replace('__MSGCLASS__', 'err').replace('<!--MSG-->', 'Too many attempts. Try again in 15 minutes.').replace('<!--LINK-->', ''), 429);
       }
+      // No system mailbox at all is a SERVER state, not an account state —
+      // admitting it leaks nothing about who has an account, and the fake
+      // "link is on its way" left people waiting on an email that could
+      // never come. Give them the human route instead.
+      if (!mailer.enabled() && process.env.DEV_UNLOCK !== '1') {
+        return html(res, view('forgot.html')
+          .replace('__MSGCLASS__', 'err')
+          .replace('<!--MSG-->', 'Reset-by-email is not switched on yet. Email support@dawnpipe.com from your account address and a human will reset it for you.')
+          .replace('<!--LINK-->', ''));
+      }
       const f = parseForm(await readBody(req));
       const acc = db.getAccountByEmail((f.email || '').trim().toLowerCase());
       let note = '';
       if (acc) {
         const token = db.createResetToken(acc.id);
         const r = await mailer.sendPasswordReset(acc.email, token);
+        // A configured mailbox that FAILS to send (refused login, network) is
+        // invisible to the person waiting — log it where the owner and the
+        // keeper will see it, with the real error.
+        if (!r.ok) db.logActivity(acc.id, { agent: 'SYSTEM', msg: `Password reset email to ${acc.email} FAILED: ${r.error}` });
         // If no system mailbox is configured yet, surface the link so the owner
         // isn't locked out of their own product. Never do this in production.
         if (!r.ok && process.env.DEV_UNLOCK === '1') note = `${process.env.PUBLIC_URL || ''}/reset?token=${token}`;
@@ -1967,19 +2257,23 @@ Use it the way a good receptionist would: greet them by name if you have one, do
     }
 
     if (req.method === 'POST' && p === '/signup') {
+      // One renderer for every signup error, so the from-price and demo number
+      // are always substituted — a raw __FROM_PRICE__ leaking on an error page
+      // would be worse than the stale $49 this whole fix is about.
+      const errSignup = (msg, code) => html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', msg).split('__FROM_PRICE__').join(plans.fromPrice())), code);
       if (rateLimited(req, 'signup', 20, 60 * 60 * 1000)) {
-        return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Too many accounts created from here. Try again later.')), 429);
+        return errSignup('Too many accounts created from here. Try again later.', 429);
       }
       const f = parseForm(await readBody(req));
       const email = (f.email || '').trim().toLowerCase();
       const pw = f.password || '';
-      if (!email || pw.length < 6) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Enter a valid email and a password of 6+ characters.')), 400);
-      if (db.getAccountByEmail(email)) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'That email already has an account. Try logging in.')), 400);
+      if (!email || pw.length < 6) return errSignup('Enter a valid email and a password of 6+ characters.', 400);
+      if (db.getAccountByEmail(email)) return errSignup('That email already has an account. Try logging in.', 400);
       const { salt, passHash } = auth.hashPassword(pw);
       // Terms nobody was shown are terms a court will not enforce (browsewrap
       // fails routinely). Require the click and record when and which version,
       // so the responsibility-shift language actually binds.
-      if (!f.agree) return html(res, withDemoTel(view('signup.html').replace('<!--ERR-->', 'Please tick the box to agree to the Terms and Privacy Policy.')), 400);
+      if (!f.agree) return errSignup('Please tick the box to agree to the Terms and Privacy Policy.', 400);
       const acc = db.createAccount({ email, passHash, salt, acceptedTermsAt: db.nowISO(), termsVersion: LEGAL_UPDATED });
       seedStarterProfile(acc.id, email);
       db.logActivity(acc.id, { agent: 'SYSTEM', msg: 'Account created' });
@@ -2103,6 +2397,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // rather than waiting on a webhook that may never arrive. Without this a
       // charged customer could sit locked out permanently with nothing in the
       // product able to fix it.
+      const topupSession = url.searchParams.get('topup_session') || '';
+      if (topupSession) { try { await stripe.reconcileTopup(account, topupSession); account = db.getAccount(account.id) || account; } catch (e) { console.error('topup reconcile failed:', e.message); } }
       const sessionId = url.searchParams.get('session_id') || '';
       // 'none' | 'ok' | 'pending' — the page must not congratulate someone on a
       // payment that did not actually switch their account on.
@@ -2124,7 +2420,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       page = page.replace('__CHECKOUT__', checkoutResult);
       const locked = !stripe.hasAccess(account);
       page = page.replace('__EMAIL__', account.email).replace('__LOCKED__', locked ? 'true' : 'false').replace('__AIMODE__', aiMode());
-      return html(res, page);
+      // The app's HTML carries all its JS inline, and it changes with every
+      // deploy. With no cache header the browser was free to keep serving a
+      // stale copy — so a shipped fix (e.g. the disconnect button) looked
+      // "still broken" until a hard refresh. no-cache forces a revalidate on
+      // every load, so a normal reload always runs the current code.
+      return html(res, page, 200, { 'Cache-Control': 'no-cache, must-revalidate' });
     }
 
     // ---------- API (needs access) ----------
@@ -2138,6 +2439,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // STOPPING a send is never paywalled. If a plan lapses mid-run the one
         // thing the user must still be able to do is halt their own mail.
         '/api/send/stop',
+        // CANCELLING is never paywalled either. A customer in dunning or past
+        // their cap who cannot reach the cancel button is a chargeback and a
+        // scam claim; the door out must always open.
+        '/api/billing/cancel', '/api/billing/resume',
+        // The help bubble works for a LOCKED account on purpose: someone who
+        // has not picked a plan yet is exactly who has setup questions, and
+        // sending them to email support is the thing this exists to prevent.
+        '/api/assistant',
         '/api/profile/save', '/api/profile/delete', '/api/pipeline',
         // Handing a rented number BACK must never be paywalled. It was, so a
         // cancelled customer had no way to release it and we kept paying the
@@ -2173,12 +2482,22 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // into buying a duplicate subscription.
           dunning: stripe.DUNNING.includes(account.subStatus) ? { since: account.dunningSince || '', inGrace: stripe.inGrace(account) } : null,
           tiers: plans.catalogue().map(({ priceEnvKey, ...t }) => t),
+          topups: plans.TOPUPS,
+          cancelAt: account.cancelAt || '',
           trust: plans.TRUST,
           billingConfigured: stripe.configured(),
           aiMode: aiMode(),
           // masked: the app never ships the app-password back to the browser
-          smtp: account.smtp ? { host: account.smtp.host, port: account.smtp.port, user: account.smtp.user,
-            fromName: account.smtp.fromName, fromEmail: account.smtp.fromEmail, connected: !!account.smtp.pass } : { connected: false },
+          smtp: (() => {
+            const s = account.smtp || {};
+            if (s.useDawnpipe && mailer.enabled()) {
+              const sys = mailer.systemCfg();
+              return { mode: 'dawnpipe', connected: true, user: sys.fromEmail || sys.user, fromName: s.fromName || sys.fromName };
+            }
+            return { mode: 'own', host: s.host, port: s.port, user: s.user,
+              fromName: s.fromName, fromEmail: s.fromEmail, connected: !!s.pass };
+          })(),
+          dawnpipeSendAvailable: mailer.enabled(),
           // So a page refresh can re-attach to a run in progress — otherwise
           // reloading loses the only Stop button on screen while mail keeps going.
           activeSend: (() => { const j = sendJobs.get(activeSends.get(acc)); return j && j.status === 'running' ? sendJobView(j) : null; })(),
@@ -2189,11 +2508,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // key itself is never echoed back — connected flag only
           emailData: { connected: !!account.emailApiKey, fallback: !!process.env.HUNTER_API_KEY },
           warmup: sending.warmupStatus(account.warmup),
-          voice: { ...(account.voice || {}), configured: voice.configured(), catalogue: voice.VOICES, defaultVoice: voice.DEFAULT_VOICE,
+          // Account-level voice meta only; the per-BUSINESS config rides on
+          // each profile below (resolved, so legacy account-level setups
+          // still show on the business they were bound to). The client
+          // recomputes its working voice state whenever the business switches.
+          voice: { configured: voice.configured(), catalogue: voice.VOICES, defaultVoice: voice.DEFAULT_VOICE,
             envNumber: process.env.TWILIO_PHONE_NUMBER || '',
             webhookBase: (process.env.PUBLIC_URL || '').replace(/\/$/, '') },
           sendDomain: dnsauth.domainOfEmail((account.smtp || {}).fromEmail || (account.smtp || {}).user || ''),
-          profiles: db.getProfiles(acc),
+          profiles: db.getProfiles(acc).map((pr) => ({ ...pr, voice: db.profileVoice(account, pr) })),
           leads: db.getLeads(acc),
           queue: db.getQueue(acc),
           activity: db.getActivity(acc, 40),
@@ -2202,7 +2525,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // Onboarding: paste a website URL → AI drafts the whole profile.
       if (p === '/api/profile/autofill' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const fields = await agents.autofillFromWebsite(f.url);
+        // f.text: the paste-it-yourself fallback for sites we cannot fetch.
+        const fields = await agents.autofillFromWebsite(f.url, f.text);
         return json(res, { fields });
       }
 
@@ -2219,6 +2543,19 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           'mailingAddress', 'website', 'pricing'];
         const data = {}; fields.forEach((k) => { if (f[k] !== undefined) data[k] = f[k]; });
         const saved = f.id ? db.updateProfile(acc, f.id, data) : db.createProfile(acc, data);
+        // The website autofill drafts the PHONE script too. Saving the
+        // business saves that draft with it — before this, the drafted script
+        // silently evaporated unless the owner visited AI Answering and hit
+        // its separate save first, which nobody knew to do.
+        if (saved && f.voiceDraft && typeof f.voiceDraft === 'object') {
+          const draft = {};
+          ['agentName', 'greeting', 'hours', 'objective', 'qualifying', 'objections', 'faq', 'voicemail']
+            .forEach((k) => { const val = String(f.voiceDraft[k] || '').trim(); if (val) draft[k] = val.slice(0, 4000); });
+          if (Object.keys(draft).length) {
+            db.saveProfileVoice(acc, saved.id, draft);
+            db.logActivity(acc, { agent: 'SYSTEM', msg: `Phone script drafted for ${saved.name || 'your business'} — review it on AI Answering` });
+          }
+        }
         return json(res, { profile: saved });
       }
       // Start a background prospecting job and return immediately — long runs
@@ -2314,11 +2651,20 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ---- voice settings + calls ----
       if (p === '/api/voice/save' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const cur = account.voice || {};
+        // Saves apply to ONE business: the profile named in the request (the
+        // business selected in the app). The current config resolves through
+        // profile.voice with legacy account-level fallback, so the first save
+        // after this change carries an existing setup forward untouched.
+        const vProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        if (!vProfile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const cur = db.profileVoice(account, vProfile);
         const v = {
           ...cur,
           enabled: f.enabled !== false,
           record: f.record !== undefined ? !!f.record : (cur.record !== undefined ? cur.record : true),
+          // Spam filter defaults ON — screening suspicious callers and hanging
+          // up on robocalls protects the customer's minutes and their patience.
+          spamFilter: f.spamFilter !== undefined ? !!f.spamFilter : (cur.spamFilter !== undefined ? cur.spamFilter : true),
           language: ['en-US', 'es-US'].includes(f.language ?? cur.language) ? (f.language ?? cur.language) : 'en-US',
           // Play-along mode for a line whose callers are prospects testing it.
           // Defaults ON for the owner's line — that IS the demo number on the
@@ -2332,7 +2678,6 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           // signed up first. It is now only ever written by provisioning.
           number: (cur.number || '').trim(),
           numberSid: cur.numberSid || '',
-          profileId: f.profileId || cur.profileId || '',
           agentName: (f.agentName ?? cur.agentName ?? 'Sarah').trim(),
           greeting: (f.greeting ?? cur.greeting ?? '').trim(),
           transferTo: voice.toE164((f.transferTo ?? cur.transferTo ?? '')),
@@ -2358,13 +2703,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           timezone: (() => { const z = String(f.timezone ?? cur.timezone ?? '').trim();
             try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return z; } catch { return cur.timezone || ''; } })(),
         };
-        db.updateAccount(acc, { voice: v });
+        db.saveProfileVoice(acc, vProfile.id, v);
         return json(res, { ok: true, voice: v });
       }
       // What the AI actually did: this month, last month, last 7 days. Feeds the
       // dashboard; the same numbers go out in the monthly recap email.
       if (p === '/api/voice/stats' && req.method === 'GET') {
-        return json(res, stats.summary(account, voice.tzFor(account)));
+        const sProf = db.getProfile(acc, url.searchParams.get('profileId') || '') || db.getProfiles(acc)[0];
+        const sAcct = { ...account, voice: db.profileVoice(account, sProf) };
+        return json(res, stats.summary(sAcct, voice.tzFor(sAcct)));
       }
       // Stream a recording to the owner's browser. Proxied with our Twilio
       // credentials so recordings are never public URLs, and scoped to the
@@ -2384,17 +2731,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         } catch (e) { return json(res, { error: e.message }, 502); }
       }
       if (p === '/api/voice/calls' && req.method === 'GET') {
-        // A call can be orphaned mid-flight -- a deploy restarts the process,
-        // the in-memory call map empties, and the status callback finds
-        // nothing to complete -- leaving a row frozen at "in-progress"
-        // forever. Twilio ended the real call long ago; only our label is
-        // stuck. Sweep anything still "live" after 2 hours.
-        const LIVE = ['queued', 'ringing', 'initiated', 'in-progress'];
-        for (const c of db.getCalls(acc, 50)) {
-          if (LIVE.includes(String(c.status || '')) && c.at && Date.now() - Date.parse(c.at) > 2 * 3600000) {
-            db.saveCall(acc, { sid: c.sid, status: 'completed', outcome: c.outcome || 'ended (state lost in a restart)' });
-          }
-        }
+        sweepStuckCalls(acc);
         const rows = db.getCalls(acc, 50);
         // estCost is OUR cost of goods, not the customer's. Someone paying
         // $399 who can see a call cost us 62 cents will price the product for
@@ -2411,7 +2748,8 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
-        const vcfg = account.voice || {};
+        const tcProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        const vcfg = db.profileVoice(account, tcProfile);
         // Only the owner account may fall back to the shared server number.
         // For a customer, dialling out from a line they do not own means any
         // callback rings a different company — so they use their own or none.
@@ -2425,7 +2763,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
-        const profile = db.getProfile(acc, vcfg.profileId) || db.getProfiles(acc)[0];
+        const profile = tcProfile;
         if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
         // DO NOT CALL is absolute and legally binding. Checked at the dial
         // boundary so no route can place a call to someone who opted out.
@@ -2434,7 +2772,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         try {
           const call = await voice.placeCall({ to, from,
             answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
-          voice.startCall(call.sid, { accountId: acc, account, profile, direction: 'outbound', to, from,
+          voice.startCall(call.sid, { accountId: acc, account: { ...account, voice: vcfg }, profile, direction: 'outbound', to, from,
             lead: f.leadName ? { name: f.leadName, company: f.leadCompany || '' } : null });
           db.saveCall(acc, { sid: call.sid, direction: 'outbound', to, from, profileId: profile.id,
             status: call.status || 'queued', transcript: [] });
@@ -2462,35 +2800,82 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!voice.configured()) return json(res, { error: 'Twilio is not configured on the server yet.' }, 400);
         const vAllow = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!vAllow.ok) return json(res, { error: vAllow.reason, needUpgrade: true }, 402);
-        const vcfg = account.voice || {};
-        // Renting a second number for an account that already has one is money
+        // Numbers belong to a BUSINESS now. The buy goes to the profile named
+        // in the request (the business selected in the app).
+        const buyProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        if (!buyProfile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const vcfg = db.profileVoice(account, buyProfile);
+        // Renting a second number for a business that already has one is money
         // burnt every month for a line nobody answers.
         if (vcfg.numberSid) return json(res, { error: 'This business already has a number. Release it first if you want a different one.' }, 400);
+        // Every rented line costs real money monthly. One number per business
+        // is the product; a small account-wide cap stops a runaway account
+        // from renting lines on our dime. Owner exempt.
+        const linesHeld = ((account.voice || {}).numberSid ? 1 : 0)
+          + db.getProfiles(acc).filter((pr) => pr.voice && pr.voice.numberSid).length;
+        if (!stripe.isOwner(account) && linesHeld >= 2) {
+          return json(res, { error: 'Your account already rents 2 phone lines. Need more? Email support@dawnpipe.com and we will set it up.' }, 400);
+        }
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         try {
           const got = await numbers.buy({ phoneNumber: f.phoneNumber, base,
-            friendlyName: `Dawnpipe — ${account.email}` });
+            friendlyName: `Dawnpipe — ${account.email} — ${buyProfile.name || buyProfile.id}` });
           // Claimed by another account = a double-buy race. Hand it straight
           // back rather than leave two accounts fighting over one line.
-          const clash = db.accountByVoiceNumber(got.phoneNumber);
-          if (clash && clash.id !== acc) {
+          const clash = db.routeByVoiceNumber(got.phoneNumber);
+          if (clash && clash.account.id !== acc) {
             await numbers.release(got.sid).catch(() => {});
             return json(res, { error: 'That number was just taken. Try another.' }, 409);
           }
-          db.updateAccount(acc, { voice: { ...vcfg, number: got.phoneNumber, numberSid: got.sid, enabled: true } });
-          db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${got.phoneNumber} provisioned and pointed at Dawnpipe` });
+          db.saveProfileVoice(acc, buyProfile.id, { number: got.phoneNumber, numberSid: got.sid, enabled: true });
+          db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${got.phoneNumber} provisioned for ${buyProfile.name || 'your business'}` });
           return json(res, { ok: true, number: got.phoneNumber });
         } catch (e) { return json(res, { error: e.message }, 400); }
       }
       if (p === '/api/voice/numbers/release' && req.method === 'POST') {
-        const vcfg = account.voice || {};
+        const f = parseJSON(await readBody(req));
+        const relProfile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        const vcfg = db.profileVoice(account, relProfile);
         if (!vcfg.numberSid) return json(res, { error: 'No number to release.' }, 400);
         try {
           await numbers.release(vcfg.numberSid);
-          db.updateAccount(acc, { voice: { ...vcfg, number: '', numberSid: '', enabled: false } });
+          // Clear wherever the number actually lives — the profile, and the
+          // legacy account-level slot if that is where it still sits.
+          if (relProfile) db.saveProfileVoice(acc, relProfile.id, { number: '', numberSid: '', enabled: false });
+          if ((account.voice || {}).numberSid === vcfg.numberSid) {
+            db.updateAccount(acc, { voice: { ...account.voice, number: '', numberSid: '', enabled: false } });
+          }
           db.logActivity(acc, { agent: 'VOICE', msg: `Phone number ${vcfg.number} released` });
           return json(res, { ok: true });
         } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      // Move a business's number to another business — the "I set the line up
+      // on the wrong company" fix, and the cheap path when a second business
+      // should take over the existing line instead of renting a new one.
+      if (p === '/api/voice/numbers/reassign' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const target = db.getProfile(acc, f.toProfileId);
+        if (!target) return json(res, { error: 'Pick which business gets the number.' }, 400);
+        if (db.profileVoice(account, target).number) return json(res, { error: (target.name || 'That business') + ' already has a number.' }, 400);
+        // Find who currently holds a line: a profile, or the legacy account
+        // slot. With more than one line held, the request must SAY which one
+        // moves — guessing would silently unplug the wrong business.
+        const holders = db.getProfiles(acc).filter((pr) => pr.voice && pr.voice.number);
+        let holder = null;
+        if (f.fromProfileId) {
+          holder = holders.find((pr) => pr.id === f.fromProfileId);
+          if (!holder) return json(res, { error: 'That business has no number to move.' }, 400);
+        } else if (holders.length > 1) {
+          return json(res, { error: 'More than one business has a number — say which one to move it from.' }, 400);
+        } else holder = holders[0] || null;
+        const legacyHeld = !holder && (account.voice || {}).number ? account.voice : null;
+        const src = holder ? holder.voice : legacyHeld;
+        if (!src || !src.number) return json(res, { error: 'No number to move — get one first.' }, 400);
+        db.saveProfileVoice(acc, target.id, { number: src.number, numberSid: src.numberSid || '', enabled: true });
+        if (holder) db.saveProfileVoice(acc, holder.id, { number: '', numberSid: '' });
+        else db.updateAccount(acc, { voice: { ...account.voice, number: '', numberSid: '' } });
+        db.logActivity(acc, { agent: 'VOICE', msg: `Number ${src.number} moved to ${target.name || 'another business'} — it now answers with that business's script` });
+        return json(res, { ok: true, number: src.number });
       }
 
       // ---- backfill phone numbers for leads that predate phone capture ----
@@ -2556,15 +2941,14 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!voice.configured()) return json(res, { error: 'Twilio keys are not set in the server environment yet.' }, 400);
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         if (!base.startsWith('https')) return json(res, { error: 'Set PUBLIC_URL to your https URL in Render first — Twilio must be able to reach this server.' }, 400);
-        const vcfg = account.voice || {};
+        const profile = db.getProfile(acc, f.profileId) || db.getProfiles(acc)[0];
+        if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
+        const vcfg = db.profileVoice(account, profile);
         // Only the owner account may fall back to the shared server number.
         // For a customer, dialling out from a line they do not own means any
         // callback rings a different company — so they use their own or none.
         const from = vcfg.number || (stripe.isOwner(account) ? (process.env.TWILIO_PHONE_NUMBER || '') : '');
         if (!from) return json(res, { error: 'Get your phone number first — Voice SDR tab, "Get my number".', needNumber: true }, 400);
-        const profileId = f.profileId || vcfg.profileId || '';
-        const profile = db.getProfile(acc, profileId) || db.getProfiles(acc)[0];
-        if (!profile) return json(res, { error: 'Create a business profile first.' }, 400);
         const allowed = plans.voiceAllowed(account, stripe.isOwner(account));
         if (!allowed.ok) return json(res, { error: allowed.reason, needUpgrade: true }, 402);
         if (callJobs.get(acc) && callJobs.get(acc).status === 'running') {
@@ -2629,7 +3013,7 @@ Use it the way a good receptionist would: greet them by name if you have one, do
             try {
               const call = await voice.placeCall({ to: item.to, from,
                 answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
-              voice.startCall(call.sid, { accountId: acc, account: fresh, profile, direction: 'outbound',
+              voice.startCall(call.sid, { accountId: acc, account: { ...fresh, voice: db.profileVoice(fresh, profile) }, profile, direction: 'outbound',
                 to: item.to, from, lead: { name: item.lead.name, company: item.lead.company, email: item.lead.email } });
               db.saveCall(acc, { sid: call.sid, direction: 'outbound', to: item.to, from, profileId: profile.id,
                 status: call.status || 'queued', transcript: [] });
@@ -2745,22 +3129,47 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         } catch (e) { return json(res, { error: e.message }, 502); }
       }
 
+      // ---- the in-app assistant (the help bubble) ----
+      if (p === '/api/assistant' && req.method === 'POST') {
+        // Bounds cost to pennies a day even if hammered: each turn is a Haiku
+        // call at ~a fifth of a cent.
+        if (rateLimited(req, 'assistant', 40, 6 * 60 * 60 * 1000)) {
+          return json(res, { text: 'I have to catch my breath — that is a lot of questions in a short time. Try again in a little while, or email support@dawnpipe.com and a human will pick it up.', go: '' });
+        }
+        const f = parseJSON(await readBody(req));
+        const msg = String(f.message || '').trim();
+        if (!msg) return json(res, { error: 'Say something first.' }, 400);
+        try {
+          const r = await assistant.answer(account, stripe.isOwner(account), f.history, msg);
+          return json(res, r);
+        } catch (e) {
+          db.logActivity(acc, { agent: 'SYSTEM', msg: 'Assistant error: ' + e.message });
+          return json(res, { text: 'Something glitched on my end. Try once more — or email support@dawnpipe.com and a human will sort it.', go: '' });
+        }
+      }
+
       // ---- CALL-BACKS (the customer's view) ----
       if (p === '/api/callbacks' && req.method === 'GET') {
         const slug = callback.ensureFormSlug(account);
         const base = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
         const rows = db.getCallbacks(acc, 100).map((c) => ({ id: c.id, at: c.at, source: c.source, name: c.name, phone: c.phone, need: c.need,
           status: c.status, note: c.note || '', dueAt: c.dueAt || '', calledAt: c.calledAt || '', basis: c.basis || '', consentAt: c.consentAt || '' }));
-        const vc = account.voice || {};
+        // Call-back plumbing follows the business that OWNS a line: any
+        // profile with a number, else the legacy account slot.
+        const cbProf = db.getProfiles(acc).find((pr) => pr.voice && pr.voice.number) || db.getProfiles(acc)[0];
+        const vc = db.profileVoice(account, cbProf);
         return json(res, { formUrl: `${base}/f/${slug}`, embed: `<iframe src="${base}/f/${slug}" style="width:100%;max-width:480px;height:640px;border:0" title="Request a call"></iframe>`,
-          callBackMissed: vc.callBackMissed === true, hours: { from: callback.EARLIEST_HOUR, to: callback.LATEST_HOUR }, tz: voice.tzFor(account),
+          callBackMissed: vc.callBackMissed === true, hours: { from: callback.EARLIEST_HOUR, to: callback.LATEST_HOUR }, tz: voice.tzFor({ ...account, voice: vc }),
           voiceOk: plans.voiceAllowed(account, stripe.isOwner(account)), hasNumber: !!(vc.number || (stripe.isOwner(account) && process.env.TWILIO_PHONE_NUMBER)),
           rows });
       }
       if (p === '/api/callbacks/settings' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
-        const vc = account.voice || {};
-        db.updateAccount(acc, { voice: { ...vc, callBackMissed: !!f.callBackMissed } });
+        // The toggle belongs to whichever business owns a line (that is the
+        // line missed calls come in on).
+        const cbProf = db.getProfiles(acc).find((pr) => pr.voice && pr.voice.number) || db.getProfiles(acc)[0];
+        if (cbProf) db.saveProfileVoice(acc, cbProf.id, { callBackMissed: !!f.callBackMissed });
+        else db.updateAccount(acc, { voice: { ...(account.voice || {}), callBackMissed: !!f.callBackMissed } });
         db.logActivity(acc, { agent: 'VOICE', msg: `Missed-call call-back offer ${f.callBackMissed ? 'ON' : 'off'}` });
         return json(res, { ok: true });
       }
@@ -2821,6 +3230,13 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (f.agreementSigned !== undefined) patch.agreementSignedAt = f.agreementSigned ? db.nowISO() : '';
         if (f.w9Received !== undefined) patch.w9ReceivedAt = f.w9Received ? db.nowISO() : '';
         if (f.payoutMethod !== undefined) patch.payoutMethod = String(f.payoutMethod || '');
+        // Per-rep commission rate, as a percentage. Bounded hard: below 5% is
+        // a typo, above 70% is a mistake you would not survive.
+        if (f.ratePct !== undefined) {
+          const v = Number(f.ratePct);
+          if (!(v >= 5 && v <= 70)) return json(res, { error: 'Rate must be between 5 and 70 percent.' }, 400);
+          patch.rateBps = Math.round(v * 100);
+        }
         if (f.notes !== undefined) patch.notes = String(f.notes || '');
         const r = reps.updateRep(f.id, patch);
         if (!r) return json(res, { error: 'No such rep.' }, 404);
@@ -2888,6 +3304,27 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       }
 
       // ---- billing setup diagnostic (owner only; reports names, never values) ----
+      // ---- cancel / resume, portal-independent ----
+      if (p === '/api/billing/cancel' && req.method === 'POST') {
+        try {
+          const r = await stripe.cancelAtPeriodEnd(account);
+          const when = r.endsAt ? new Date(r.endsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) : 'the end of your period';
+          return json(res, { ok: true, endsAt: r.endsAt,
+            note: r.trialing ? `Done — your trial is cancelled and your card will not be charged. Everything stays available until ${when}.`
+                             : `Done — nothing further will be charged. Your plan keeps working until ${when}, and you can resume any time before then.` });
+        } catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      if (p === '/api/billing/resume' && req.method === 'POST') {
+        try { await stripe.resumeSubscription(account); return json(res, { ok: true, note: 'Welcome back — your plan continues as before.' }); }
+        catch (e) { return json(res, { error: e.message }, 400); }
+      }
+      // ---- one-time top-up packs ----
+      if (p === '/api/topup' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        if (!plans.isPro(account) && !stripe.isOwner(account)) return json(res, { error: 'Top-ups need an active plan — they add to your plan allowance.' }, 400);
+        try { const u2 = await stripe.createTopupCheckout(account, String(f.kind || '')); return json(res, { ok: true, url: u2 }); }
+        catch (e) { return json(res, { error: e.message }, 400); }
+      }
       if (p === '/api/billing/diag' && req.method === 'GET') {
         if (!stripe.isOwner(account)) return json(res, { error: 'Not available.' }, 403);
         return json(res, stripe.configReport());
@@ -2958,6 +3395,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // now, changing nothing. The one-click answer to "is my password saved
       // and does Gmail still accept it?"
       if (p === '/api/settings/smtp/test' && req.method === 'POST') {
+        // Dawnpipe-managed sending is already verified server-side — nothing
+        // for the customer to test.
+        if ((account.smtp || {}).useDawnpipe) {
+          const sys = mailer.systemCfg();
+          return json(res, mailer.enabled() ? { ok: true, user: sys.fromEmail || sys.user } : { ok: false, error: 'Dawnpipe sending is not configured on the server.' });
+        }
         const tcfg = account.smtp || {};
         if (!tcfg.user || !tcfg.pass) return json(res, { ok: false, error: 'No mailbox saved yet - enter your email and app password above.' });
         const v = await smtp.verify(tcfg);
@@ -2975,6 +3418,25 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       // ---- sending mailbox settings ----
       if (p === '/api/settings/smtp' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
+        // Explicit disconnect. Without this there was no way to clear a mailbox
+        // from the UI — every save merged over the old one, so a wrong address
+        // could never be removed, only overwritten.
+        if (f.disconnect) {
+          db.updateAccount(acc, { smtp: {} });
+          db.logActivity(acc, { agent: 'SEND', msg: 'Sending mailbox disconnected' });
+          return json(res, { ok: true, disconnected: true });
+        }
+        // One-click "let Dawnpipe send for me" — routes outreach through the
+        // system mailbox. No app password, no Google steps. Only offered when
+        // the system mailbox is actually configured.
+        if (f.useDawnpipe) {
+          if (!mailer.enabled()) return json(res, { error: "Dawnpipe sending isn't set up on the server yet. Connect your own mailbox for now." }, 400);
+          const sys = mailer.systemCfg();
+          const fromName = (f.fromName || (account.smtp || {}).fromName || 'Dawnpipe').toString().slice(0, 80);
+          db.updateAccount(acc, { smtp: { useDawnpipe: true, fromName, fromEmail: sys.fromEmail || sys.user, user: sys.fromEmail || sys.user } });
+          db.logActivity(acc, { agent: 'SEND', msg: `Sending via Dawnpipe's mailbox (${sys.fromEmail || sys.user})` });
+          return json(res, { ok: true, mode: 'dawnpipe' });
+        }
         // BLANK PASSWORD MEANS "UNCHANGED". The UI clears the password field
         // after a successful connect (so it's never displayed), which meant any
         // later save — tweaking the delay, or just clicking Connect again —
@@ -2985,11 +3447,31 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const cfg = { host: f.host || 'smtp.gmail.com', port: Number(f.port) || 465,
           user: f.user || existing.user || '', pass,
           fromEmail: f.fromEmail || f.user || existing.fromEmail || '', fromName: f.fromName ?? existing.fromName ?? '' };
+        // Fix a wrong SMTP host before it can fail. The client guesses
+        // smtp.<domain> for a custom domain, which does not exist (Google
+        // Workspace uses smtp.gmail.com, Microsoft 365 uses office365) — that
+        // is the ENOTFOUND error. Detect the real host from the domain's MX
+        // whenever the host is blank or looks like that naive guess.
+        const emailDom = dnsauth.domainOfEmail(cfg.fromEmail || cfg.user);
+        if (emailDom && (!cfg.host || cfg.host.toLowerCase() === 'smtp.' + emailDom)) {
+          const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+          // Google Workspace is the dominant small-business host and the whole
+          // app-password flow is Gmail-centric, so if MX detection comes back
+          // empty, smtp.gmail.com is a far safer default than the guaranteed-
+          // dead smtp.<domain>.
+          cfg.host = real || 'smtp.gmail.com';
+        }
         // Verify whenever we have credentials that haven't been proven in this
         // exact combination — i.e. a new password, or a changed user/host.
         const needsVerify = !!f.pass || (pass && (cfg.user !== existing.user || cfg.host !== existing.host));
         if (needsVerify) {
-          const v = await smtp.verify(cfg);
+          let v = await smtp.verify(cfg);
+          // Last-ditch self-heal: if the host still could not be reached, try
+          // the detected host once more before giving up.
+          if (!v.ok && /ENOTFOUND|EAI_AGAIN|getaddrinfo|ECONNREFUSED/i.test(v.error || '') && emailDom) {
+            const real = await smtp.smtpHostForDomain(emailDom).catch(() => '');
+            if (real && real !== cfg.host) { cfg.host = real; v = await smtp.verify(cfg); }
+          }
           if (!v.ok) return json(res, { error: `Could not sign in to that mailbox: ${v.error}` }, 400);
         }
         // A different sending domain means a fresh reputation — restart warmup.
@@ -3003,6 +3485,35 @@ Use it the way a good receptionist would: greet them by name if you have one, do
           sendDelaySec: Math.max(0, Number(f.sendDelaySec ?? account.sendDelaySec ?? 25)),
           dailyCap: Math.max(1, Number(f.dailyCap ?? account.dailyCap ?? 50)) });
         return json(res, { ok: true, warmup: sending.warmupStatus(warmup) });
+      }
+
+      // ---- adjust every draft to one instruction ----
+      // "Make them all shorter." One click, every queued draft rewritten, and
+      // every rewritten draft goes BACK TO PENDING -- including ones already
+      // approved -- because nothing a human has not read may ever send.
+      if (p === '/api/queue/adjust' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const instruction = String(f.instruction || '').trim().slice(0, 300);
+        if (!instruction) return json(res, { error: 'Tell the team what to change first — e.g. "shorter, and lead with the free estimate".' }, 400);
+        // Bounds the spend: each rewrite is ~half a cent, so a hostile loop is
+        // the only way this costs real money, and the rate limit closes it.
+        if (rateLimited(req, 'adjust', 20, 60 * 60 * 1000)) return json(res, { error: 'That is a lot of rewriting in one hour — give it a few minutes and try again.' }, 429);
+        const prof = db.getProfile(acc, f.profileId);
+        if (!prof) return json(res, { error: 'Pick a business first.' }, 400);
+        const items = db.getQueue(acc, f.profileId).filter((q) => ['pending', 'approved'].includes(q.status)).slice(0, 60);
+        if (!items.length) return json(res, { error: 'Nothing in the queue to adjust.' }, 400);
+        let done = 0, failed = 0;
+        for (let i = 0; i < items.length; i += 6) {
+          await Promise.all(items.slice(i, i + 6).map(async (it) => {
+            try {
+              const r = await agents.adjustDraft(prof, it, instruction);
+              if (r) { db.updateQueueItem(acc, it.id, { subject: r.subject, body: r.body, status: 'pending', adjusted: instruction.slice(0, 120) }); done++; }
+              else failed++;
+            } catch { failed++; }
+          }));
+        }
+        db.logActivity(acc, { agent: 'DRAFT', profileId: prof.id, msg: `Rewrote ${done} draft(s) to: "${instruction.slice(0, 80)}"${failed ? ` (${failed} failed, left unchanged)` : ''}` });
+        return json(res, { ok: true, done, failed, total: items.length });
       }
 
       // ---- bulk approve ----
@@ -3134,6 +3645,18 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (it && it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
         return json(res, { item: it });
       }
+      // Clear the parked pile: reject every held (unverified-address) draft
+      // for a business in one go, and free their leads to be re-found.
+      if (p === '/api/queue/clear-held' && req.method === 'POST') {
+        const f = parseJSON(await readBody(req));
+        const held = db.getQueue(acc, f.profileId).filter((q) => q.status === 'held');
+        for (const it of held) {
+          db.updateQueueItem(acc, it.id, { status: 'rejected' });
+          if (it.leadId) db.updateLead(acc, it.leadId, { status: 'new' });
+        }
+        db.logActivity(acc, { agent: 'OPERATOR', msg: `Cleared ${held.length} parked draft(s) (no verified email)` });
+        return json(res, { cleared: held.length });
+      }
       if (p === '/api/queue/sent' && req.method === 'POST') {
         const f = parseJSON(await readBody(req));
         const it = db.updateQueueItem(acc, f.id, { status: 'sent', sentAt: db.nowISO() });
@@ -3185,6 +3708,10 @@ async function refreshPrices(tag) {
         const r = await stripe.createMissingPrices();
         if (r.created.length) console.log(`  Created Stripe prices: ${r.created.map((c) => `${c.tier}=${c.priceId}`).join(', ')}${r.live ? ' (LIVE)' : ' (test)'}`);
       }
+      // Same self-heal for the dashboard's "Needs info" badge: any Dawnpipe
+      // product without a tax category gets the SaaS business-use code.
+      const taxed = await stripe.ensureTaxCodes();
+      if (taxed.length) console.log(`  Set SaaS tax category on ${taxed.length} product(s)`);
     }
   } catch (e) { console.error(`  Stripe price sync failed (${tag}): ${e.message}`); }
 }

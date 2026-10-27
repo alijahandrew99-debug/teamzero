@@ -136,10 +136,27 @@
   .spamflag{font-size:12.5px;padding:3px 0}
   .spamflag .sv{font-weight:700}
   .sv.high{color:var(--red)}.sv.med{color:#9a6b12}.sv.low{color:var(--ink2)}
+  /* ---- the help bubble (bottom-right assistant) ---- */
+  #aiFab{position:fixed;right:18px;bottom:18px;z-index:60;width:56px;height:56px;border-radius:50%;border:1px solid var(--ink);background:var(--ink);color:var(--paper2);font-size:24px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+  #aiFab:hover{transform:scale(1.05)}
+  #aiPanel{position:fixed;right:18px;bottom:84px;z-index:60;width:min(370px,calc(100vw - 36px));max-height:min(560px,calc(100vh - 120px));display:none;flex-direction:column;background:var(--paper2);border:1px solid var(--ink);border-radius:14px;box-shadow:0 16px 44px rgba(0,0,0,.28);overflow:hidden}
+  #aiPanel.open{display:flex}
+  #aiHead{padding:12px 14px;background:var(--ink);color:var(--paper2);font-weight:700;display:flex;justify-content:space-between;align-items:center}
+  #aiHead .sub{display:block;font-weight:400;font-size:11.5px;opacity:.75}
+  #aiMsgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .aim{max-width:88%;padding:9px 12px;border-radius:12px;font-size:13.5px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word}
+  .aim.you{align-self:flex-end;background:var(--ink);color:var(--paper2);border-bottom-right-radius:4px}
+  .aim.bot{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
+  .aim.think{align-self:flex-start;color:var(--ink2);font-style:italic;background:transparent;padding:2px 12px}
+  .aigo{align-self:flex-start;margin-top:-2px}
+  #aiRow{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line);background:#fff}
+  #aiInput{flex:1;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;margin:0}
+  #aiSend{border:1px solid var(--red);background:var(--red);color:#fff;border-radius:8px;padding:0 16px;font:inherit;cursor:pointer}
+  #aiSend:disabled{opacity:.6}
 </style><meta name="robots" content="noindex">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=3">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=4">
 <link rel="shortcut icon" href="/favicon.ico?v=3">
-<script src="/favicon.js?v=3" defer></script>
+<script src="/favicon.js?v=4" defer></script>
 </head>
 <body>
 <header>
@@ -243,6 +260,13 @@
             <button onclick="autofill()" id="autoBtn">✨ Fill it in for me</button>
           </div>
           <span class="muted" id="autoMsg"></span>
+          <!-- Last-resort import: some sites cannot be fetched at all (hard
+               firewalls, JS-only pages). Pasting beats an error every time. -->
+          <div id="autoPaste" class="hide" style="margin-top:10px">
+            <div class="muted" style="margin-bottom:6px"><b>Plan B:</b> open your website, select the text on your homepage, copy it, and paste it here — the AI drafts everything from that instead.</div>
+            <textarea id="autoPasteText" rows="4" placeholder="Paste anything about your business — your homepage text, an about page, even a flyer." style="width:100%"></textarea>
+            <button class="sm" onclick="autofillFromText()" id="autoPasteBtn" style="margin-top:6px">✨ Use this text</button>
+          </div>
         </div>
         <!-- Thirteen empty boxes is what makes this look like work. The AI can
              fill every one of them from a website, so that is the path we put
@@ -329,7 +353,11 @@
     <div class="card hide" id="cardEmailData">
       <h2><span class="agent">OWNER</span> Email data key (platform)</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 6px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
+        <p class="muted" style="margin:0 0 8px">Platform-wide verified-email lookups. Customers never see this and are never asked for a key — set <code>HUNTER_API_KEY</code> on the server and every account uses it automatically. This box is a per-account override for testing only.</p>
+        <!-- Prominent status: a saved key never shows back in the box (it's a
+             password field), so without this the empty box reads as "broken"
+             even when a key is connected and working. -->
+        <div id="hkStatus" class="okbox" style="margin-bottom:10px">Checking…</div>
         <div class="row">
           <input id="hk_key" type="password" placeholder="Data provider API key" style="flex:1;min-width:200px;margin:0">
           <button onclick="saveEmailKey()" id="hkBtn">Connect &amp; verify</button>
@@ -343,11 +371,45 @@
     <div class="card">
       <h2><span class="agent">SENDING</span> Connect your mailbox (to send automatically)</h2>
       <div class="body">
-        <p class="muted" style="margin:0 0 6px">Optional. Connect a mailbox and you can approve &amp; send the whole batch in one click. Leave it empty and you'll keep sending by hand with the Gmail button.</p>
-        <div class="warnbox" style="margin-bottom:12px">For Gmail you must use an <b>App Password</b> (not your normal password) — Google Account → Security → 2-Step Verification → App passwords. Your password is stored on your own server and never shown again.</div>
+        <p class="muted" style="margin:0 0 10px">Optional. Connect a mailbox and you can approve &amp; send the whole batch in one click. Leave it empty and you'll keep sending by hand with the Gmail button.</p>
+        <!-- Shown by renderSettings only when a mailbox is actually connected,
+             so the connected identity is never confused with what's typed in
+             the boxes below. -->
+        <div id="smConnected" class="okbox hide" style="margin-bottom:12px;display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap">
+          <span>✓ <b>Sending is on</b> — <b id="smWho"></b>. Approved emails go out automatically.</span>
+          <button class="sm ghost" onclick="disconnectSmtp()" style="color:var(--red);white-space:nowrap">Disconnect</button>
+        </div>
+        <!-- The one-click path: send through Dawnpipe's own mailbox. No app
+             password, no Google settings — the "easy like signing in" option.
+             Shown only when the server mailbox is configured and nothing is
+             connected yet. -->
+        <div id="smEasy" class="hide" style="border:2px solid var(--red);border-radius:10px;background:var(--paper2);padding:16px;margin-bottom:12px">
+          <div style="font-weight:700;font-size:16px;margin-bottom:4px">✨ Easiest — let Dawnpipe send for you</div>
+          <div class="muted" style="margin-bottom:12px">One click. No App Password, no Google settings, nothing to look up. We send your approved emails through our own mailbox, and you can switch to your own Gmail any time.</div>
+          <button class="red" onclick="useDawnpipe()" id="smEasyBtn">Use Dawnpipe to send →</button>
+        </div>
+        <div id="smOrLine" class="muted hide" style="text-align:center;margin:2px 0 12px;font-size:13px">— or connect your own Gmail, so emails come from your address —</div>
+        <!-- Everything in smManual is the connect-your-own-mailbox path; it
+             hides as one block once sending is on. -->
+        <div id="smManual">
+        <!-- The 2-minute Gmail walkthrough. Real links, numbered, opens the
+             exact Google pages — replaces a dense one-liner nobody could
+             follow. Collapsed automatically once a mailbox is connected. -->
+        <details id="smGuide" style="border:1px solid var(--line);border-radius:8px;background:var(--paper2);padding:12px 14px;margin-bottom:12px" open>
+          <summary style="cursor:pointer;font-weight:700">📩 How to connect Gmail — 2 minutes, one time</summary>
+          <div style="margin-top:10px">
+            <p class="muted" style="margin:0 0 10px">Gmail won't take your normal password. It needs a one-time <b>App Password</b> — a 16-character code just for Dawnpipe. You never share your real password, and it's stored on your own server. Do these three things:</p>
+            <ol style="margin:0;padding-left:20px;line-height:2">
+              <li><b>Turn on 2-Step Verification</b> (App Passwords only appear after this): <a href="https://myaccount.google.com/signinoptions/two-step-verification" target="_blank" rel="noopener"><b>open the page →</b></a></li>
+              <li><b>Create an App Password</b> and name it <b>Dawnpipe</b>: <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"><b>open the page →</b></a></li>
+              <li><b>Copy the 16-character code</b> Google shows you and paste it in the App password box below. Spaces don't matter — we clean them for you.</li>
+            </ol>
+            <p class="muted" style="margin:10px 0 0;font-size:13px">Not on Gmail? Put your provider's email and password in the same boxes — most work as-is.</p>
+          </div>
+        </details>
         <div class="two">
           <div class="field"><label>Your email address</label><input id="sm_user" placeholder="you@gmail.com"></div>
-          <div class="field"><label>App password</label><input id="sm_pass" type="password" placeholder="16-character app password"></div>
+          <div class="field"><label>App password</label><input id="sm_pass" type="password" placeholder="paste the 16-character code" oninput="this.value=this.value.replace(/\s+/g,'')"></div>
           <div class="field"><label>Name emails come from</label><input id="sm_fromName" placeholder="Alijah Skinner"></div>
         </div>
         <!-- The rest are safe defaults we pick. They stay in the DOM (the save
@@ -369,6 +431,7 @@
           </div>
         </details>
         <div class="row"><button onclick="saveSmtp()" id="smBtn">Connect &amp; verify</button><button class="sm ghost" onclick="testSmtp()" id="smTestBtn">Test connection</button><span class="muted" id="smMsg"></span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -417,7 +480,9 @@
           <div class="body">
             <div class="row" style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px dashed var(--line)">
               <button class="sm ok" onclick="approveAll()" id="apprAllBtn">✓ Approve all</button>
-              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✓✉ Approve &amp; send all</button>
+              <input id="adjInstr" placeholder="Change every draft at once — e.g. shorter, friendlier, mention the fall special" style="min-width:250px;margin:0;font-size:13px">
+              <button class="sm ghost" onclick="adjustAll()" id="adjBtn">✏️ Adjust all drafts</button>
+              <button class="sm red" onclick="approveAndSendAll()" id="sendAllBtn">✉ Send everything that can go</button>
               <span class="muted" id="sendInfo"></span>
             </div>
             <div class="progress" id="sendProgress" style="margin-bottom:14px">
@@ -430,7 +495,19 @@
                 <b>You can close this page.</b> It keeps sending on our server, and "Stop sending" works from any device.
               </div>
             </div>
+            <div id="sendResult" class="okbox hide" style="margin-bottom:12px"></div>
             <div id="queue"><div class="empty">Nothing pending yet.</div></div>
+            <!-- Parked: drafts that could not send (no verified email). Kept
+                 out of the active list so a send visibly clears the queue,
+                 with one button to bin them all. -->
+            <div id="parkedWrap" class="hide" style="margin-top:16px;border-top:1px dashed var(--line);padding-top:14px">
+              <div class="row" style="justify-content:space-between;align-items:center">
+                <b id="parkedHead">⏸ Parked</b>
+                <button class="sm ghost" onclick="clearParked()" id="clearParkedBtn" style="color:var(--red);white-space:nowrap">Clear parked</button>
+              </div>
+              <div class="muted" style="margin:4px 0 10px;font-size:12.5px">No verified email address for these, so sending would bounce and hurt your domain. Run <b>Find leads</b> again for fresh verified emails, or clear them.</div>
+              <div id="parked"></div>
+            </div>
           </div>
         </div>
         <div class="card" id="briefCard" style="display:none">
@@ -528,6 +605,14 @@
   <div class="card">
     <h2><span class="agent">YOUR NUMBER</span> The line your AI answers</h2>
     <div class="body">
+      <!-- The tab follows the business selected in the header, exactly like
+           the Sales Desk: its own number, script and settings. No second
+           dropdown to disagree with the first. -->
+      <div class="row" style="align-items:center;gap:8px;margin-bottom:10px">
+        <b>📞 Phone setup for: <span id="vBizName">—</span></b>
+        <span class="muted">Switch businesses with the dropdown at the top — each one has its own line and script.</span>
+      </div>
+      <div id="vMoveNum"></div>
       <div id="vStatus"></div>
       <!-- This card used to be Twilio setup instructions. Nobody buying an AI
            receptionist should be told to open a telephony console and paste
@@ -550,6 +635,13 @@
             <b>Record calls</b>
           </label>
           <span class="muted">Audio you can play back, alongside the transcript. Every call already says it may be transcribed, so callers are told. Turn off if you'd rather keep transcripts only.</span>
+        </div>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer">
+            <input type="checkbox" id="v_spam" onchange="toggleSpamFilter()" style="width:auto;margin:0">
+            <b>Spam filter</b>
+          </label>
+          <span class="muted">Hangs up on robocalls, screens callers with no caller ID, and auto-blocks repeat offenders. Filtered calls never use your minutes. Known callers are never screened.</span>
         </div>
 
         <!-- The number people already have on their truck and their website is
@@ -597,12 +689,11 @@
         <div class="field"><label>Language</label><div class="hint">Spanish lines answer in Spanish from the first word — greeting, disclosure, the whole conversation — with a Spanish voice. English lines will still switch to Spanish if a caller opens in it.</div>
           <select id="v_language"><option value="en-US">English</option><option value="es-US">Español</option></select></div>
         <div class="field"><label>Voice</label><div class="hint">This is the voice your callers hear. Pick the one that sounds like your business — you can change it any time, and the change takes effect on the very next call.</div><select id="v_ttsVoice"></select></div>
-        <div class="field"><label>Which business is it selling for?</label><div class="hint">Uses that profile as its knowledge base.</div><select id="v_profileId"></select></div>
       </div>
       <div class="field"><label>After the intro <span class="muted">(optional)</span></label><div class="hint">Every call opens with "Hi, this is [name], an AI assistant for [business]. Just so you know, this call may be transcribed." — that part is fixed, it's what keeps you on the right side of call-recording law. Whatever you type here is said right after it. Leave blank for "What can I do for you?"</div><input id="v_greeting" placeholder="e.g. Thanks for calling — what's going on?"></div>
       <div class="two">
         <div class="field"><label>Transfer to a human</label><div class="hint">E.164, e.g. +13125550123. Blank = take a message instead.</div><input id="v_transferTo" placeholder="+1..."></div>
-        <div class="field"><label>On-call list for emergencies <span class="muted">(optional)</span></label><div class="hint">One number per line, in the order to try. When a caller has an <b>emergency</b> — burst pipe, no heat in a freeze, a gas smell — the AI texts every number here with the details, then rings them in order until someone picks up. Blank = uses the transfer number above.</div><textarea id="v_onCall" rows="3" placeholder="+13125550101&#10;+13125550102"></textarea></div>
+        <div class="field"><label>On-call list for emergencies <span class="muted">(optional)</span></label><div class="hint">One number per line, in the order to try. When a caller has an <b>emergency</b> — burst pipe, no heat in a freeze, a gas smell — the AI texts every number here with the details, then rings until someone picks up. <b>Days</b> (8am–8pm): your transfer number rings first, then this list. <b>Nights</b>: this list rings <b>first</b> and your number last — put the on-call tech here and sleep. Blank = just the transfer number.</div><textarea id="v_onCall" rows="3" placeholder="+13125550101&#10;+13125550102"></textarea></div>
         <div class="field"><label>Business hours (spoken)</label><div class="hint">So it can answer "when are you open?"</div><input id="v_hours" placeholder="Mon-Fri 8am-5pm Central"></div>
         <div class="field"><label>How long is a typical job?</label><div class="hint">The AI blocks this much time per booking and won't book anyone into it. It also refuses to double-book — if a slot is taken it says so and offers the nearest open times.</div>
           <select id="v_slotMinutes">
@@ -801,8 +892,20 @@ function checkoutReturn(){
     }
   },2000);
 }
+// Voice config is PER BUSINESS: each profile carries its own resolved voice
+// object from the server. STATE.voice is the working copy for the business
+// currently selected in the header — recomputed here on every load and every
+// business switch, so the AI Answering tab always shows the business you are
+// looking at, exactly like the Sales Desk does.
+function syncVoiceState(){
+  const meta=STATE.voiceMeta||{};
+  const p=curProfile()||{};
+  STATE.voice={...(p.voice||{}),configured:meta.configured,catalogue:meta.catalogue,defaultVoice:meta.defaultVoice,envNumber:meta.envNumber,webhookBase:meta.webhookBase};
+}
 async function load(){
   STATE=await api('/api/state');
+  STATE.voiceMeta=STATE.voice||{};   // server sends account-level meta under .voice
+  syncVoiceState();
   $('lockbar').style.display=STATE.locked?'':'none';
   $('ownerBadge').style.display=STATE.isOwner?'':'none';
   $('tabRepsBtn').classList.toggle('hide',!STATE.isOwner);
@@ -861,6 +964,7 @@ function applyLockbar(){
   const cur=sel.value||readUI().profileId||'';
   sel.innerHTML=STATE.profiles.map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
   if(cur&&STATE.profiles.some(p=>p.id===cur))sel.value=cur;
+  syncVoiceState();   // the select is now populated — resolve THIS business's phone config
   // nudge new users to fill in their business
   $('bizDot').classList.toggle('hide',!isStarter(curProfile()));
   fillForm();
@@ -914,7 +1018,12 @@ function render(){
   const P=pid();const p=curProfile();
   if(curTab==='desk')$('deskProfileName').textContent=p?p.name:'—';
   const leads=STATE.leads.filter(l=>l.profileId===P);
-  const queue=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  // Active list = things you can act on. Parked = held drafts with no verified
+  // email, split out so a send visibly empties the queue instead of leaving
+  // held ones behind looking stuck.
+  const live=STATE.queue.filter(q=>q.profileId===P&&q.status!=='rejected'&&q.status!=='sent');
+  const queue=live.filter(q=>q.status!=='held');
+  const parked=live.filter(q=>q.status==='held');
   $('leadcount').textContent=`· ${leads.length}`;
   $('leads').innerHTML=leads.length?leads.map(l=>{
     const c=l.emailConfidence||'';
@@ -940,8 +1049,25 @@ function render(){
         <button class="sm ghost" onclick="setStage('${l.id}','lost')" title="Not interested - stops follow-ups">Not interested</button>
       </div></div>`;
   }).join(''):'<div class="empty">No leads yet — hit Find leads.</div>';
-  $('qcount').textContent=`· ${queue.length} pending`;
-  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">Nothing pending. Find leads, then draft.</div>';
+  // Break the count down so the queue reflects reality after a send — not a
+  // flat "16 pending" that never changes.
+  const nPend=queue.filter(q=>q.status==='pending').length;
+  const nAppr=queue.filter(q=>q.status==='approved').length;
+  const parts=[];
+  if(nPend)parts.push(`${nPend} to review`);
+  if(nAppr)parts.push(`${nAppr} approved`);
+  if(parked.length)parts.push(`${parked.length} parked`);
+  $('qcount').textContent=parts.length?'· '+parts.join(' · '):(queue.length?`· ${queue.length}`:'');
+  $('queue').innerHTML=queue.length?queue.map(qcard).join(''):'<div class="empty">All clear — nothing waiting to send. Find leads, then draft.</div>';
+  // Parked section: the held drafts, kept out of the active list.
+  const pw=$('parkedWrap');
+  if(pw){
+    pw.classList.toggle('hide',!parked.length);
+    if(parked.length){
+      $('parkedHead').textContent=`⏸ Parked — ${parked.length} draft${parked.length===1?'':'s'} with no verified email`;
+      $('parked').innerHTML=parked.map(qcard).join('');
+    }
+  }
   $('feed').innerHTML=(STATE.activity||[]).map(a=>`<div><span class="t">${new Date(a.at).toLocaleTimeString()}</span> [${a.agent}] ${esc(a.msg)}</div>`).join('')||'<div class="empty">No activity yet.</div>';
 }
 function qcard(q){
@@ -961,16 +1087,34 @@ function qcard(q){
   const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${bo}`;
   const outlook=`https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${su}&body=${bo}`;
   const mailto=`mailto:${to}?subject=${su}&body=${bo}`;
-  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>'}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
+  // Held drafts (unverified/guessed address) used to render exactly like a
+  // plain "pending" one, so after a send it looked like nothing happened —
+  // the list still full, no explanation. Show the real status on every card.
+  const held=q.status==='held';
+  const statusPill=held
+    ? `<span class="pill" style="background:#fbe9e7;color:#a02617" title="${esc(q.heldReason||'')}">⏳ held — ${esc(q.heldReason||'needs a verified email')}</span>`
+    : approved?'<span class="stamp">Approved</span>':'<span class="pill drafted">pending</span>';
+  return `<div class="qitem"><div class="row" style="justify-content:space-between"><span class="to">▸ ${esc(q.toName||q.to||'lead')} ${q.company?'· '+esc(q.company):''}</span>${statusPill}</div>${spamBox}${warn}<div class="subj">${esc(q.subject||'')}</div><pre>${esc(q.body||'')}</pre><div class="muted" style="margin:-4px 0 8px;font-size:11.5px">+ your business address &amp; a working unsubscribe link are stamped on automatically at send</div><div class="row">${approved?`<a href="${gmail}" target="_blank" rel="noopener"><button class="sm ok">✉ Gmail</button></a><a href="${outlook}" target="_blank" rel="noopener"><button class="sm ghost">Outlook</button></a><button class="sm ghost" onclick="copyBody('${q.id}')">Copy</button><a href="${mailto}"><button class="sm ghost">Default app</button></a><button class="sm" onclick="mark('${q.id}','sent')">Mark sent</button>`:`<button class="sm ok" onclick="approve('${q.id}')">✓ Approve</button><button class="sm red" onclick="mark('${q.id}','reject')">✗ Reject</button>`}</div></div>`;
 }
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+// Quotes are escaped too, because esc() is not only used between tags. Several
+// templates below drop it inside a double-quoted attribute — title="..." and,
+// worse, onclick="..." — and a value carrying a bare " closed the attribute and
+// opened a new one, so an attacker-chosen string became an event handler with
+// no click needed. The clearest case is the owner-only Sales Reps screen, which
+// renders OTHER accounts' email addresses (loadUnattributed) and signup applies
+// no format check to an address at all.
+// NOTE: this does not make onclick="fn('${esc(x)}')" safe. The parser decodes
+// &#39; back to ' before the JS is parsed, so a quote still ends that string
+// literal — those handlers need data-* attributes and a delegated listener, not
+// a better escaper. This closes the no-interaction breakout only.
+function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 const FIELDS=['name','senderName','offer','icp','valueProp','proof','tone','cta','notes','mailingAddress','website','pricing'];
 // The 20s background poll used to repaint every input from the last SAVED
 // server values — wiping whatever was being typed, and blanking all eight
 // AI-autofilled fields before they could be saved. Once anything is edited we
 // leave the forms alone until it is saved.
 let _dirty=false;
-const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_language','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice','v_profileId'];
+const VOICE_FIELDS=['v_agentName','v_greeting','v_transferTo','v_onCall','v_hours','v_slotMinutes','v_timezone','v_language','v_faq','v_objective','v_qualifying','v_objections','v_voicemail','v_ttsVoice'];
 // The SENDING/schedule/data-key forms suffered the same poll-wipe as the
 // profile form: type your email, tab to the password box, and 20s later the
 // email field snapped back to the saved value — so Connect verified the new
@@ -1005,6 +1149,10 @@ function fillForm(force){
   if(_dirty&&!force)return;                      // never clobber unsaved edits
   const p=curProfile()||{};
   FIELDS.forEach(k=>{const el=$('f_'+k);if(el&&document.activeElement!==el)el.value=p[k]||'';});
+  // The paste-your-website box belongs to the business you were LOOKING at.
+  // Left as-is on a switch, the old URL sits there implying it describes the
+  // business now on screen. Show this business's own site instead (or empty).
+  if($('autoUrl')&&document.activeElement!==$('autoUrl')){$('autoUrl').value=p.website||'';if($('autoMsg'))$('autoMsg').textContent='';}
   window._editId=(p&&p.id)||'';
   // Only a brand-new, still-empty business gets the collapsed view. Once there
   // is real content it stays open, so nobody has to hunt for their own details
@@ -1012,7 +1160,7 @@ function fillForm(force){
   const mf=$('manualFields');
   if(mf&&!mf.open&&!isStarter(p))mf.open=true;
 }
-function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');markDirty();showTab('business');toast('Fill in the new business, then Save');}
+function newProfile(){window._editId='';FIELDS.forEach(k=>$('f_'+k).value='');if($('autoUrl'))$('autoUrl').value='';if($('autoMsg'))$('autoMsg').textContent='';markDirty();showTab('business');toast('Fill in the new business, then Save');}
 async function deleteProfile(){
   const p=curProfile();if(!p)return;
   if(STATE.profiles.length<=1)return toast('You need at least one business');
@@ -1090,9 +1238,24 @@ function renderVoiceChrome(v){
   // them to the cheap one. Our own cost lives on the owner's spend line.
   vs.innerHTML=(v.catalogue||[]).map(x=>`<option value="${x.value}">${esc(x.label)}</option>`).join('');
   if(!_dirty)vs.value=v.ttsVoice||v.defaultVoice||'';
-  const sel=$('v_profileId');
-  sel.innerHTML=(STATE.profiles||[]).map(p=>`<option value="${p.id}">${esc(p.name||'(unnamed)')}</option>`).join('');
-  if(v.profileId&&!_dirty)sel.value=v.profileId;
+  if($('vBizName'))$('vBizName').textContent=(curProfile()||{}).name||'your business';
+  // No number on THIS business but another one holds a line? Offer the free
+  // move before the paid buy — most owners want their one line to follow the
+  // business they are setting up, not a second monthly rental.
+  const mv=$('vMoveNum');
+  if(mv){
+    const other=(STATE.profiles||[]).find(p=>p.id!==pid()&&p.voice&&p.voice.number);
+    mv.innerHTML=(!v.number&&other)
+      ?`<div class="okbox" style="margin-bottom:10px">${esc(other.name||'Another business')} has the number <b>${esc(other.voice.number)}</b>. <a href="#" onclick="moveNumberHere('${esc(other.id)}');return false"><b>Move it to this business</b></a> (free) — or get this business its own number below.</div>`
+      :'';
+  }
+}
+async function moveNumberHere(fromId){
+  try{
+    const r=await api('/api/voice/numbers/reassign',{toProfileId:pid(),fromProfileId:fromId||''});
+    toast('Done — '+r.number+' now answers as '+((curProfile()||{}).name||'this business'));
+    await load();renderVoice();renderNumber();
+  }catch(e){toast(e.message);}
 }
 async function saveVoice(){
   const b=$('vSaveBtn');b.disabled=true;
@@ -1101,7 +1264,7 @@ async function saveVoice(){
     // enabled:true from here meant an owner who turned answering off for a
     // shutdown, then fixed a typo in the greeting, silently had the AI start
     // taking live calls again — and the toggle still read OFF.
-    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:$('v_profileId').value,
+    await api('/api/voice/save',{enabled:((STATE.voice||{}).enabled!==false),agentName:$('v_agentName').value,profileId:pid(),
       greeting:$('v_greeting').value,transferTo:$('v_transferTo').value,onCall:$('v_onCall').value,hours:$('v_hours').value,slotMinutes:$('v_slotMinutes').value,timezone:$('v_timezone').value,language:$('v_language').value,
       faq:$('v_faq').value,voicemail:$('v_voicemail').value,
       objective:$('v_objective').value,qualifying:$('v_qualifying').value,objections:$('v_objections').value,
@@ -1110,13 +1273,9 @@ async function saveVoice(){
     $('vMsg').textContent='Saved ✓';toast('Voice agent saved');clearDirty();await load();
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
-// Which business the PHONE answers as — deliberately not the tab's dropdown,
-// which is a different selection and can disagree with it.
-function curProfileForVoice(){
-  const v=STATE.voice||{};
-  const ps=STATE.profiles||[];
-  return ps.find(p=>p.id===v.profileId)||ps[0]||null;
-}
+// The phone tab always shows the business selected in the header — one
+// selection, one truth, same as the Sales Desk.
+function curProfileForVoice(){return curProfile()||null;}
 // ---- your own phone line ----
 function renderNumber(){
   const v=STATE.voice||{};
@@ -1132,6 +1291,7 @@ function renderNumber(){
   if($('v_enabled'))$('v_enabled').checked=on;
   if($('v_enabledLabel'))$('v_enabledLabel').textContent=on?'Answering is ON':'Answering is OFF';
   if($('v_record'))$('v_record').checked=(v.record!==false);
+  if($('v_spam'))$('v_spam').checked=(v.spamFilter!==false);
   if($('v_enabledHint'))$('v_enabledHint').textContent=on
     ? 'Turn it off and callers get your voicemail instead.'
     : 'Callers are going to voicemail right now.';
@@ -1144,7 +1304,8 @@ const FWD={
     s:['On the phone with your business line, dial:',
        'NOANSWER — forward after it rings',
        'BUSY — forward when you are already on a call',
-       'Press call after each. You will hear a short confirmation tone.']},
+       'UNREACHABLE — forward when your phone is off or out of signal',
+       'Press call after each. You will hear a short confirmation tone. With all three set, no caller can ever reach your voicemail — the AI answers instead.']},
   vz:{t:'Verizon',
     s:['On the phone with your business line, dial:',
        'VZ — forwards when busy or unanswered',
@@ -1165,6 +1326,7 @@ function showFwd(k){
   const body=f.s.map(line=>{
     if(line.startsWith('NOANSWER'))return '&bull; '+code('*61*'+mine+'#')+' — forward after it rings out';
     if(line.startsWith('BUSY'))return '&bull; '+code('*67*'+mine+'#')+' — forward when you are already on a call';
+    if(line.startsWith('UNREACHABLE'))return '&bull; '+code('*62*'+mine+'#')+' — forward when your phone is off or has no signal';
     if(line.startsWith('VZ'))return '&bull; '+code('*71'+mine)+' — forwards when busy or unanswered';
     return '&bull; '+esc(line);
   }).join('<br>');
@@ -1173,15 +1335,20 @@ function showFwd(k){
 }
 async function toggleRecording(){
   const on=$('v_record').checked;
-  try{await api('/api/voice/save',{record:on,enabled:((STATE.voice||{}).enabled!==false),profileId:(STATE.voice||{}).profileId||''});toast(on?'Recording on':'Recording off — transcripts only');await load();renderNumber();}
+  try{await api('/api/voice/save',{record:on,enabled:((STATE.voice||{}).enabled!==false),profileId:pid()});toast(on?'Recording on':'Recording off — transcripts only');await load();renderNumber();}
   catch(e){toast(e.message);$('v_record').checked=!on;}
+}
+async function toggleSpamFilter(){
+  const on=$('v_spam').checked;
+  try{await api('/api/voice/save',{spamFilter:on,enabled:((STATE.voice||{}).enabled!==false),profileId:pid()});toast(on?'Spam filter on — robocalls get hung up on':'Spam filter off — every call is answered normally');}
+  catch(e){toast(e.message);$('v_spam').checked=!on;}
 }
 async function toggleAnswering(){
   const on=$('v_enabled').checked;
   if(!on&&!confirm('Turn answering off?\n\nCallers will get your voicemail instead of the AI until you switch it back on.'))
     { $('v_enabled').checked=true; return; }
   try{
-    await api('/api/voice/save',{enabled:on,profileId:(STATE.voice||{}).profileId||''});
+    await api('/api/voice/save',{enabled:on,profileId:pid()});
     toast(on?'Answering is on':'Answering is off — callers get voicemail');
     await load();renderVoice();renderNumber();
   }catch(e){toast(e.message);$('v_enabled').checked=!on;}
@@ -1204,7 +1371,7 @@ async function findNumbers(){
 async function buyNumber(phoneNumber){
   if(!confirm(`Make ${phoneNumber} your business line?\n\nYour AI answers it from the moment you confirm.`))return;
   try{
-    const r=await api('/api/voice/numbers/buy',{phoneNumber});
+    const r=await api('/api/voice/numbers/buy',{phoneNumber,profileId:pid()});
     toast('Your number is live: '+r.number);
     await load();renderVoice();renderNumber();
   }catch(e){toast(e.message);}
@@ -1212,7 +1379,7 @@ async function buyNumber(phoneNumber){
 async function releaseNumber(){
   if(!confirm('Give up this number?\n\nCalls to it will stop reaching you, and you cannot get the same one back.'))return;
   const b=$('numRelBtn');b.disabled=true;
-  try{await api('/api/voice/numbers/release',{});toast('Number released');await load();renderVoice();renderNumber();}
+  try{await api('/api/voice/numbers/release',{profileId:pid()});toast('Number released');await load();renderVoice();renderNumber();}
   catch(e){toast(e.message);}
   finally{b.disabled=false;}
 }
@@ -1414,7 +1581,7 @@ async function blockCaller(num){
 async function loadStats(){
   const box=$('statTiles'); if(!box)return;
   try{
-    const s=await api('/api/voice/stats');
+    const s=await api('/api/voice/stats?profileId='+encodeURIComponent(pid()));
     const m=s.thisMonth||{}, w=s.last7||{};
     const tile=(n,label,sub,accent)=>`<div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:${accent?'#eaf5ee':'var(--paper2)'}">
       <div style="font-size:28px;font-weight:800;line-height:1;color:${accent?'#1f5c39':'var(--ink)'}">${n}</div>
@@ -1497,7 +1664,7 @@ async function loadCalls(){
       const t=(c.transcript||[]).map(x=>`<div><b>${x.who==='caller'?'Caller':'AI'}:</b> ${esc(x.text)}</div>`).join('');
       return `<div class="qitem"><div class="row" style="justify-content:space-between">
         <span class="to">${c.direction==='inbound'?'⬅ from '+esc(c.from||'?'):'➡ to '+esc(c.to||'?')} · ${new Date(c.at).toLocaleString()}</span>
-        <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome||c.status||'')}</span></div>
+        <span class="pill ${c.outcome==='booked'?'approved':'new'}">${esc(c.outcome==='spam'?'spam — blocked, not billed':c.outcome==='screened-out'?'screened out — not billed':(c.outcome||c.status||''))}</span></div>
         <div class="muted">${c.durationSec?`${c.durationSec}s · `:''}${c.turns?`${c.turns} turns · `:''}${(STATE.isOwner&&c.estCost)?`<b>~$${c.estCost.toFixed(2)}</b> est. cost · `:''}${(c.direction==='inbound'&&c.from)?`<a href="#" onclick="blockCaller('${esc(c.from)}');return false" style="color:var(--ink2)">block this number</a>`:''}</div>
         ${c.booking?`<div class="okbox" style="margin:8px 0">📅 ${esc(c.booking.name||'Caller')} · ${esc(c.booking.phone||'')} · ${esc(c.booking.when||'')} — ${esc(c.booking.reason||'')}</div>`:''}
         ${c.recordingSid?`<audio controls preload="none" style="width:100%;height:32px;margin-top:8px" src="/api/voice/recording?sid=${encodeURIComponent(c.sid)}"></audio>`:''}
@@ -1656,6 +1823,7 @@ async function loadReps(){
           <label class="muted" style="font-size:12.5px"><input type="checkbox" ${r.agreementSignedAt?'checked':''} onchange="repSet('${r.id}','agreementSigned',this.checked)" style="width:auto"> agreement signed</label>
           <label class="muted" style="font-size:12.5px"><input type="checkbox" ${r.w9ReceivedAt?'checked':''} onchange="repSet('${r.id}','w9Received',this.checked)" style="width:auto"> W-9 on file</label>
           <input placeholder="payout method" value="${esc(r.payoutMethod||'')}" onchange="repSet('${r.id}','payoutMethod',this.value)" style="max-width:150px;margin:0;font-size:12.5px">
+          <label class="muted" style="font-size:12.5px">rate % <input type="number" min="5" max="70" value="${(r.rateBps||3000)/100}" onchange="repSet('${r.id}','ratePct',this.value)" style="width:64px;margin:0 0 0 4px;font-size:12.5px" title="This rep's commission on collected revenue for an account's first 24 months. Default 30."></label>
           <button class="sm ${r.blocked||r.payableCents<=0?'ghost':'red'}" ${r.blocked||r.payableCents<=0?'disabled':''} onclick="repPay('${r.id}')">Mark $${(r.payableCents/100).toFixed(2)} paid</button>
           ${r.status==='active'?`<button class="sm ghost" onclick="repSet('${r.id}','status','inactive')">Deactivate</button>`:`<button class="sm ghost" onclick="repSet('${r.id}','status','active')">Reactivate</button>`}
           <button class="sm ghost" style="color:var(--red)" onclick="repDelete('${r.id}')">Delete</button>
@@ -1785,11 +1953,29 @@ function showUpgrade(){
     html+=`<div class="tsec"><h3>✉️ Lead finding</h3><p><b>Want new customers?</b> Describe who you sell to. It finds them, verifies the email, and writes each one a personal message. <b>You approve every send</b>; nothing goes out without you.</p></div>
       <div class="tiergrid">${leads.map(card).join('')}</div>`;
   }
+  // Top-up packs get their OWN section, not a line buried in billing fine
+  // print at the bottom of a 5,000px modal — that is where they went to die.
+  const T=STATE.topups||{};
+  // Always clickable. A disabled button answers a click with a busy cursor
+  // and no explanation -- which reads as broken. Clicking without a plan gets
+  // told WHY, out loud, and shown the plans.
+  const packBtns=['minutes250','leads500','leads2000'].filter(k=>T[k]).map(k=>
+    `<button class="sm ghost" onclick="buyTopup('${k}')" style="font-size:14px;padding:8px 14px">${esc(T[k].name)} · <b>$${T[k].price}</b></button>`).join(' ');
+  if(packBtns){
+    html+=`<div class="tsec" style="margin-top:18px"><h3>➕ Top-up packs</h3>
+      <p>Plans don't stack — <b>packs do</b>. A one-time boost on top of your plan for a heavy month: never automatic, never recurring, and unused balance rolls over to next month.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${packBtns}</div>
+      ${(isPro&&(STATE.usage.topupLeads||STATE.usage.topupMinutes))?`<div class="muted" style="font-size:12.5px;margin-bottom:8px">Your balance right now: <b>${STATE.usage.topupLeads||0}</b> extra leads · <b>${STATE.usage.topupMinutes||0}</b> extra minutes</div>`:''}`;
+  }
   $('tierCards').innerHTML=html||'<div class="muted">Plans are being set up. Email support@dawnpipe.com and we will get you started by hand.</div>';
   $('trustStrip').innerHTML=(STATE.trust||[]).map((x,i)=>`<div class="${i%2?'ok':''}"><b>${esc(x.k)}</b>${esc(x.v)}</div>`).join('');
-  let note=isPro
-    ? `You're on <b>${esc(STATE.usage.tierName||'')}</b>. Switching opens your billing portal so your existing plan is <b>changed</b>, not doubled up. <a href="/billing">Manage billing →</a>`
-    : '';
+  let note='';
+  if(isPro){
+    const cancelBits=STATE.cancelAt
+      ? `<div style="margin-top:8px;padding:10px 12px;background:#fbeceb;border:1px solid #f0b8b3;border-radius:8px">Your plan is set to end on <b>${new Date(STATE.cancelAt).toLocaleDateString()}</b> — nothing more will be charged. Changed your mind? <button class="sm ghost" onclick="resumePlan()">Resume my plan</button></div>`
+      : `<button class="sm ghost" style="color:var(--red)" onclick="cancelPlan()">Cancel plan</button>`;
+    note=`You're on <b>${esc(STATE.usage.tierName||'')}</b>. Switching plans opens your billing portal so your existing plan is <b>changed</b>, not doubled up — plans don't stack, and upgrading is prorated by Stripe so you never pay twice for the same days. You keep every lead, call and booking when you switch. <a href="/billing">Manage billing →</a> ${cancelBits}`;
+  }
   if(STATE.isOwner){
     const missing=all.filter(t=>!t.available).map(t=>t.name);
     const stale=all.filter(t=>t.available&&t.priceCurrent===false).map(t=>t.name);
@@ -1802,6 +1988,26 @@ function showUpgrade(){
   $('billingNote').innerHTML=note;
   $('upgradePanel').style.display='';
   $('upgradePanel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function cancelPlan(){
+  if(!confirm(`Cancel your plan?
+
+Nothing more will be charged. Everything keeps working until the end of what you've already paid for (on a trial: until the trial ends, and your card is never charged). You can resume any time before then with one click.`))return;
+  try{const r=await api('/api/billing/cancel',{});toast(r.note);await load();showUpgrade();}
+  catch(e){toast('Could not cancel automatically: '+e.message+' — email support@dawnpipe.com and we will do it by hand today.');}
+}
+async function resumePlan(){
+  try{const r=await api('/api/billing/resume',{});toast(r.note);await load();showUpgrade();}
+  catch(e){toast(e.message);}
+}
+async function buyTopup(kind){
+  if(!(STATE.usage&&STATE.usage.isPro)){
+    alert('Pick a plan first.' + String.fromCharCode(10, 10) + 'Top-up packs add extra minutes or leads ON TOP of an active plan — they need a plan to add to. Choose a plan above, then come back for the pack.');
+    const first=document.querySelector('.tcard'); if(first)first.scrollIntoView({behavior:'smooth',block:'center'});
+    return;
+  }
+  try{const r=await api('/api/topup',{kind});location.href=r.url;}
+  catch(e){toast(e.message);}
 }
 async function syncPrices(){
   if(!confirm('Create a Stripe price (in the mode of the server\'s Stripe key) for every plan that does not have one? Existing prices are never changed.'))return;
@@ -1816,8 +2022,23 @@ async function autofill(){
   if(!url)return toast('Paste your website first');
   const b=$('autoBtn');b.disabled=true;const o=b.textContent;b.textContent='Reading your site…';
   $('autoMsg').textContent='';
-  try{
-    const r=await api('/api/profile/autofill',{url});
+  try{ await runAutofill({url}); }
+  catch(e){
+    toast(e.message);$('autoMsg').textContent=e.message;
+    $('autoPaste').classList.remove('hide');   // the fetch failed — offer plan B
+  }
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function autofillFromText(){
+  const text=$('autoPasteText').value.trim();
+  if(text.length<80)return toast('Paste a bit more — a few sentences is plenty');
+  const b=$('autoPasteBtn');b.disabled=true;const o=b.textContent;b.textContent='Drafting…';
+  try{ await runAutofill({url:$('autoUrl').value.trim(),text}); $('autoPaste').classList.add('hide'); }
+  catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
+  finally{b.disabled=false;b.textContent=o;}
+}
+async function runAutofill(body){
+    const r=await api('/api/profile/autofill',body);
     const f=r.fields||{};
     ['name','senderName','offer','icp','valueProp','proof','tone','cta','website','pricing','mailingAddress']
       .forEach(k=>{ const el=$('f_'+k); if(el&&f[k])el.value=f[k]; });
@@ -1833,14 +2054,20 @@ async function autofill(){
     $('autoMsg').innerHTML='Done — read it over below and change anything that isn\'t right, then hit Save.'
       +(voiceFilled?' Your phone agent\'s script was written too: <a href="#" onclick="showTab(\'voice\');return false"><b>check it on AI Answering →</b></a>':'');
     toast(voiceFilled?'Your profile and phone script are drafted — review & save':'Profile drafted from your website — review & save');
-  }catch(e){toast(e.message);$('autoMsg').textContent=e.message;}
-  finally{b.disabled=false;b.textContent=o;}
 }
 async function saveProfile(){
   const b=$('saveBtn');b.disabled=true;
   const data={id:window._editId||undefined};FIELDS.forEach(k=>data[k]=$('f_'+k).value);
   if(!data.name){toast('Give the business a name');b.disabled=false;return;}
-  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');clearDirty();await load();$('profileSel').value=r.profile.id;render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
+  // The autofill drafted a phone script too — save it WITH the business, so
+  // the AI Answering tab is already populated for review. Before this the
+  // draft quietly evaporated unless the voice tab was saved separately first.
+  if(window._voiceDrafted){
+    data.voiceDraft={};
+    ['agentName','greeting','hours','objective','qualifying','objections','faq','voicemail']
+      .forEach(k=>{const el=$('v_'+k);if(el&&el.value.trim())data.voiceDraft[k]=el.value.trim();});
+  }
+  try{const r=await api('/api/profile/save',data);toast('Saved ✓ — head to the Sales Desk');window._voiceDrafted=false;clearDirty();await load();$('profileSel').value=r.profile.id;syncVoiceState();render();$('saveMsg').textContent='Saved. Now open the Sales Desk →';}catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 // ---- busy manager: progress bar, staged messages, running timer, button lock ----
 let _busyTimer=null,_stageTimer=null,_busyStart=0;
@@ -1924,14 +2151,37 @@ function fillSettings(){
   const m=STATE.smtp||{};
   set('sm_user',m.user||'');set('sm_fromName',m.fromName||'');set('sm_host',m.host||'smtp.gmail.com');
   set('sm_delay',STATE.sendDelaySec??25);set('sm_cap',STATE.dailyCap??50);set('sm_window',STATE.sendWindow||'business');
-  $('smMsg').textContent=m.connected?`Connected as ${m.user} ✓`:'Not connected — you will send by hand';
+  // Sending has three visible states, and only one block shows at a time:
+  //   connected        -> green banner (mode-aware), everything else hidden
+  //   not connected     -> one-click Dawnpipe option (if available) + the
+  //                        "or your own Gmail" guide and fields
+  const easyAvail=!!STATE.dawnpipeSendAvailable;
+  if($('smConnected'))$('smConnected').classList.toggle('hide',!m.connected);
+  if($('smWho'))$('smWho').textContent=m.mode==='dawnpipe'?`sending through Dawnpipe (${m.user||'our mailbox'})`:`sending as ${m.user||''}`;
+  if($('smEasy'))$('smEasy').classList.toggle('hide',m.connected||!easyAvail);
+  if($('smOrLine'))$('smOrLine').classList.toggle('hide',m.connected||!easyAvail);
+  if($('smManual'))$('smManual').classList.toggle('hide',m.connected);
+  if($('smGuide')&&m.connected)$('smGuide').removeAttribute('open');
+  $('smMsg').textContent=m.connected?'':'Not connected — you will send by hand until you connect a mailbox.';
   const ed=STATE.emailData||{};
   renderWarmup();
   loadSuppression();
   renderVoice();
   loadDeskAppointments();
   if(STATE.sendDomain)$('delivDomain').textContent='· '+STATE.sendDomain;
-  $('hkMsg').textContent=ed.connected?'Per-account override active.':(ed.fallback?'Using the platform data key ✓':'⚠ No platform key set — set HUNTER_API_KEY on the server or leads fall back to site-published emails.');
+  // The empty box is normal (password field, never echoed). The status banner
+  // is the real indicator, so a connected key never looks "blank / broken".
+  const hkStatus=$('hkStatus');
+  if(hkStatus){
+    if(ed.connected){hkStatus.className='okbox';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='✓ <b>A data key is connected on this account</b> — verified-email lookups are on. The box below stays empty on purpose (keys are never shown back). Leave it blank to keep this key.';}
+    else if(ed.fallback){hkStatus.className='okbox';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='✓ <b>Using the platform key</b> (set on the server) — every account gets verified emails automatically. You do not need to enter anything here.';}
+    else {hkStatus.className='warnbox bad';hkStatus.style.marginBottom='10px';
+      hkStatus.innerHTML='⚠ <b>No data key.</b> Leads fall back to site-published emails. Set <code>HUNTER_API_KEY</code> on the server, or paste a key below.';}
+  }
+  if($('hk_key'))$('hk_key').placeholder=(ed.connected||ed.fallback)?'A key is saved — paste a new one only to replace it':'Data provider API key';
+  $('hkMsg').textContent='';
   // Owner-only, always. A customer paying for lead-finding must never be told
   // to go and buy a second subscription to make the thing they bought work.
   const edCard=$('cardEmailData');
@@ -1972,25 +2222,108 @@ async function saveSchedule(){
   }catch(e){toast(e.message);}finally{b.disabled=false;}
 }
 // ---- sending mailbox ----
+// Turn Gmail's terse SMTP errors into something an owner can act on. The
+// overwhelmingly common failure is a wrong/absent app password.
+function smtpHint(err){
+  const e=String(err||'').toLowerCase();
+  if(/accepted|authenticat|credential|username and password|535|534|application-specific/.test(e))
+    return 'That code was not accepted. Two things to check: 2-Step Verification must be ON, and you must paste a fresh App Password (not your normal Gmail password). Make a new one and paste all 16 characters.';
+  if(/cert|tls|ssl|handshake/.test(e)) return 'A security handshake failed — wait a moment and try Connect again.';
+  if(/timed out|timeout|econn|network/.test(e)) return 'Could not reach the mail server — check the email address is spelled right, then try again.';
+  return err;
+}
 async function testSmtp(){
   const b=$('smTestBtn');b.disabled=true;const o=b.textContent;b.textContent='Testing…';
   try{const r=await api('/api/settings/smtp/test',{});
-    if(r.ok){$('smMsg').textContent='Live check passed — signed in as '+r.user+' ✓';toast('Gmail accepted the saved password ✓');}
-    else toast('Test failed: '+r.error);
-  }catch(e){toast(e.message);}
+    if(r.ok){$('smMsg').textContent='Live check passed — signed in as '+r.user+' ✓';toast('Your mailbox is working ✓');}
+    else {$('smMsg').textContent='';toast(smtpHint(r.error));}
+  }catch(e){toast(smtpHint(e.message));}
   finally{b.disabled=false;b.textContent=o;}
 }
 async function saveSmtp(){
+  const user=$('sm_user').value.trim();
+  if(!user){toast('Enter your email address first');return;}
   const b=$('smBtn');b.disabled=true;const o=b.textContent;b.textContent='Verifying…';
   try{
-    await api('/api/settings/smtp',{user:$('sm_user').value,pass:$('sm_pass').value,fromName:$('sm_fromName').value,
-      host:$('sm_host').value,port:465,fromEmail:$('sm_user').value,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,sendWindow:$('sm_window').value,verify:!!$('sm_pass').value});
+    await api('/api/settings/smtp',{user,pass:$('sm_pass').value.replace(/\s+/g,''),fromName:$('sm_fromName').value,
+      host:$('sm_host').value,port:465,fromEmail:user,sendDelaySec:$('sm_delay').value,dailyCap:$('sm_cap').value,sendWindow:$('sm_window').value,verify:!!$('sm_pass').value});
     const hadPass=!!$('sm_pass').value;$('sm_pass').value='';
-    $('smMsg').textContent=hadPass?'Mailbox connected ✓':'Settings updated ✓';
-    toast(hadPass?'Mailbox connected':'Settings updated');clearDirty();await load();
-  }catch(e){$('smMsg').textContent='';toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+    $('smMsg').textContent='';
+    toast(hadPass?'Mailbox connected ✓':'Settings updated ✓');clearDirty();await load();
+  }catch(e){$('smMsg').textContent='';toast(smtpHint(e.message));}finally{b.disabled=false;b.textContent=o;}
+}
+async function useDawnpipe(){
+  const b=$('smEasyBtn');b.disabled=true;const o=b.textContent;b.textContent='Turning on…';
+  try{
+    await api('/api/settings/smtp',{useDawnpipe:true,fromName:$('sm_fromName').value||''});
+    toast('Done — Dawnpipe will send your approved emails ✓');clearDirty();await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+}
+// No confirm() dialog: some in-app browsers silently suppress it, which left
+// the button doing nothing. Disconnecting is one click to undo (reconnect),
+// so a blocking prompt bought nothing and cost reliability.
+async function disconnectSmtp(){
+  const b=event&&event.target;if(b)b.disabled=true;
+  try{await api('/api/settings/smtp',{disconnect:true});toast('Sending turned off');$('sm_pass').value='';clearDirty();await load();}
+  catch(e){toast(e.message);if(b)b.disabled=false;}
 }
 // ---- bulk approve / send ----
+// ---- the assistant (help bubble) ----
+// History lives in sessionStorage so the thread survives tab switches and a
+// reload, but a fresh browser session starts clean.
+let AICHAT=[];try{AICHAT=JSON.parse(sessionStorage.getItem('dp_assist')||'[]');}catch(e){AICHAT=[];}
+function aiToggle(){
+  const pn=$('aiPanel');const opening=!pn.classList.contains('open');
+  pn.classList.toggle('open');
+  if(opening){
+    if(!AICHAT.length){AICHAT.push({who:'assistant',text:"Hi — I'm the Dawnpipe assistant. I can see your setup, so ask me anything: why something isn't working, what to do next, what a plan includes."});}
+    aiRender();$('aiInput').focus();
+  }
+}
+function aiRender(){
+  const box=$('aiMsgs');
+  box.innerHTML=AICHAT.map((m,i)=>{
+    const cls=m.who==='you'?'you':'bot';
+    let h=`<div class="aim ${cls}">${esc(m.text)}</div>`;
+    if(m.go)h+=`<button class="sm red aigo" onclick="aiGo('${esc(m.go)}')">Take me there →</button>`;
+    return h;
+  }).join('');
+  box.scrollTop=box.scrollHeight;
+  try{sessionStorage.setItem('dp_assist',JSON.stringify(AICHAT.slice(-30)));}catch(e){}
+}
+function aiGo(tab){
+  $('aiPanel').classList.remove('open');
+  if(tab==='plans'){showUpgrade();return;}
+  showTab(tab);
+}
+async function aiSend(){
+  const inp=$('aiInput');const msg=inp.value.trim();
+  if(!msg)return;
+  inp.value='';$('aiSend').disabled=true;
+  AICHAT.push({who:'you',text:msg});aiRender();
+  const box=$('aiMsgs');box.insertAdjacentHTML('beforeend','<div class="aim think" id="aiThink">thinking…</div>');box.scrollTop=box.scrollHeight;
+  try{
+    const r=await api('/api/assistant',{message:msg,history:AICHAT.slice(-10)});
+    AICHAT.push({who:'assistant',text:r.text||'…',go:r.go||''});
+  }catch(e){
+    AICHAT.push({who:'assistant',text:'I hit a snag: '+e.message+' — try again, or email support@dawnpipe.com.'});
+  }
+  const th=$('aiThink');if(th)th.remove();
+  $('aiSend').disabled=false;aiRender();$('aiInput').focus();
+}
+
+async function adjustAll(){
+  const instruction=$('adjInstr').value.trim();
+  if(!instruction)return toast('Tell the team what to change first — e.g. "shorter, and lead with the free estimate"');
+  const n=STATE.queue.filter(q=>q.profileId===pid()&&(q.status==='pending'||q.status==='approved')).length;
+  if(!n)return toast('Nothing in the queue to adjust.');
+  const b=$('adjBtn');b.disabled=true;const o=b.textContent;b.textContent='Rewriting '+n+'…';
+  try{
+    const r=await api('/api/queue/adjust',{profileId:pid(),instruction});
+    toast('Rewrote '+r.done+' of '+r.total+' drafts'+(r.failed?' ('+r.failed+' left unchanged)':'')+'. All back in the queue for your approval — read the new wording before sending.');
+    $('adjInstr').value='';await load();
+  }catch(e){toast(e.message);}finally{b.disabled=false;b.textContent=o;}
+}
 async function approveAll(){
   const b=$('apprAllBtn');b.disabled=true;
   try{const r=await api('/api/queue/approve-all',{profileId:pid()});toast(`Approved ${r.approved}`);await load();}
@@ -2014,16 +2347,23 @@ async function approveAndSendAll(){
   const pend=mine.filter(q=>q.status==='pending'||q.status==='approved').length;
   const held=mine.filter(q=>q.status==='held').length;
   if(!pend){
-    if(held)return toast(`${held} draft(s) are held because the address couldn't be verified — sending those would bounce and hurt your domain. Re-run Find leads, or use "Clear guesses".`);
-    return toast('Nothing to send — no approved or pending drafts for this business.');
+    if(held)return toast(`Those ${held} draft(s) are parked — no verified email, so sending would bounce. Run Find leads again for real emails, or Clear parked.`);
+    return toast('Nothing to send — no drafts ready for this business.');
   }
-  if(!confirm(`Approve and SEND ${pend} email(s) from ${STATE.smtp.user}?\n\nThey go out a few minutes apart to protect your sender reputation — you can close the page, and you can stop it at any time.`))return;
+  if(!confirm(`Send the ${pend} draft(s) that have a verified email, from ${STATE.smtp.user}?\n\nAnything without a real email is parked, not sent. They go out a few minutes apart — you can close the page and stop any time.`))return;
+  const sr=$('sendResult');if(sr)sr.classList.add('hide');
   const b=$('sendAllBtn'),ab=$('apprAllBtn');b.disabled=true;ab.disabled=true;
   try{
     await api('/api/queue/approve-all',{profileId:pid()});
     const r=await api('/api/send/run',{profileId:pid()});
     watchSend(r.jobId);
   }catch(e){toast(e.message);b.disabled=false;ab.disabled=false;}
+}
+// Bin every parked (held) draft for this business in one call.
+async function clearParked(){
+  const b=$('clearParkedBtn');if(b)b.disabled=true;
+  try{const r=await api('/api/queue/clear-held',{profileId:pid()});toast(`Cleared ${r.cleared} parked draft${r.cleared===1?'':'s'}`);await load();}
+  catch(e){toast(e.message);if(b)b.disabled=false;}
 }
 // One watcher, shared by "send all" and by a page that reloads mid-run. Without
 // the second path, refreshing the tab left mail going out with no Stop button
@@ -2053,16 +2393,30 @@ function watchSend(jobId){
     await load().catch(()=>{});
     if(s.status==='running'){setTimeout(poll,2500);return;}
     finish();
-    if(s.status==='error')toast('Send failed: '+s.error);
-    else if(s.note)toast(s.note);
-    else toast(`Sent ${s.sent}${s.failed?`, ${s.failed} failed`:''}${s.deferred?`, ${s.deferred} held for their business hours`:''}${s.blocked?`, ${s.blocked} held (unverified address)`:''}${s.skipped?`, ${s.skipped} held for tomorrow (daily cap)`:''}`);
+    if(s.status==='error'){toast('Send failed: '+s.error);return;}
+    // A persistent result banner, not a toast that vanishes — the whole point
+    // is that you can SEE what went and what got parked.
+    const sr=$('sendResult');
+    if(sr){
+      const bits=[`<b>✅ ${s.sent} sent</b>`];
+      if(s.blocked)bits.push(`⏸ ${s.blocked} parked (no verified email)`);
+      if(s.deferred)bits.push(`🕗 ${s.deferred} waiting for their business hours`);
+      if(s.skipped)bits.push(`📅 ${s.skipped} going tomorrow (daily limit)`);
+      if(s.failed)bits.push(`⚠ ${s.failed} failed`);
+      sr.innerHTML=bits.join(' · ')+(s.blocked?' — parked ones are below; run Find leads for real emails, or Clear parked.':'');
+      sr.className='okbox';sr.classList.remove('hide');
+    }
+    if(s.note)toast(s.note);
   };
   poll();
 }
 async function approve(id){try{await api('/api/queue/approve',{id});await load();}catch(e){toast(e.message);}}
 async function mark(id,kind){try{await api('/api/queue/'+(kind==='sent'?'sent':'reject'),{id});toast(kind==='sent'?'Logged as sent':'Rejected');await load();}catch(e){toast(e.message);}}
 function copyBody(id){const q=STATE.queue.find(x=>x.id===id);if(!q)return;navigator.clipboard.writeText(`Subject: ${q.subject}\n\n${q.body}`);toast('Copied');}
-$('profileSel').addEventListener('change',()=>{clearDirty();saveUI();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();});
+$('profileSel').addEventListener('change',()=>{clearDirty();saveUI();syncVoiceState();fillForm();fillSettings();$('bizDot').classList.toggle('hide',!isStarter(curProfile()));render();
+  // The phone tab follows the business you picked, same as the Sales Desk —
+  // its script, its number (or its "get a number" card), its stats.
+  if(curTab==='voice'){renderVoice();renderNumber();loadStats();loadCalls();}});
 load().then(()=>{
   // A half-finished business profile still wins — there is nothing useful to
   // do on the other tabs until it is filled in. Otherwise honour where you were.
@@ -2071,4 +2425,10 @@ load().then(()=>{
 checkoutReturn();
 setInterval(()=>{load().catch(()=>{});},20000); // background poll: stay quiet on blips
 </script>
+<button id="aiFab" onclick="aiToggle()" title="Ask the assistant">💬</button>
+<div id="aiPanel">
+  <div id="aiHead"><span>Dawnpipe assistant<span class="sub">Knows your account · answers in seconds</span></span><button class="sm ghost" style="color:var(--paper2);border-color:transparent" onclick="aiToggle()">✕</button></div>
+  <div id="aiMsgs"></div>
+  <div id="aiRow"><input id="aiInput" placeholder="Ask anything — setup, sending, your number…" onkeydown="if(event.key==='Enter')aiSend()"><button id="aiSend" onclick="aiSend()">Send</button></div>
+</div>
 </body></html>
