@@ -105,6 +105,35 @@ const NUM_A = '+15550002222', NUM_B = '+15550003333', CALLER = '+15558880001';
   r = await api('/api/voice/numbers/buy', { phoneNumber: '+15550009999', profileId: pD.id });
   ok('third line refused with a human answer', r.status === 400 && /2 phone lines/.test(r.json.error || ''), JSON.stringify(r.json));
 
+  console.log('== a legacy line counts ONCE, not twice ==');
+  // The legacy account rents exactly one number (PNleg), held in the
+  // account-level slot. Its first per-profile save copies that config -- number
+  // and numberSid -- onto the bound profile and leaves the original in place,
+  // so the same purchase sits in two slots. Counting slots spent the whole
+  // 2-line cap on one line, and the second business could never get one.
+  const legacyLogin = await fetch('http://127.0.0.1:8103/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'email=legacy%40x.com&password=x' });
+  const legacyCookie = (legacyLogin.headers.get('set-cookie') || '').split(';')[0];
+  const legacyApi = async (path, body) => {
+    const rr2 = await fetch('http://127.0.0.1:8103' + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Cookie: legacyCookie }, body: body ? JSON.stringify(body) : undefined });
+    return { status: rr2.status, json: await rr2.json().catch(() => ({})) };
+  };
+  const legacyProf = db.getProfiles(legacy.id)[0];
+  await legacyApi('/api/voice/save', { profileId: legacyProf.id, greeting: 'Lawncare here', agentName: 'Rosa', enabled: true });
+  ok('the greeting save copied the line onto the profile', (db.getProfile(legacy.id, legacyProf.id).voice || {}).numberSid === 'PNleg'
+    && ((db.getAccount(legacy.id).voice || {}).numberSid) === 'PNleg');
+  // Stub the purchase: this must never reach Twilio.
+  const numbersMod = require('./lib/numbers');
+  const realBuy = numbersMod.buy;
+  numbersMod.buy = async ({ phoneNumber }) => ({ phoneNumber, sid: 'PNnew' });
+  const second = db.createProfile(legacy.id, { name: 'Legacy Snow Clearing', offer: 'snow clearing' });
+  r = await legacyApi('/api/voice/numbers/buy', { phoneNumber: '+15550005555', profileId: second.id });
+  ok('a second business can still rent its line', r.status === 200 && r.json.ok === true && r.json.number === '+15550005555', JSON.stringify(r.json));
+  // ...and the cap is still a cap: two REAL lines now, so a third is refused.
+  const third = db.createProfile(legacy.id, { name: 'Legacy Gutters', offer: 'gutters' });
+  r = await legacyApi('/api/voice/numbers/buy', { phoneNumber: '+15550006666', profileId: third.id });
+  numbersMod.buy = realBuy;
+  ok('two real lines still exhaust the cap', r.status === 400 && /2 phone lines/.test(r.json.error || ''), JSON.stringify(r.json));
+
   console.log(String.fromCharCode(10) + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('HARNESS', e); process.exit(1); });

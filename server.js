@@ -2811,8 +2811,15 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // Every rented line costs real money monthly. One number per business
         // is the product; a small account-wide cap stops a runaway account
         // from renting lines on our dime. Owner exempt.
-        const linesHeld = ((account.voice || {}).numberSid ? 1 : 0)
-          + db.getProfiles(acc).filter((pr) => pr.voice && pr.voice.numberSid).length;
+        // Count DISTINCT purchase records, not slots. An account set up before
+        // per-business numbers keeps its line in the account-level slot, and
+        // the first per-profile save copies that config (number AND numberSid)
+        // onto the profile without clearing the original — so the one line
+        // Twilio actually bills us for appeared twice and spent the whole cap.
+        // A legacy customer who edited their greeting could then never add a
+        // second business's line.
+        const linesHeld = new Set([(account.voice || {}).numberSid,
+          ...db.getProfiles(acc).map((pr) => pr.voice && pr.voice.numberSid)].filter(Boolean)).size;
         if (!stripe.isOwner(account) && linesHeld >= 2) {
           return json(res, { error: 'Your account already rents 2 phone lines. Need more? Email support@dawnpipe.com and we will set it up.' }, 400);
         }
