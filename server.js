@@ -3534,7 +3534,12 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         // Fail FAST and VISIBLY. These same checks exist inside the job, but an
         // async job's error is easy to miss — a 400 here becomes an immediate
         // toast telling the user exactly what to fix.
-        const cfg0 = account.smtp || {};
+        // Read the RESOLVED config, the same one the job reads. On
+        // "let Dawnpipe send for you" the account stores only a marker
+        // (useDawnpipe + the from identity) and never a password, so checking
+        // account.smtp raw refused every Dawnpipe-mode account — the app said
+        // "connected", this said "connect your mailbox", and nothing could send.
+        const cfg0 = outboundSmtpCfg(account);
         if (!cfg0.user || !cfg0.pass) return json(res, { error: 'Connect your sending mailbox first (Your Business tab → SENDING).' }, 400);
         const prof0 = db.getProfile(acc, f.profileId);
         if (!prof0) return json(res, { error: 'Pick a business first.' }, 400);
