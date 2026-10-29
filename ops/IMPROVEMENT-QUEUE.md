@@ -1266,3 +1266,97 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     "caller hears an error" to "caller hears the message was taken."
     Recommend merging together with the branch above — both are small,
     single-purpose, same audit run, no overlap in the lines they touch.
+
+36. **URGENT — merge `audit/2026-10-28-dawnpipe-send-gate`. "Let Dawnpipe send
+    for you" can never actually send.** New independent audit run (2026-10-28,
+    lens (a) — `server.js`'s request/webhook handlers, `ops/audit/2026-10-28.md`
+    on `keeper-audit`), found after this shift's 10-28 report had already been
+    written. One-click sending (`smtp.useDawnpipe`) deliberately stores no
+    password — everything that actually sends resolves the config through
+    `outboundSmtpCfg()` (`server.js:15-22`), which swaps in the system mailbox,
+    and that path is correct. But the fail-fast gate in front of `/api/send/run`
+    (`server.js:3537`, added so an async job's error is "easy to miss") read
+    `account.smtp` raw instead of the resolved config, so `cfg0.pass` was always
+    undefined for a Dawnpipe-mode account — the gate refused every send with
+    "Connect your sending mailbox first," on a tab that was still showing it as
+    connected. The one-button send in `views/app.html` runs approve-all (which
+    succeeds, flipping every draft to `approved`) immediately before the send
+    call that then 400s — so a customer who clicks it loses the drafts' pending
+    state AND never gets a send, with no path out inside the product except
+    abandoning the feature for a personal Gmail connection. Reproduced end to
+    end through real HTTP against the running server. Fires live the moment
+    `SYSTEM_SMTP_USER`/`SYSTEM_SMTP_PASS` are set in Render (same condition that
+    reveals the button at all); latent otherwise. The audit could not confirm
+    from here whether that env var is actually set in production — `GET
+    /health`'s `mail: <bool>` answers it in one anonymous request, but this
+    session's egress to dawnpipe.com is blocked (see Site status) — flagging
+    for Alijah to check directly.
+    **Status (2026-10-29): independently re-verified this shift, not taken on
+    trust.** Read the diff directly: the fix is one line, the gate now reads
+    `outboundSmtpCfg(account)` — the same resolved config `startSendJob` already
+    reads — so the two can no longer disagree; an account with no mailbox at all
+    is still refused with the same message (confirmed `test-sending-mode.js`'s
+    added "no mailbox = refused, as before" assertion covers exactly that).
+    Merged into an isolated worktree off current `main` (`df1af64`, unchanged
+    since 10-20): clean alone, clean combined with the other 2026-10-28 branch
+    below (item 37), and clean combined with all four of item 34/35's top-priority
+    branches at once (six-way `git merge --no-commit --no-ff`, no conflicts).
+    `node --check` clean on `server.js` + all `lib/*.js` on every combination
+    tried. Full suite on the six-branch combined tree: **130/130** across all
+    eight suites (37 reps, 18 spam, 20 voiceprofiles, 15 assistant, 13
+    sending-mode, 7 voicebilling, 15 voicesalvage, 5 voicemsg). This is a
+    revenue-affecting bug on the product's own flagship low-friction onboarding
+    path (the whole point of "let Dawnpipe send for you" is skipping an app-
+    password setup step that visibly loses signups) — recommend merging ahead of
+    the lower-severity backlog, alongside item 34/35's bundle since all six
+    verify clean together.
+    **Related, not fixed here, flagged by the same audit:**
+    `keeper/2026-09-16-dawnpipe-send-warmup` (6+ weeks open) touches this exact
+    code path (Dawnpipe-mode warmup state) and didn't catch this gate — worth
+    merging together and re-reading the whole mode once rather than as two
+    separate reviews.
+
+37. **merge `audit/2026-10-28-count-phone-lines-once`. A legacy account's one
+    rented line was counted twice against the 2-line cap.** Same 2026-10-28
+    audit run, second branch. `server.js:2814`'s `linesHeld` summed
+    `account.voice.numberSid` (the pre-per-business-numbers legacy slot) plus
+    every profile's own `numberSid` — but `db.saveProfileVoice` (`lib/db.js:258`)
+    deliberately seeds a profile's voice config from the legacy resolver on its
+    first save, copying the SAME number and `numberSid` onto the profile without
+    clearing the account-level original (load-bearing: a cold partial patch
+    would shadow the legacy number and kill the line — not itself a bug).
+    The counter one level up just read that one real, single Twilio line as two
+    rented lines. Trigger is any ordinary save on the AI Answering tab, the
+    call-back toggle, a release, or a reassign — after that, a legacy
+    customer's cap is fully spent on a single $1.15/month DID, and "add a line
+    for my second business" is refused with "Your account already rents 2 phone
+    lines." Reproduced against real `lib/db.js` in a throwaway data dir: one
+    real Twilio line, `linesHeld` reads 2 after one greeting save, a genuine
+    second-business purchase is rejected.
+    **Status (2026-10-29): independently re-verified this shift.** Fix counts
+    distinct `numberSid`s via a `Set` instead of summing two slots that can
+    alias the same purchase — measures what the cap was actually meant to
+    protect (purchases, not slots). `test-voiceprofiles.js` gained 3 assertions
+    (greeting save copies the line onto the profile without double-counting; a
+    second business can still rent its own line; two genuinely distinct lines
+    still exhaust the cap) — 20/20. Verified the same way as item 36: clean
+    merge alone, combined with item 36, and combined with the full six-branch
+    top-priority set; full eight-suite run on that combined tree, 130/130; no
+    conflicts anywhere tried. Lower severity than item 36 (narrower trigger,
+    smaller blast radius — legacy multi-business accounts only) but equally
+    safe to merge in the same batch; no reason to hold it separately.
+    **Also from the same audit, reported but not fixed — a product decision,
+    not a bug, per the audit's own framing:** `/api/scout/brief`
+    (`server.js:3631`, `lib/agents.js:552`) is the one AI-spend endpoint (a
+    Sonnet-plus-web-search call, up to 6000 tokens) with none of the guards
+    every sibling endpoint has — no quota consumption, no job lock, no rate
+    limit. A 7-day trial has `stripe.hasAccess` throughout and can hold many in
+    flight at once; cost lands on the owner's Anthropic key regardless of
+    whether the trial ever converts. The house idiom is one line
+    (`rateLimited(req, 'brief', N, 60*60*1000)`), but picking N is a judgment
+    call this shift is declining to make unprompted (a customer-facing
+    behavior change if N is wrong in the strict direction) — same reasoning
+    the audit itself gave. `/api/profile/autofill` has the identical shape one
+    notch down (already queued from 09-16 as the SSRF surface) and is also
+    unbounded for a paid account. Flagging both for Alijah's call on the
+    number; see today's report.
