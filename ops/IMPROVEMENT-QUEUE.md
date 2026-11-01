@@ -1360,3 +1360,15 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     notch down (already queued from 09-16 as the SSRF surface) and is also
     unbounded for a paid account. Flagging both for Alijah's call on the
     number; see today's report.
+    **Status (2026-11-01): re-verified with a full test run, not just
+    `git merge-tree`.** `main` unchanged since 10-19 (`df1af64`), no new
+    `keeper/*`/`audit/*` branch since 10-28, `keeper-audit` unchanged since
+    10-28 (`6ca6279`) — nothing new to triage. Re-did the six-branch
+    top-priority merge (items 34/35/36/37's four branches plus the two
+    10-28 branches) in a fresh isolated worktree with real `git merge
+    --no-ff` commits chained one after another, and actually ran all eight
+    test suites on the merged tree rather than re-trusting the 10-29
+    writeup: clean merge, `node --check` clean, **130/130** across all
+    eight suites. No code change needed — this confirms the batch is still
+    exactly as safe to merge as 10-29 found it, three days later and
+    fresher-verified than yesterday's report (which didn't re-run this).
