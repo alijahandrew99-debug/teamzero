@@ -996,7 +996,19 @@ const server = http.createServer(async (req, res) => {
       if (!name) return html(res, render({ err: 'Please tell us your name.', phone, need }), 400);
       if (!e164) return html(res, render({ err: 'That phone number does not look right — please include the area code.', name, need }), 400);
       if (f.consent !== '1') return html(res, render({ err: 'Please tick the box so we are allowed to call you.', name, phone, need }), 400);
-      const consentShown = String(f.consentText || '').trim() || callback.consentText(biz, phone);
+      // The wording the person actually ticked is the TCPA evidence, so the
+      // field the form posts back is what gets stored — but it arrives from
+      // the client, on a PUBLIC, unauthenticated endpoint, and every other
+      // field here is length-capped while this one was not. Uncapped, one POST
+      // could write up to MAX_BODY (2MB) into callbacks.json — a file db.js is
+      // explicit about never pruning, and which write() rewrites in full on
+      // every insert. 25 such POSTs produce a 52MB file where each further
+      // insert blocks the event loop for over half a second, which on this
+      // single-threaded server is dead air on whatever voice call is live.
+      // The real wording is ~600 characters, ~780 with a long business name,
+      // so 2000 preserves every legitimate submission and makes the field
+      // incapable of being a write amplifier.
+      const consentShown = String(f.consentText || '').trim().slice(0, 2000) || callback.consentText(biz, phone);
       const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
       const rec = db.addCallback(acct.id, {
         source: 'form', name, phone: e164, phoneKey: suppress.phoneKey(e164), need,
