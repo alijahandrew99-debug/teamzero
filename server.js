@@ -2265,9 +2265,20 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         return errSignup('Too many accounts created from here. Try again later.', 429);
       }
       const f = parseForm(await readBody(req));
-      const email = (f.email || '').trim().toLowerCase();
+      const email = (f.email || '').trim().toLowerCase().slice(0, 120);
       const pw = f.password || '';
-      if (!email || pw.length < 6) return errSignup('Enter a valid email and a password of 6+ characters.', 400);
+      // The error said "a valid email" while the check was only "not empty",
+      // so ANY string became an account address. That address is then written
+      // into HTML in several places — /app interpolates it with no escaping
+      // (`__EMAIL__`), and the owner's Sales Reps tab renders other accounts'
+      // addresses through an inline onclick handler, a context HTML-escaping
+      // does not cover. It is also the envelope address every system mail to
+      // the account is sent to. The shape check is the same one
+      // /partners/apply has always applied to an address a stranger supplies;
+      // signup, which creates the record, had none.
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || pw.length < 6) {
+        return errSignup('Enter a valid email and a password of 6+ characters.', 400);
+      }
       if (db.getAccountByEmail(email)) return errSignup('That email already has an account. Try logging in.', 400);
       const { salt, passHash } = auth.hashPassword(pw);
       // Terms nobody was shown are terms a court will not enforce (browsewrap
