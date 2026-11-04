@@ -2083,7 +2083,16 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         }
         db.logActivity(parsed.accountId, { agent: 'SEND', msg: `Unsubscribed: ${parsed.email}` });
         if (req.method === 'POST') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('OK'); }
-        return done('You’re unsubscribed', `We’ve removed <b>${parsed.email}</b>. You won’t receive any more messages from this sender.`);
+        // Escaped, even though the token is HMAC-signed. The address inside a
+        // token is a LEAD's, which arrives from a CSV import, an API push or a
+        // prospecting run and is shape-checked nowhere — lib/smtp.js only
+        // refuses a CR or LF in it. And the HMAC is only as good as
+        // SESSION_SECRET, which falls back to a shared literal
+        // ('dev-insecure-secret', lib/suppression.js:32,39) when it is unset:
+        // with the default, a token is forgeable and this page reflects
+        // whatever the forger put in it. Escaping the one external value costs
+        // nothing and does not depend on either of those holding.
+        return done('You’re unsubscribed', `We’ve removed <b>${voice.esc(parsed.email)}</b>. You won’t receive any more messages from this sender.`);
       }
     }
 
