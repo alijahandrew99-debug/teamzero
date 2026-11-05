@@ -1372,3 +1372,113 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     eight suites. No code change needed — this confirms the batch is still
     exactly as safe to merge as 10-29 found it, three days later and
     fresher-verified than yesterday's report (which didn't re-run this).
+
+38. **URGENT — merge `audit/2026-11-04-cap-consent-text`. Anyone with a
+    customer's public form link can stop the phone product, no account
+    needed.** New independent audit run (2026-11-04, lens (c) security,
+    `ops/audit/2026-11-04.md` on `keeper-audit`), found after this shift's
+    11-04 report had already been written. The hosted call-back form
+    (`/f/<slug>`, public, meant to be published on a customer's own site)
+    caps every field except one: `server.js:999`'s `consentShown` takes
+    the client-posted `consentText` with only `MAX_BODY`'s 2MB request cap
+    bounding it, and it lands in `callbacks.json` — the one collection
+    `lib/db.js:29-35` documents as append-only and never pruned, rewritten
+    in full on every insert. Measured against the real `db.js`: 25
+    unauthenticated POSTs → 52MB file → 0.5-0.9s of the event loop fully
+    blocked on every further insert (dead air on whatever voice call is
+    live, for every tenant on the instance) — and `runCallbackQueue`
+    re-reads the whole file every 60 seconds forever after. The 20/hour
+    per-IP throttle does not brake this: it keys on `x-forwarded-for`
+    (the still-open 10-14/11-04 hop-count gap), and the audit got 25/25
+    POSTs through by varying that header. Reproduced end to end through
+    real HTTP against the running server.
+    **Verified independently this shift (2026-11-05), not taken on
+    trust.** Read the diff: `.slice(0, 2000)` on the client value at
+    `server.js:1011`, sized off the genuine wording (591-778 chars) so
+    no real submission is truncated. Merged into an isolated worktree off
+    current `main` (`df1af64`, unchanged since 10-19 — 17 days now) as an
+    octopus merge together with items 38's two sibling branches below;
+    clean, no conflicts. `node --check` clean on `server.js` and all 27
+    `lib/*.js`. Full suite on the combined tree: **137/137** across all
+    nine suites (103 pre-existing + the three new: `test-callbackform.js`
+    9/9, `test-signup.js` 16/16, `test-unsubscribe.js` 9/9 — matching the
+    audit's own "34 assertions, 14 failing on main" to the byte). This is
+    the single highest-priority merge ask in the backlog right now: a
+    one-line fix for an unauthenticated, no-account-needed way to take
+    down the voice product, which is 95% of cost of goods and the entire
+    value proposition. Recommend merging ahead of everything else,
+    including items 34-37's standing bundle.
+
+    **Same audit, second branch — `audit/2026-11-04-validate-signup-email`.**
+    Signup's email check was "not empty," not "a valid email," despite the
+    error message's wording (`server.js:2270`). Matters because `esc()`
+    confirmed-in-Chromium does not protect a JS string inside an `onclick`
+    attribute (the browser HTML-decodes the attribute before parsing the
+    JS, so `&#39;` becomes a real `'` and the string closes) — and a
+    crafted signup email reaches exactly that sink on the owner-only Sales
+    Reps screen (`/api/admin/reps/unattributed`), which runs with
+    `/api/admin/*` privileges. Gated today only by Stripe's own
+    `customer_email` validation on checkout, which is not Dawnpipe's to
+    rely on. Fix applies `/partners/apply`'s existing regex + 120-char cap
+    at account creation only (pre-existing rows can still log in).
+    Verified same way as above: `test-signup.js` 16/16 on the combined
+    tree. The `onclick` sink itself is NOT fixed by this — same open item
+    as 09-16/10-28 (data-* attributes + delegated listeners, a multi-site
+    refactor), restated below.
+
+    **Same audit, third branch — `audit/2026-11-04-escape-unsub-email`.**
+    `/u/<token>` interpolated a lead's email address into HTML unescaped
+    (`server.js:2086`). Correction to 10-28's framing: `render.yaml:33-34`
+    generates `SESSION_SECRET` with `generateValue: true`, so the
+    forged-token path 09-16/10-28 worried about is not live unless the var
+    was removed in the Render dashboard — "fail loudly if unset" is still
+    worth doing as defence-in-depth, not as closing a live hole. What's
+    real without that assumption: a lead's address (CSV import, `/v1`
+    push, or a prospecting run — nothing validates its shape but a CR/LF
+    check) can carry markup, and it was rendered unescaped on an origin
+    same-site with the app. Low-Medium, real gates in front of it (the
+    send has to succeed first), fixed anyway since escaping costs nothing.
+    `test-unsubscribe.js` 9/9 on the combined tree, including an assertion
+    that suppression still happens for a hostile-looking address.
+
+    **Queue additions from this audit, folded in rather than left only in
+    the audit doc:**
+    - **Upgrade the standing `/api/profile/autofill` SSRF item (opened
+      09-16, restated in item 21's trailer).** It was scoped as "thin"
+      because no response body was known to return to the caller. This
+      audit reproduced that it is not thin: `lib/agents.js:104` fetches
+      with no address check and `redirect: 'follow'`, the fetched bytes
+      go into the model prompt, and the drafted fields (which can quote
+      "pricing" verbatim from the fetched page) return to the caller as
+      JSON. Reachable by a brand-new, no-card account (the two free
+      autofills at `server.js:2457`), four outbound requests per call.
+      Verified against a loopback target with `callAI` stubbed — no AI
+      spend, no production probing. A correct fix needs resolved-IP
+      pinning and a re-check on every redirect hop (`redirect: 'manual'`
+      plus a hand-rolled loop), not a null check — it's a design, same
+      conclusion as 09-16, now with a sharper severity (High, not thin)
+      and a concrete reachability path (unpaid account) to size the fix
+      against. Covers `lib/email.js:44` and `smtp.verify` too.
+    - **Decide how call-back consent is recorded (new).** Today's exhibit
+      is authored by whoever submits the form — nothing checks the
+      submitter owns the number they typed, and `consentValid()` only
+      checks the string is non-empty. Either reconstruct the wording
+      server-side from values the server already holds (cheap, changes
+      what's stored for existing records) or sign the hidden field
+      (verifiable round-trip). Alijah's call, not a drive-by — raised in
+      today's report.
+    - **SMS-confirm a form number before the first AI call (new).** Same
+      root cause as above. Costs a message and some conversion; the
+      alternative is strict-liability exposure ($500-1,500/call under
+      TCPA-type rules) on a number a stranger typed in to harass someone
+      else. First call today always goes through regardless.
+    - **Length-cap the business profile `name` field (new)**
+      (`/api/profile/save`, `server.js:2540-2545`). Authenticated and
+      self-inflicted today, but it's interpolated into both the consent
+      wording and the voice prompts, so it shouldn't be unbounded just
+      because the current owner is also the only one who can set it.
+    - Restated, not new: Stripe webhook timestamp tolerance (09-16, still
+      open — `lib/hooks.js:60-62` already has the pattern to copy),
+      `x-forwarded-for` hop-count measurement (10-14, now load-bearing
+      for this shift's Critical, not just advisory), and the `onclick` →
+      `data-*` refactor (09-16/10-28, confirmed in Chromium this run).
