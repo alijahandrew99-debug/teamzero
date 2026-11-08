@@ -1477,8 +1477,34 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
       self-inflicted today, but it's interpolated into both the consent
       wording and the voice prompts, so it shouldn't be unbounded just
       because the current owner is also the only one who can set it.
-    - Restated, not new: Stripe webhook timestamp tolerance (09-16, still
-      open — `lib/hooks.js:60-62` already has the pattern to copy),
-      `x-forwarded-for` hop-count measurement (10-14, now load-bearing
-      for this shift's Critical, not just advisory), and the `onclick` →
-      `data-*` refactor (09-16/10-28, confirmed in Chromium this run).
+    - Restated, not new: Stripe webhook timestamp tolerance (09-16, **shipped
+      2026-11-08, see item 39 below**), `x-forwarded-for` hop-count measurement
+      (10-14, now load-bearing for this shift's Critical, not just advisory),
+      and the `onclick` → `data-*` refactor (09-16/10-28, confirmed in
+      Chromium this run).
+
+39. **Stripe webhook timestamp tolerance — shipped.** `lib/stripe.js`'s
+    `verifyWebhook()` checked only the HMAC over `t.<body>`, never whether
+    `t` itself was recent — so any captured valid `Stripe-Signature` header
+    (server logs, a compromised proxy hop, browser devtools history on a
+    shared machine) stayed replayable against `/webhook/stripe` forever.
+    Dawnpipe's own outbound verifier (`lib/hooks.js`'s `verify()`) already
+    had the fix shape (a 300s tolerance on `t`, Stripe's own library
+    default); copied it in rather than inventing a new pattern.
+    **Status (2026-11-08): shipped**, branch
+    `keeper/2026-11-08-stripe-webhook-timestamp-tolerance`, cut fresh off
+    current `main` (`df1af64`). New standalone suite `test-stripewebhook.js`
+    (7/7): a fresh signed event verifies, one 10 minutes old or 10 minutes in
+    the future is rejected, one just inside the window still verifies, a bad
+    signature is rejected regardless of timestamp freshness, a missing
+    timestamp is rejected, and a caller-supplied shorter tolerance is
+    honoured. Confirmed the test actually catches the gap: stashed the fix,
+    4/7 failed against unpatched `main`, restored it, 7/7 pass. `node --check`
+    clean on `lib/stripe.js`; all six pre-existing suites still pass, 103/103,
+    unaffected (none of them exercise the Stripe webhook route). A direct
+    fast-forward merge off `main` — conflict-free by construction — and
+    confirmed it touches no file any of the other ~20 open backlog branches
+    touch (none of them touch `lib/stripe.js`), so it's also conflict-free
+    against the standing bundle. Smallest standing security-hygiene gap in
+    the backlog; recommend folding into the next merge batch alongside
+    whichever of items 34-38 Alijah picks up first.
