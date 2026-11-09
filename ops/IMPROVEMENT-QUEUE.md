@@ -1472,11 +1472,28 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
       alternative is strict-liability exposure ($500-1,500/call under
       TCPA-type rules) on a number a stranger typed in to harass someone
       else. First call today always goes through regardless.
-    - **Length-cap the business profile `name` field (new)**
-      (`/api/profile/save`, `server.js:2540-2545`). Authenticated and
-      self-inflicted today, but it's interpolated into both the consent
-      wording and the voice prompts, so it shouldn't be unbounded just
-      because the current owner is also the only one who can set it.
+    - **Length-cap the business profile `name` field.**
+      **Status (2026-11-09): shipped**, branch
+      `keeper/2026-11-09-cap-profile-name`, cut fresh off current `main`
+      (`df1af64`). `/api/profile/save`'s `name` field is now trimmed and
+      sliced to 200 chars on both the create and update paths; every other
+      profile field is untouched (`offer`/`icp`/etc. are not interpolated
+      into TTS/consent the same way and are out of scope here). New suite
+      `test-profilename.js` (6/6) — an ordinary name round-trips untouched,
+      a 50,000-char name is capped and the capped value is a true prefix of
+      the input, surrounding whitespace is trimmed, the create path (no
+      `id`) is capped too, an unrelated long field (`offer`) is left alone.
+      Confirmed the test actually catches the gap: stashed the fix, 3/6
+      failed against unpatched `main`, restored it, 6/6 pass. `node --check`
+      clean on `server.js`; all six pre-existing suites on current `main`
+      still pass, 103/103, unaffected. A direct fast-forward merge off
+      `main` — conflict-free by construction. Also re-verified merges clean
+      together with the full standing top-priority bundle (items 34-39: the
+      three 2026-11-04 audit branches, 2026-10-28's two, 2026-10-21's and
+      2026-10-14's, plus 2026-11-08's Stripe-webhook fix) via a real 9-way
+      `git merge --no-commit --no-ff` in an isolated worktree — all
+      auto-merge clean, `node --check` clean, combined suite **172/172**
+      across all twelve test files.
     - Restated, not new: Stripe webhook timestamp tolerance (09-16, **shipped
       2026-11-08, see item 39 below**), `x-forwarded-for` hop-count measurement
       (10-14, now load-bearing for this shift's Critical, not just advisory),
