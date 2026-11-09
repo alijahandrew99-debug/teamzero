@@ -2542,6 +2542,11 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         const fields = ['name', 'senderName', 'offer', 'icp', 'valueProp', 'proof', 'tone', 'cta', 'notes',
           'mailingAddress', 'website', 'pricing'];
         const data = {}; fields.forEach((k) => { if (f[k] !== undefined) data[k] = f[k]; });
+        // Interpolated unescaped into consent wording and spoken TTS
+        // prompts — an unbounded name is self-inflicted today (only the
+        // account owner sets it) but shouldn't be allowed to grow without
+        // limit just because of that.
+        if (data.name !== undefined) data.name = String(data.name).trim().slice(0, 200);
         const saved = f.id ? db.updateProfile(acc, f.id, data) : db.createProfile(acc, data);
         // The website autofill drafts the PHONE script too. Saving the
         // business saves that draft with it — before this, the drafted script
