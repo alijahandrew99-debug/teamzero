@@ -26,7 +26,7 @@ At ~3-4 turns/min and ~180 characters spoken per turn:
 |---|---|---|---|
 | Speech recognition (`<Gather>`) | **$0.02 per USE** (flat, any length up to 60s) | $0.060–0.080 | ~38% |
 | Text-to-speech (Twilio `<Say>`, Polly Generative) | $0.0130 / 100 chars | $0.070–0.094 | ~45% |
-| AI (Haiku, prompt-cached) | ~$0.006 / turn | $0.018–0.024 | ~12% |
+| AI (Sonnet, prompt-cached) | ~$0.006 / turn *(stale — see note)* | $0.018–0.024 | ~12% |
 | Phone line (inbound local) | $0.0085 / min | $0.0085 | ~4% |
 | Recording + storage | $0.0025/min + $0.0005/min/mo | $0.0025 | ~1% |
 
@@ -141,3 +141,13 @@ All four are in `GET /api/admin/spend` → `diagnostics`:
    per reply, and shortening replies below 200 saves nothing.
 4. **Minutes a real customer actually uses** — decides whether 1,000 included
    minutes is generous or irrelevant. Pull the distribution, not the mean.
+5. **The $0.006/turn AI line itself is stale, and not something `/api/admin/spend`
+   answers** (its `diagnostics` reads Twilio buckets only, no Anthropic billing).
+   Live-call turns moved from Haiku to Sonnet in `695a9aa` (2026-08-24); the
+   $0.006 figure is the pre-switch Haiku estimate, carried over unchanged and
+   never re-measured against Sonnet's real per-turn cost — it only governs
+   `lib/voice.js`'s `estimateCost()` (the per-call cost shown in the spend
+   dashboard), not real billing, so the AI line in every call's shown cost has
+   likely understated its true share for ~2.5 months. Check the Anthropic
+   console's per-model cost after a batch of real calls and set `VOICE_RATE_AI`
+   to the measured figure if it differs meaningfully.
