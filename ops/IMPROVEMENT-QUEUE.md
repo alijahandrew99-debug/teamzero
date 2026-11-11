@@ -1525,3 +1525,17 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     against the standing bundle. Smallest standing security-hygiene gap in
     the backlog; recommend folding into the next merge batch alongside
     whichever of items 34-38 Alijah picks up first.
+
+40. **Sibling-file sweep of all 27 `lib/*.js` files — complete (2026-11-11).**
+    Items 3/17-20/38's trailers, plus 11-10 and 11-11's shifts, worked
+    through every `lib/*.js` file never named in this queue or in any of
+    the four independent `keeper-audit` runs, looking for siblings of the
+    raw-filesystem-write, unbounded-growth, and SSRF/injection shapes this
+    backlog kept finding. 11-10 covered `suppression.js`, `numbers.js`,
+    `callback.js`, `mailer.js`, `notify.js`; today (11-11) covered the
+    remaining nine: `apollo.js`, `dnsauth.js`, `emailapi.js`, `env.js`,
+    `leadmemory.js`, `sending.js`, `spamcheck.js`, `spend.js`, `stats.js`.
+    All clean (see today's report / 11-10's report for detail per file).
+    This closes the sweep — there is no `lib/*.js` file left unaudited.
+    Re-open only if a new file is added, or if a future `keeper-audit` run
+    or live incident surfaces a pattern not covered by this pass.
