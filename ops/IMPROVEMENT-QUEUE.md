@@ -1526,7 +1526,33 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     the backlog; recommend folding into the next merge batch alongside
     whichever of items 34-38 Alijah picks up first.
 
-40. **Sibling-file sweep of all 27 `lib/*.js` files — complete (2026-11-11).**
+41. **New `keeper-audit` finding — `audit/2026-11-11-skip-noop-callback-writes` — verified, folded into the standing merge bundle.**
+    Appeared on the remote after the 11-11 report was written (not one of the
+    branches that report checked). `lib/db.js`'s `updateCallback()` always
+    wrote the whole `callbacks.json` file back, even when the patch changed
+    nothing. `runCallbackQueue()` (`server.js:377`, a `setInterval` every 60s)
+    re-attempts every parked row and writes back the same status/note when the
+    hold reason is standing (no paid plan, no phone line yet, no profile) —
+    so a single parked row costs a full-file rewrite of the never-pruned
+    consent-record store up to once a minute, forever, to change nothing.
+    Fix adds a same-value check over just the patched keys before writing;
+    returns the existing row unchanged on a no-op patch, same as before.
+    **Status (2026-11-12): verified, ready to merge.** Confirmed the claim by
+    reading `runCallbackQueue()` and all six `updateCallback()` call sites in
+    `server.js` directly (lines 336-368), not by trusting the branch's own
+    writeup — the three "standing reason" call sites (`queued` with a plan/
+    line/profile note) do write back the same status+note every retry until
+    the underlying reason changes. Merged it alone against current `main`
+    (`df1af64`) in an isolated worktree (`git merge --no-commit --no-ff`):
+    clean. Merged it together with the full standing bundle (items 34-39,
+    ten branches) the same way: also clean, no conflicts (it only touches
+    `lib/db.js`, which none of the other ten touch). `node --check` clean on
+    `server.js` and all `lib/*.js` on both trees. Combined suite on the
+    11-branch merge: **192/192** across all thirteen test files (its own
+    `test-callbackwrites.js`, 20/20, included). Folded into the standing merge
+    command below — now 11 branches, not 10.
+
+42. **Sibling-file sweep of all 27 `lib/*.js` files — complete (2026-11-11).**
     Items 3/17-20/38's trailers, plus 11-10 and 11-11's shifts, worked
     through every `lib/*.js` file never named in this queue or in any of
     the four independent `keeper-audit` runs, looking for siblings of the
