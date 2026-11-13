@@ -1565,3 +1565,51 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     This closes the sweep — there is no `lib/*.js` file left unaudited.
     Re-open only if a new file is added, or if a future `keeper-audit` run
     or live incident surfaces a pattern not covered by this pass.
+
+43. **`COST.md`'s Front Desk numbers were stale since the day the doc was
+    written — fixed.** Friday's re-read (the standing weekly task) found that
+    `lib/plans.js`'s Front Desk tier has been **$499/mo for 500 voice
+    minutes** since `0c9f03b` (2026-08-17, *the same day* `COST.md`'s header
+    claims a rewrite) — but every dependent number in the doc was still
+    computed off the superseded **$399/1,000 min** plan: the kept-commission
+    figure, the break-even $/min, the whole "Front Desk profit at N min"
+    architecture table, margin-lever item 3 (which recommended raising to
+    $449 — already cleared, three months ago, by the real price), the
+    annual-defend figure in "Do NOT do these", and open question 4. Three
+    months unnoticed by roughly 80 daily Keeper shifts and four independent
+    `keeper-audit` security runs — neither routine's lens was "does the cost
+    doc match the plan code," which is exactly why this is a standing Friday
+    task rather than an incidental catch.
+    **Status (2026-11-13): shipped**, branch
+    `keeper/2026-11-13-frontdesk-price-sync`, cut fresh off current `main`
+    (`df1af64`). Recomputed every dependent figure using the doc's own stated
+    $/min rates and the exact method the existing table demonstrably used
+    (verified by reproducing the old $71/$141/$174/$214 column from
+    $279.30-kept-revenue before changing anything): new column is
+    $245/$280/$297/$316 off $349.30 kept-revenue at 500 min. Struck through
+    the now-moot "$399→$449" lever with a note rather than deleting it, so
+    the history of the recommendation (and that it was overtaken, not
+    ignored) stays legible. Left two things untouched, deliberately: the
+    AI-row Haiku/Sonnet label and item 5's prompt-caching strikethrough are
+    already fixed on `keeper/2026-08-28-cost-md-sync` and
+    `keeper/2026-11-09-costmd-ai-model-label` — editing them again here would
+    just be a second, divergent fix for the same line. Did not touch bullet
+    1's "+$128/customer" / "$153 to $28" gap figures — couldn't reproduce
+    their derivation from any combination of the doc's own numbers (not a
+    clean function of $/min × minutes the way the profit table is), so
+    flagging as possibly also stale rather than guessing a replacement.
+    `node --check` clean on `server.js` + all 27 `lib/*.js` (doc-only change,
+    no code touched). Verified merge-safety three ways in an isolated
+    worktree: alone against current `main` (clean); individually against
+    each of the two other branches that touch `COST.md` (both clean —
+    `keeper/2026-08-28-cost-md-sync` and `keeper/2026-11-09-costmd-ai-model-label`,
+    confirmed with a real `git merge --no-commit --no-ff` each); and together
+    with the full standing 11-branch bundle (also clean — the only conflict
+    found is pre-existing and unrelated to this branch: those same two
+    `COST.md` branches conflict **with each other** on the AI-row line
+    regardless of anything here, confirmed by merging them together alone).
+    Full suite on the 12-branch combined tree: **192/192** across all
+    thirteen test files, unchanged from the 11-branch count (doc-only, no
+    new tests). Recommend Alijah merge this one directly — it's a pure
+    documentation correction with no code or test surface — independently of
+    whichever order he takes the other 11 in.
