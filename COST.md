@@ -13,10 +13,13 @@ endpoint reads Twilio's actual usage ledger, not these constants, and its
 
 ## The plan we sell
 
-**Front Desk — $399/mo — 1,000 phone minutes + 200 email leads.**
-Sales reps are paid **30% commission**, so Dawnpipe keeps **$279.30** of it.
+**Front Desk — $499/mo — 500 phone minutes + 200 email leads.**
+Sales reps are paid **30% commission**, so Dawnpipe keeps **$349.30** of it.
+(Repriced from $399/1,000 min on 2026-08-17, `0c9f03b` — deliberately traded a
+higher ceiling for a narrower profit swing between a light and a heavy
+customer. 399 and 449 still work as legacy Stripe price ids.)
 
-Break-even on voice alone, at full allowance use: **$0.279/min**.
+Break-even on voice alone, at full allowance use: **$0.699/min**.
 
 ## Cost of one talk-minute, today
 
@@ -57,12 +60,12 @@ change** — it is literally the same synthesis.
 
 ## Architectures, priced
 
-| Path | $/min | Front Desk profit at 1,000 min |
+| Path | $/min | Front Desk profit at 500 min |
 |---|---|---|
-| A. Today — Gather + Twilio `<Say>` Generative | $0.209 | $71 |
-| B. Gather + Twilio `<Say>` Neural | $0.138 | $141 |
-| C. Twilio ConversationRelay ($0.07/min bundled) | $0.105 | $174 |
-| D. Media Streams + Deepgram Nova-3 + **Polly Generative direct** | **$0.066** | **$214** |
+| A. Today — Gather + Twilio `<Say>` Generative | $0.209 | $245 |
+| B. Gather + Twilio `<Say>` Neural | $0.138 | $280 |
+| C. Twilio ConversationRelay ($0.07/min bundled) | $0.105 | $297 |
+| D. Media Streams + Deepgram Nova-3 + **Polly Generative direct** | **$0.066** | **$316** |
 
 D is 3.2x cheaper than today at identical voice quality. C gets ~81% of the
 benefit for ~15% of the engineering.
@@ -105,9 +108,11 @@ architecture does.**
    `experimental_conversations`; Twilio's legacy models bill $0.035–0.040/use
    against a $0.02 default. `/api/admin/spend` → `diagnostics` says which we
    pay. If legacy: set `VOICE_STT=default`. One env var, ~$45–60 per 1,000 min.
-3. **Price**: $399 → $449 on new signups. The only lever worth the same on a
-   light customer as a heavy one. Sameday charges $449 for 500 minutes and no
-   email.
+3. ~~**Price**: $399 → $449 on new signups.~~ **Already done, and then
+   some** — Front Desk repriced to $499/500 min on 2026-08-17 (`0c9f03b`),
+   already above this $449 target. Sameday charges $449 for 500 minutes and
+   no email, so Dawnpipe now prices above that comparable — worth knowing
+   when positioning against it, not as a reason to go higher still.
 4. **Charge for extra locations/numbers** ($29/mo). Every competitor does;
    underlying cost is $1.15.
 5. **Prompt-caching discipline** on live-call turns: $0.006 → ~$0.002.
@@ -116,8 +121,8 @@ architecture does.**
 
 - **Annual prepay at "two months free"** — commission is 30% of *revenue*, so
   every $1 discounted costs $0.70 of contribution. Sell annual at full price
-  with bonus minutes instead: after the migration, 500 bonus minutes costs $20
-  to defend $4,788.
+  with bonus minutes instead: 500 bonus minutes costs $20 to defend $5,988
+  ($499 × 12, updated for the current Front Desk price).
 - **Round call time up to 30-second blocks** — we don't bill overage, so
   rounding only makes the allowance expire sooner. $0 on most customers, and it
   quietly contradicts the "no overage charges, ever" promise. Bill exact
@@ -139,5 +144,5 @@ All four are in `GET /api/admin/spend` → `diagnostics`:
 3. **Billed characters per turn** — TTS spend ÷ $0.0130 × 100 ÷ gathers. If it
    returns ~200 while the agent speaks ~180, Twilio's 100-char minimum applies
    per reply, and shortening replies below 200 saves nothing.
-4. **Minutes a real customer actually uses** — decides whether 1,000 included
+4. **Minutes a real customer actually uses** — decides whether 500 included
    minutes is generous or irrelevant. Pull the distribution, not the mean.
