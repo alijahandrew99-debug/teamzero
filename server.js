@@ -358,6 +358,12 @@ async function placeCallback(rec, { by = 'system' } = {}) {
   }
   const profile = cbProfile;
   if (!profile) { db.updateCallback(rec.accountId, rec.id, { status: 'queued', note: 'No business profile yet.' }); return { ok: false, reason: 'No business profile yet.' }; }
+  // Mark 'calling' and persist BEFORE the await: if the process dies between
+  // Twilio actually placing the call and us recording that, the record must
+  // not still read 'queued' -- the per-minute sweep only re-dials 'queued'
+  // rows, and calledToday() only looks at calledAt (set below, on success),
+  // so a crash in that window would otherwise ring the same customer twice.
+  db.updateCallback(rec.accountId, rec.id, { status: 'calling', callingAt: db.nowISO() });
   try {
     const call = await voice.placeCall({ to, from, answerUrl: base + '/voice/answer', statusUrl: base + '/voice/status' });
     const agoMin = Math.max(0, Math.round((Date.now() - Date.parse(rec.at)) / 60000));
@@ -404,6 +410,21 @@ function sweepStuckCalls(accountId) {
 setInterval(() => {
   for (const a of db.allAccounts()) { try { sweepStuckCalls(a.id); } catch {} }
 }, 30 * 60 * 1000);
+
+// Sibling of the above: a call-back can be left at 'calling' forever by the
+// same kind of mid-flight restart (see placeCallback). Normally this resolves
+// in well under a minute, so anything still 'calling' after 10 is presumed
+// orphaned. It is marked 'failed' rather than requeued -- we don't know if
+// Twilio actually placed that call, and re-dialling on a guess risks ringing
+// the customer a second time.
+function sweepStuckCallbacks() {
+  for (const c of db.readCollection('callbacks')) {
+    if (c.status === 'calling' && c.callingAt && Date.now() - Date.parse(c.callingAt) > 10 * 60 * 1000) {
+      db.updateCallback(c.accountId, c.id, { status: 'failed', note: 'Call status lost in a restart — check Twilio logs before retrying.' });
+    }
+  }
+}
+setInterval(() => { try { sweepStuckCallbacks(); } catch {} }, 10 * 60 * 1000);
 
 // ---- who may run automated outbound calling ----
 // Two separate questions, and conflating them produced a dead tab with no way
