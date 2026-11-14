@@ -1613,3 +1613,46 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     new tests). Recommend Alijah merge this one directly — it's a pure
     documentation correction with no code or test surface — independently of
     whichever order he takes the other 11 in.
+
+44. **New find (2026-11-14): `placeCallback()` could still double-dial a
+    customer across a process restart, even after item 32's re-entrancy
+    lock.** Item 32 (10-12) stops the SAME process from re-reading a
+    still-`'queued'` row on the next timer tick. It does nothing for a
+    DIFFERENT process: `callbackQueueRunning` is an in-memory flag, wiped on
+    any restart/deploy exactly like the in-memory `calls` map that motivated
+    items 3/8. The record itself still sits at `status: 'queued'` for the
+    *entire* `await voice.placeCall(...)` — the one place `calledToday()`
+    would notice a completed call (`calledAt`) is only written *after* that
+    await resolves. So: crash the process between Twilio actually placing
+    the call and that write landing, and the restarted process's queue sweep
+    reads the same still-`'queued'` row and places a second real call to the
+    same number. Same failure shape as items 3/8/32 (persisted state doesn't
+    reflect in-flight work across a restart), different window (one specific
+    await, not a whole tick or a whole call).
+    **Status (2026-11-14): fixed, branch
+    `keeper/2026-11-14-callback-stuck-calling-sweep`.** Cut fresh off current
+    `main` (`df1af64`, unchanged since 10-19). `placeCallback()` now writes
+    `status: 'calling', callingAt: <now>` *before* the `await` — the queue
+    sweep only ever re-reads `status === 'queued'`, so a restart mid-await
+    leaves the row unreachable by the retry path instead of reachable.
+    Deliberately does **not** auto-requeue a stuck `'calling'` row, because
+    after a restart we genuinely don't know whether Twilio placed that call
+    — guessing wrong either loses a legitimate callback or double-dials
+    again. Instead a new 10-minute sweep (`sweepStuckCallbacks()`, mirroring
+    `sweepStuckCalls()`'s pattern) flags anything still `'calling'` after 10
+    minutes (normal completion is seconds) as `'failed'` with a note to check
+    Twilio logs by hand. `node --check server.js` clean; all six pre-existing
+    suites pass, 103/103 (none exercise this path directly, so this is
+    sanity-only, not regression coverage of the new behavior — a real test
+    would need to fake a crash mid-`placeCall`, not attempted this shift).
+    **Not yet re-verified against the standing 11/12-branch merge bundle** —
+    this branch was cut and checked alone, not merged in a worktree against
+    the others, for time. It touches the same two functions
+    (`placeCallback`/`runCallbackQueue`) as the still-unmerged, now-37-days-old
+    `keeper/2026-10-12-callback-queue-reentrancy-lock` (item 32) — that branch
+    predates the `/partners` page and several other since-merged changes, so
+    it is likely stale/conflicting on its own by now, independent of
+    anything here. The two fixes are complementary (one tick-vs-tick, one
+    process-vs-process) and worth landing together, but **do not merge both
+    blindly** — check item 32's branch for conflicts (and staleness) against
+    current `main` before combining it with this one.
