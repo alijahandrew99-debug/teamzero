@@ -1003,6 +1003,21 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     Did not re-verify the other 20 open branches against `main` this shift since
     `main` itself didn't move — consistent with 10-03 through 10-07's practice of
     skipping a re-check when nothing changed since the last full pass (10-08).
+    **Status (2026-11-15): re-verified against item 44 and the full standing
+    bundle — merges clean, not stale.** Yesterday's item 44 flagged this branch as
+    "likely stale/conflicting by now" without checking. Checked for real in an
+    isolated worktree: this branch alone still merges clean against current `main`
+    (`df1af64`); together with `keeper/2026-11-14-callback-stuck-calling-sweep`
+    (item 44) it also auto-resolves clean (`git merge --no-commit --no-ff` of both,
+    both touch `server.js` but at different lines —
+    `callbackQueueRunning`/`runCallbackQueue`'s tick-guard here vs. `placeCallback`'s
+    pre-await status write and `sweepStuckCallbacks()` there); and together with the
+    full 12-branch standing bundle from item 43 (14 branches total). `node --check`
+    clean on `server.js` + all `lib/*.js` on the 14-branch tree; full suite
+    **192/192** across all thirteen test files, identical to the 12-branch count —
+    neither of these two adds its own test file, so no change expected. Confirms
+    items 32 and 44 are complementary, not conflicting, and both safe to fold into
+    the next merge batch alongside items 34-39/41/43.
 
 33. **New find (2026-10-13): `lib/voice.js`'s in-memory `calls` Map leaked
     indefinitely under normal call volume — a gap the 2026-08-26 audit's
@@ -1656,3 +1671,10 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     process-vs-process) and worth landing together, but **do not merge both
     blindly** — check item 32's branch for conflicts (and staleness) against
     current `main` before combining it with this one.
+    **Status (2026-11-15): verified, not stale — see item 32's trailer for the
+    full check.** This branch and item 32 merge clean individually, clean
+    together, and clean together with the full 12-branch standing bundle (14
+    branches total); `node --check` clean; full suite 192/192, unchanged from
+    the 12-branch count (neither branch adds a test file). The "likely
+    stale/conflicting" worry raised yesterday does not hold up — both are safe
+    to land in the same batch as items 34-39/41/43.
