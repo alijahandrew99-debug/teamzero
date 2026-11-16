@@ -1613,6 +1613,17 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     their derivation from any combination of the doc's own numbers (not a
     clean function of $/min × minutes the way the profit table is), so
     flagging as possibly also stale rather than guessing a replacement.
+    **Status (2026-11-16): still unreproduced, one candidate source ruled
+    out.** Checked `lib/plans.js`'s own margin-shape comment (on the
+    `frontdesk`/`receptionist` tiers) as a possible origin, since it uses
+    the same "gap between a light customer and a heavy one" language — it
+    isn't: that comment computes the spread *within* the current
+    architecture across plan sizes (~$103/mo at 1,000 included minutes,
+    ~$24/mo at 500), not bullet 1's architecture-A-vs-D comparison "at full
+    use." Neither the pre-11-13 table's delta ($214−$71=$143) nor the
+    11-13-corrected table's delta ($316−$245=$71) produces $128 either.
+    No further lead to chase from inside the repo; leaving the figures as
+    flagged rather than guessing.
     `node --check` clean on `server.js` + all 27 `lib/*.js` (doc-only change,
     no code touched). Verified merge-safety three ways in an isolated
     worktree: alone against current `main` (clean); individually against
