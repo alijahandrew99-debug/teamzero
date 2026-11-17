@@ -1689,3 +1689,18 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     the 12-branch count (neither branch adds a test file). The "likely
     stale/conflicting" worry raised yesterday does not hold up — both are safe
     to land in the same batch as items 34-39/41/43.
+    **Status (2026-11-17): the standing bundle has been re-verified in a
+    throwaway worktree every day since 11-01 and never once actually pushed
+    as a mergeable branch — that gap, not any remaining risk, was the real
+    blocker.** Built it for real this shift: fresh worktree off current
+    `main` (`df1af64`, unchanged 29 days), fifteen real `git merge --no-ff`
+    commits chained one after another — items 34 (both branches), 35 (both
+    branches), 36, 37, 38 (all four branches), 39, 41, 32, 44, and 43, in
+    that order. Zero conflicts on any of the fifteen. `node --check` clean
+    on `server.js` and all 27 `lib/*.js`. Full suite on the merged tree:
+    **197/197 across all fourteen test files** (103 pre-existing + 94 new
+    across the eight branches that add their own suite). Pushed as
+    `keeper/2026-11-17-consolidated-merge-bundle` — a single branch Alijah
+    can merge once instead of fifteen. See today's report for the exact
+    command. Not closing items 32/34-39/41/43/44 individually until this
+    branch (or an equivalent) actually lands on `main`.
