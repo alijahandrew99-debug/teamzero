@@ -37,5 +37,20 @@ let pass=0,fail=0;const ok=(l,c,x)=>{c?pass++:fail++;console.log((c?'  PASS  ':'
   r=await api('/api/settings/smtp',{user:'me@gmail.com',pass:'',fromEmail:'me@gmail.com'});
   st=await api('/api/state');
   ok('saving user with no pass = not connected (own mode)',st.json.smtp.connected===false&&st.json.smtp.mode==='own',st.json.smtp);
+  console.log('== Dawnpipe mode can actually SEND ==');
+  // The point of one-click sending is that the account holds NO password, so a
+  // send gate reading account.smtp.pass raw refuses every Dawnpipe-mode account
+  // while the job behind it would have sent fine. The app says "connected" and
+  // the server says "connect your mailbox": nothing can ever go out.
+  const prof=db.getProfiles(a.id)[0];
+  r=await api('/api/settings/smtp',{useDawnpipe:true,fromName:'Bob Plumbing'});
+  ok('back in dawnpipe mode',r.json.mode==='dawnpipe',r.json);
+  r=await api('/api/send/run',{profileId:prof.id});
+  ok('send accepted in dawnpipe mode',r.status===200&&!!r.json.jobId,r);
+  ok('not refused as an unconnected mailbox',!/Connect your sending mailbox/.test(r.json.error||''),r.json);
+  console.log('== and the gate still bites with nothing connected ==');
+  await api('/api/settings/smtp',{disconnect:true});
+  r=await api('/api/send/run',{profileId:prof.id});
+  ok('no mailbox = refused, as before',r.status===400&&/Connect your sending mailbox/.test(r.json.error||''),r.json);
   console.log(String.fromCharCode(10)+pass+' passed, '+fail+' failed');process.exit(fail?1:0);
 })().catch(e=>{console.error('HARNESS',e);process.exit(1)});
