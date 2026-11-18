@@ -3182,8 +3182,24 @@ Use it the way a good receptionist would: greet them by name if you have one, do
         if (!rec && f.phone) {
           const e164 = voice.toE164(f.phone);
           if (!e164) return json(res, { error: 'That is not a valid phone number.' }, 400);
+          // WHEN they left their number. This becomes consentAt, which is the
+          // TCPA evidence timestamp and the value the 90-day age limit in
+          // lib/callback.js is measured against -- and it was the only field
+          // here taken from the request with no coercion, no cap and no sanity
+          // check. Three things followed. Anything Date.parse cannot read
+          // ("last Tuesday") made ageDays NaN, so callbackAllowed refused with
+          // the wrong reason -- "more than 90 days old" about a record made a
+          // second earlier. A timestamp in the FUTURE made ageDays negative,
+          // so the age limit never expired and the record stayed dialable for
+          // ever. And with no slice() the raw value was stored whole in
+          // callbacks.json, the one file db.js documents as never pruned and
+          // rewrites in full on every insert.
+          // So: parse it, clamp it to now (nobody left their number tomorrow),
+          // and fall back to now when it is not a date at all.
+          const leftMs = Date.parse(String(f.leftAt || ''));
+          const leftAt = Number.isNaN(leftMs) ? db.nowISO() : new Date(Math.min(leftMs, Date.now())).toISOString();
           rec = db.addCallback(acc, { source: 'owner', name: String(f.name || '').slice(0, 80), phone: e164, phoneKey: suppress.phoneKey(e164), need: String(f.need || '').slice(0, 400),
-            consent: true, consentAt: f.leftAt || db.nowISO(), consentText: String(f.basis || 'Left their number with the business and asked to be contacted').slice(0, 300), consentVia: 'owner' });
+            consent: true, consentAt: leftAt, consentText: String(f.basis || 'Left their number with the business and asked to be contacted').slice(0, 300), consentVia: 'owner' });
         }
         if (!rec) return json(res, { error: 'Nothing to call.' }, 400);
         const r = await placeCallback(rec, { by: 'owner' });
