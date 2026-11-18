@@ -1704,3 +1704,43 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     can merge once instead of fifteen. See today's report for the exact
     command. Not closing items 32/34-39/41/43/44 individually until this
     branch (or an equivalent) actually lands on `main`.
+
+45. **URGENT — merge `audit/2026-11-18-validate-callback-leftat`.** New
+    independent audit run, same parallel process as item 13. `POST
+    /api/callbacks/call` lets the owner supply `leftAt` (when the caller
+    left their number), which is written straight into `consentAt` with no
+    coercion, no cap, no sanity check — the only field in that call that
+    skips the `String(...).slice(...)` treatment every neighbour gets.
+    `consentAt` is the TCPA evidence timestamp and the value
+    `lib/callback.js`'s 90-day age gate measures against, so three things
+    followed: a value `Date.parse` can't read ("last Tuesday") makes
+    `ageDays` `NaN`, and `!(NaN <= 90)` is true, so `callbackAllowed` refuses
+    a brand-new record as "more than 90 days old"; a timestamp in the
+    future makes `ageDays` negative, so the 90-day limit never expires and
+    the record stays dialable forever; and with no `slice()`, the raw value
+    lands whole in `callbacks.json` — the one file `db.js` documents as
+    append-only/never-pruned, rewritten in full on every insert (one request
+    measured at 600KB). Fix: `Date.parse` it, clamp to now (nobody left
+    their number tomorrow), fall back to now when it isn't a date at all.
+    The app's own UI never sends `leftAt`, so this changes nothing for it.
+    **Status (2026-11-18): verified, ready to merge.** Confirmed the bug is
+    live on current `main` (`df1af64`) by reading `server.js`'s
+    `/api/callbacks/call` handler directly — `consentAt: f.leftAt ||
+    db.nowISO()` takes the field raw, exactly as described. Ran the
+    branch's `test-callbackconsent.js` (14 assertions, real HTTP POSTs)
+    against bare `main` first: 8 of 14 fail, matching the commit message's
+    claim exactly (NaN-poisoned record, future timestamp never expiring,
+    600KB stored, both cross-checked by assertion text). Same test against
+    the fix branch: 14/14 pass. Full suite on the fix branch alone: all
+    seven pre-existing files plus the new one, 117/117. `node --check`
+    clean on `server.js`. Checked merge-safety two ways in isolated
+    worktrees with a real `git merge --no-commit --no-ff`: alone against
+    current `main` (clean, `server.js` + new test file only) and together
+    with the full `keeper/2026-11-17-consolidated-merge-bundle` (also
+    clean — `Auto-merging server.js`, no conflict markers). Full suite on
+    the combined 16-branch tree: **211/211 across fifteen test files**.
+    Does not touch `data/`, `.env*`, Stripe plans, `render.yaml`, or
+    `partners/`; adds no npm dependency. Small and single-purpose enough to
+    merge on its own — recommending Alijah take it directly rather than
+    waiting on the bundle, though it's confirmed compatible with either
+    order.
