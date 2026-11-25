@@ -2333,7 +2333,13 @@ Use it the way a good receptionist would: greet them by name if you have one, do
       if (rateLimited(req, 'apikey:' + keyAcc.id, 600, 60 * 60 * 1000)) return json(res, { error: 'Rate limit: 600 requests per hour per key.' }, 429);
       if (!stripe.hasAccess(keyAcc)) return json(res, { error: 'This account is not active.' }, 402);
       const since = url.searchParams.get('since') ? Date.parse(url.searchParams.get('since')) : 0;
-      const lim = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+      // Math.max(1, ...) and not just Math.min(..., 500): both collection reads
+      // below end in `.slice(-lim)`, so a NEGATIVE lim becomes `.slice(+n)` --
+      // "skip the first n rows" instead of "return at most n" -- and the 500
+      // cap is gone. `?limit=-1` on an account with 1,200 calls returned 1,199
+      // of them in one response. Math.floor keeps a fractional limit from
+      // reaching slice() at all.
+      const lim = Math.max(1, Math.min(Math.floor(Number(url.searchParams.get('limit'))) || 100, 500));
       if (req.method === 'GET' && p === '/v1/bookings') {
         const rows = db.getAppointments(keyAcc.id).filter((a) => !since || Date.parse(a.createdAt) >= since).slice(-lim);
         return json(res, { data: rows, count: rows.length });
