@@ -1744,3 +1744,65 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     merge on its own — recommending Alijah take it directly rather than
     waiting on the bundle, though it's confirmed compatible with either
     order.
+
+46. **URGENT — merge `audit/2026-11-25-suppress-phone-namespace` and
+    `audit/2026-11-25-v1-limit-clamp`.** Same parallel independent audit
+    process, security lens. Two fixes, both pushed with committed
+    regression tests:
+    - **`suppress-phone-namespace` (High, the serious one).** Phone numbers
+      share the email suppression list under a synthetic address
+      (`<digits>@phone.invalid`, `lib/suppression.js` `phoneKey`), so "stop
+      calling" and "stop emailing" are one opt-out. `isSuppressed` also
+      honours a `wholeDomain` row on the address's domain. `phone.invalid`
+      isn't a real domain — it's shared by every phone number on every
+      account — so one `wholeDomain` row on it blocks every phone number on
+      the account: `/voice/incoming` rejects every call, `/sms/incoming`
+      drops every text, the call-back dialler refuses every number. **The
+      $399/mo voice product goes dark from one API row, with no error
+      anywhere.** Reachable via `/api/suppression/add` (forwards
+      `wholeDomain` straight from the request body); the shipped UI never
+      sends it, so this is an API-level footgun, not a one-click mistake,
+      but the blast radius is the whole product. Fix closes both ends:
+      `suppress()` refuses to write a `wholeDomain` row on that synthetic
+      domain, and `isSuppressed()` ignores any such row that already
+      exists, so an already-broken account self-heals the moment this
+      deploys. Also fixes `norm()` crashing (500, leaking the internal
+      error string) on a non-string address from a JSON body.
+    - **`v1-limit-clamp` (Medium).** `/v1/calls` and `/v1/bookings` clamp
+      `?limit=` with `Math.min(Number(...) || 100, 500)` then
+      `.slice(-lim)` — correct for positive values, but `.slice(-(-5))` is
+      `.slice(5)`, not "last 5 rows", so a negative limit removes the
+      500-row cap entirely (measured: `?limit=-1` returned 1,199 of 1,200
+      seeded rows). Doesn't leak across tenants (it's the key holder's own
+      data) but removes the one documented bound on response size — at 600
+      req/hour that's a cheap way to make this single-process flat-JSON
+      server spend all its time in `JSON.stringify`. Fixed by flooring the
+      clamp at 1 and flooring the input itself before it reaches `slice()`.
+    Also recorded in the same audit run but **not fixed, needs an
+    architecture decision from Alijah, not more Keeper work**: `/login` is
+    an unauthenticated CPU amplifier (`scryptSync` blocks the single event
+    loop ~30ms/POST; the rate limiter is defeated by spoofing
+    `X-Forwarded-For`). Measured: 60 concurrent `/login`s, 0 rate limited,
+    live Twilio webhook latency went 1ms -> 55-77ms during the flood — on a
+    voice product, a stalled loop misses `<Gather>` windows on live calls.
+    The three obvious one-line fixes each make something else worse (see
+    `ops/audit/2026-11-25.md` §2d); the audit's own recommended first step
+    is a one-line production log of the raw `X-Forwarded-For` header,
+    which only Alijah can take (needs a Render deploy + reading live
+    traffic). Flagged in today's report; not actioned by Keeper.
+    **Status (2026-11-26): independently re-verified by Keeper, not just
+    taken on the audit's word.** Ran both branches' committed regression
+    tests against bare `main` myself: `repro-suppress-namespace.js` 14/25
+    fail on `main`, 0/25 fail on the fix branch; `repro-v1-limit.js` 6/22
+    fail on `main`, 0/22 fail on the fix branch. Merge-tested all four
+    pending branches together in a scratch worktree, in sequence onto
+    fresh `main` (`df1af64`): `keeper/2026-11-17-consolidated-merge-bundle`
+    -> `audit/2026-11-18-validate-callback-leftat` ->
+    `audit/2026-11-25-suppress-phone-namespace` ->
+    `audit/2026-11-25-v1-limit-clamp`. All four merge clean, zero conflicts
+    (one `Auto-merging server.js` per step, no markers). Full suite on the
+    combined tree: **258/258** (211 across the fifteen pre-existing/bundle
+    test files + the two new repro suites, 25 and 22). `node --check` clean
+    on `server.js` and all `lib/*.js`. The standing merge ask (item 45) now
+    covers these two branches as well — see today's report for the exact
+    commands. Not closing this item until it lands on `main`.
