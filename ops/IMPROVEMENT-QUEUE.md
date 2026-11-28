@@ -1806,3 +1806,17 @@ what shipped lives in `ops/KEEPER-LOG.md` and `ops/reports/`.
     on `server.js` and all `lib/*.js`. The standing merge ask (item 45) now
     covers these two branches as well — see today's report for the exact
     commands. Not closing this item until it lands on `main`.
+    **Status (2026-11-28): still unmerged, re-verified clean again.** `main`
+    unchanged at `df1af64`, 40 days now. Re-ran the full four-branch chain
+    in a fresh scratch worktree (`keeper/2026-11-17-consolidated-merge-bundle`
+    -> `audit/2026-11-18-validate-callback-leftat` ->
+    `audit/2026-11-25-suppress-phone-namespace` ->
+    `audit/2026-11-25-v1-limit-clamp`): zero conflicts, `node --check`
+    clean on `server.js` and all 27 `lib/*.js`, full suite **258/258**
+    (211 in the fifteen standard `test-*.js` files + 25 in
+    `ops/audit/2026-11-25-repro-suppress-namespace.js` + 22 in
+    `ops/audit/2026-11-25-repro-v1-limit.js`, both of which live under
+    `ops/audit/`, not the repo root). No new commits on `main` to audit.
+    Not repeating the merge command block here again today — unchanged
+    from 2026-11-26/27, see those reports or run `git log` on the four
+    branch tips.
